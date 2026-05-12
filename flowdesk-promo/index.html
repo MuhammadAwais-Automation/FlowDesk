@@ -1,0 +1,1368 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>FlowDesk Product Promo</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wght@300;500;700;900&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500;700&display=block"
+      rel="stylesheet"
+    />
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #f7f8fc;
+        color: #141b2d;
+        font-family: "DM Sans", system-ui, sans-serif;
+      }
+
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 12% 16%, rgba(79, 110, 247, 0.13), rgba(79, 110, 247, 0) 28%),
+          radial-gradient(circle at 86% 72%, rgba(22, 201, 141, 0.11), rgba(22, 201, 141, 0) 26%),
+          #f7f8fc;
+      }
+
+      .noise {
+        position: absolute;
+        inset: 0;
+        opacity: 0.24;
+        background-image:
+          linear-gradient(rgba(79, 110, 247, 0.035) 1px, rgba(255, 255, 255, 0) 1px),
+          linear-gradient(90deg, rgba(79, 110, 247, 0.035) 1px, rgba(255, 255, 255, 0) 1px);
+        background-size: 44px 44px;
+        pointer-events: none;
+      }
+
+      .ambient-ring,
+      .ambient-line {
+        position: absolute;
+        pointer-events: none;
+      }
+
+      .ambient-ring {
+        width: 520px;
+        height: 520px;
+        border: 1px solid rgba(79, 110, 247, 0.14);
+        border-radius: 50%;
+        right: -180px;
+        top: 96px;
+      }
+
+      .ambient-ring.secondary {
+        width: 330px;
+        height: 330px;
+        right: auto;
+        left: -90px;
+        top: 660px;
+        border-color: rgba(245, 158, 11, 0.16);
+      }
+
+      .ambient-line {
+        width: 740px;
+        height: 1px;
+        left: 1050px;
+        bottom: 210px;
+        background: linear-gradient(90deg, rgba(79, 110, 247, 0), rgba(79, 110, 247, 0.24), rgba(79, 110, 247, 0));
+        transform: rotate(-11deg);
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        padding: 86px 104px 78px;
+        pointer-events: none;
+      }
+
+      #s1 {
+        display: flex;
+        pointer-events: auto;
+      }
+
+      .scene-content {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 30px;
+      }
+
+      .topline {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        color: #4f5d73;
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .brand-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        height: 50px;
+        padding: 0 20px 0 10px;
+        border-radius: 8px;
+        background: #ffffff;
+        border: 1px solid #e2e6f0;
+        box-shadow: 0 16px 46px rgba(20, 27, 45, 0.08);
+      }
+
+      .brand-chip img {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+      }
+
+      .brand-chip span {
+        font-family: "Archivo", sans-serif;
+        color: #141b2d;
+        font-size: 24px;
+        font-weight: 900;
+      }
+
+      h1,
+      .headline {
+        font-family: "Archivo", sans-serif;
+        color: #141b2d;
+        font-size: 92px;
+        line-height: 0.95;
+        font-weight: 900;
+        letter-spacing: 0;
+        max-width: 940px;
+      }
+
+      .headline span,
+      .accent {
+        color: #4f6ef7;
+      }
+
+      .subcopy {
+        color: #4f5d73;
+        font-size: 28px;
+        line-height: 1.38;
+        font-weight: 400;
+        max-width: 740px;
+      }
+
+      .product-shell {
+        background: #ffffff;
+        border: 1px solid #e2e6f0;
+        border-radius: 18px;
+        box-shadow: 0 28px 80px rgba(20, 27, 45, 0.12);
+        overflow: hidden;
+      }
+
+      .app-window {
+        width: 1040px;
+        height: 640px;
+        display: grid;
+        grid-template-columns: 174px 1fr;
+      }
+
+      .sidebar {
+        background: #ffffff;
+        border-right: 1px solid #e2e6f0;
+        padding: 22px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .side-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 34px;
+        font-family: "Archivo", sans-serif;
+        font-weight: 900;
+        font-size: 18px;
+      }
+
+      .logo-box {
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        background: #3152d4;
+        display: grid;
+        place-items: center;
+        box-shadow: 0 0 16px rgba(79, 110, 247, 0.34);
+        color: #ffffff;
+        font-family: "Archivo", sans-serif;
+        font-size: 17px;
+        font-weight: 900;
+      }
+
+      .logo-box img {
+        width: 20px;
+        height: 20px;
+      }
+
+      .nav-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .nav-item {
+        height: 38px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px;
+        color: #4f5d73;
+        font-size: 15px;
+        font-weight: 600;
+      }
+
+      .nav-item.active {
+        background: #eef1fe;
+        color: #3152d4;
+        box-shadow: inset 3px 0 0 #4f6ef7;
+      }
+
+      .nav-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 4px;
+        border: 2px solid currentColor;
+        opacity: 0.78;
+      }
+
+      .app-main {
+        background: #f7f8fc;
+        padding: 30px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .app-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+      }
+
+      .app-title {
+        font-family: "Archivo", sans-serif;
+        font-size: 28px;
+        font-weight: 900;
+        color: #141b2d;
+      }
+
+      .app-meta {
+        margin-top: 6px;
+        font-size: 16px;
+        color: #5d6a82;
+        font-weight: 600;
+      }
+
+      .select-pill {
+        height: 38px;
+        border-radius: 8px;
+        border: 1px solid #e2e6f0;
+        background: #ffffff;
+        display: flex;
+        align-items: center;
+        padding: 0 16px;
+        color: #4f5d73;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+      }
+
+      .stat-card {
+        height: 136px;
+        background: #ffffff;
+        border: 1px solid #e2e6f0;
+        border-radius: 12px;
+        padding: 20px;
+      }
+
+      .stat-label {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #5d6a82;
+        font-weight: 700;
+      }
+
+      .stat-value {
+        margin-top: 20px;
+        font-family: "Archivo", sans-serif;
+        font-size: 52px;
+        line-height: 1;
+        font-weight: 900;
+        color: #4f6ef7;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .stat-value.green {
+        color: #087a55;
+      }
+
+      .stat-value.amber {
+        color: #9a5800;
+      }
+
+      .panel-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        flex: 1;
+      }
+
+      .mini-panel {
+        background: #ffffff;
+        border: 1px solid #e2e6f0;
+        border-radius: 12px;
+        padding: 20px;
+      }
+
+      .panel-title {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #5d6a82;
+        font-weight: 800;
+        margin-bottom: 18px;
+      }
+
+      .list-line {
+        height: 34px;
+        border-bottom: 1px solid #eef0f7;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 15px;
+        color: #141b2d;
+        font-weight: 600;
+      }
+
+      .tag {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: #3d5be0;
+        background: #eef1fe;
+        border: 1px solid #c7d0fc;
+        border-radius: 5px;
+        padding: 3px 7px;
+      }
+
+      .two-col {
+        display: grid;
+        grid-template-columns: 0.8fr 1.15fr;
+        gap: 46px;
+        align-items: center;
+        flex: 1;
+      }
+
+      .copy-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+      }
+
+      .browser-shell {
+        width: 1060px;
+        height: 696px;
+        display: grid;
+        grid-template-columns: 1fr 256px;
+      }
+
+      .browser-main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .tabbar,
+      .toolbar,
+      .promptbar {
+        height: 48px;
+        background: #ffffff;
+        border-bottom: 1px solid #e2e6f0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 14px;
+      }
+
+      .tab {
+        height: 32px;
+        min-width: 160px;
+        border: 1px solid #e2e6f0;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px;
+        font-size: 14px;
+        font-weight: 700;
+        color: #141b2d;
+      }
+
+      .tab.active {
+        background: #eef1fe;
+        border-color: #c7d0fc;
+      }
+
+      .tab .favicon {
+        width: 15px;
+        height: 15px;
+        border-radius: 4px;
+      }
+
+      .account-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #16c98d;
+        box-shadow: 0 0 9px rgba(22, 201, 141, 0.55);
+      }
+
+      .tool-button {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: #f3f5f9;
+        border: 1px solid #e2e6f0;
+      }
+
+      .active-title {
+        font-size: 15px;
+        color: #141b2d;
+        font-weight: 800;
+      }
+
+      .promptbar {
+        height: 52px;
+        justify-content: space-between;
+      }
+
+      .inject-pill {
+        height: 34px;
+        border-radius: 8px;
+        background: #eef1fe;
+        border: 1px solid #c7d0fc;
+        color: #3d5be0;
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        font-size: 14px;
+        font-weight: 800;
+      }
+
+      .webview {
+        flex: 1;
+        background: #ffffff;
+        padding: 30px;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 18px;
+      }
+
+      .ai-card {
+        border-radius: 14px;
+        border: 1px solid #e2e6f0;
+        background: #f7f8fc;
+        padding: 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        min-height: 214px;
+      }
+
+      .ai-card.dark {
+        background: #141b2d;
+        color: #ffffff;
+        border-color: #141b2d;
+      }
+
+      .ai-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: "Archivo", sans-serif;
+        font-weight: 900;
+        font-size: 21px;
+      }
+
+      .bubble {
+        min-height: 58px;
+        border-radius: 10px;
+        background: #ffffff;
+        border: 1px solid #e2e6f0;
+        color: #4f5d73;
+        padding: 14px;
+        font-size: 15px;
+        line-height: 1.35;
+      }
+
+      .ai-card.dark .bubble {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.15);
+        color: rgba(255, 255, 255, 0.72);
+      }
+
+      .dock {
+        border-left: 1px solid #e2e6f0;
+        background: #ffffff;
+        padding: 20px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .dock-title {
+        color: #5d6a82;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 800;
+        margin-bottom: 4px;
+      }
+
+      .session-pill {
+        height: 48px;
+        border-radius: 10px;
+        background: #f3f5f9;
+        border: 1px solid #e2e6f0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px;
+        font-size: 14px;
+        font-weight: 700;
+        color: #141b2d;
+      }
+
+      .avatar {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        color: #ffffff;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .prompt-shell {
+        width: 1100px;
+        height: 662px;
+        display: grid;
+        grid-template-columns: 194px 308px 1fr;
+      }
+
+      .cat-pane,
+      .prompt-pane,
+      .editor-pane {
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .cat-pane {
+        border-right: 1px solid #e2e6f0;
+        padding: 20px 14px;
+      }
+
+      .prompt-pane {
+        background: #f7f8fc;
+        border-right: 1px solid #e2e6f0;
+        padding: 18px 12px;
+      }
+
+      .editor-pane {
+        background: #f7f8fc;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .pane-label {
+        color: #5d6a82;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 900;
+        margin-bottom: 14px;
+      }
+
+      .cat-row,
+      .prompt-row {
+        height: 38px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px;
+        color: #4f5d73;
+        font-size: 14px;
+        font-weight: 700;
+        margin-bottom: 5px;
+      }
+
+      .cat-row.active {
+        background: #eef1fe;
+        color: #3152d4;
+      }
+
+      .prompt-row {
+        height: 88px;
+        background: #ffffff;
+        border: 1px solid #e2e6f0;
+        align-items: flex-start;
+        flex-direction: column;
+        justify-content: center;
+      }
+
+      .prompt-row.active {
+        border-color: #c7d0fc;
+        background: #eef1fe;
+      }
+
+      .prompt-name {
+        color: #141b2d;
+        font-size: 16px;
+        font-weight: 900;
+      }
+
+      .prompt-preview {
+        color: #5d6a82;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+      }
+
+      .editor-head {
+        height: 64px;
+        border-bottom: 1px solid #e2e6f0;
+        background: #ffffff;
+        padding: 0 22px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .editor-title {
+        font-family: "Archivo", sans-serif;
+        font-size: 22px;
+        font-weight: 900;
+      }
+
+      .save-pill {
+        height: 34px;
+        border-radius: 8px;
+        background: #3152d4;
+        color: white;
+        padding: 0 16px;
+        display: grid;
+        place-items: center;
+        font-size: 14px;
+        font-weight: 900;
+      }
+
+      .editor-body {
+        flex: 1;
+        padding: 24px;
+        display: grid;
+        grid-template-columns: 1fr 198px;
+        gap: 18px;
+      }
+
+      .code-area {
+        border-radius: 12px;
+        border: 1px solid #e2e6f0;
+        background: #ffffff;
+        padding: 22px;
+        font-family: "JetBrains Mono", monospace;
+        color: #141b2d;
+        font-size: 18px;
+        line-height: 1.72;
+      }
+
+      .var-panel {
+        border-radius: 12px;
+        border: 1px solid #e2e6f0;
+        background: #ffffff;
+        padding: 18px;
+      }
+
+      .var-chip {
+        display: inline-flex;
+        height: 28px;
+        align-items: center;
+        border-radius: 5px;
+        background: #fff7df;
+        color: #92400e;
+        border: 1px solid #fde68a;
+        padding: 0 9px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        font-weight: 800;
+        margin: 0 6px 8px 0;
+      }
+
+      .inject-overlay {
+        position: absolute;
+        right: 106px;
+        bottom: 112px;
+        width: 520px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid #c7d0fc;
+        box-shadow: 0 28px 70px rgba(79, 110, 247, 0.22);
+        padding: 22px;
+      }
+
+      .overlay-title {
+        font-family: "Archivo", sans-serif;
+        font-size: 24px;
+        font-weight: 900;
+        margin-bottom: 14px;
+      }
+
+      .overlay-field {
+        height: 42px;
+        border-radius: 8px;
+        border: 1px solid #e2e6f0;
+        background: #f7f8fc;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 14px;
+        color: #4f5d73;
+        font-size: 15px;
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+
+      .ops-grid {
+        width: 1050px;
+        height: 646px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr;
+        gap: 18px;
+      }
+
+      .ops-card {
+        border-radius: 16px;
+        background: #ffffff;
+        border: 1px solid #e2e6f0;
+        box-shadow: 0 22px 58px rgba(20, 27, 45, 0.1);
+        padding: 26px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        overflow: hidden;
+      }
+
+      .ops-card.wide {
+        grid-column: span 2;
+      }
+
+      .ops-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .ops-name {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: "Archivo", sans-serif;
+        font-size: 28px;
+        font-weight: 900;
+      }
+
+      .ops-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        color: white;
+        font-size: 18px;
+        font-weight: 900;
+      }
+
+      .mock-line {
+        height: 18px;
+        border-radius: 9px;
+        background: #eef0f7;
+      }
+
+      .mock-line.blue {
+        background: #dfe5ff;
+      }
+
+      .mock-line.green {
+        background: #dff8ef;
+      }
+
+      .mock-line.amber {
+        background: #fff0ca;
+      }
+
+      .calendar-row,
+      .social-row {
+        display: grid;
+        grid-template-columns: 90px 1fr 86px;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .time-label {
+        color: #5d6a82;
+        font-size: 15px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .cta-layout {
+        height: 100%;
+        display: grid;
+        grid-template-columns: 0.88fr 1fr;
+        gap: 64px;
+        align-items: center;
+      }
+
+      .final-lockup {
+        display: flex;
+        flex-direction: column;
+        gap: 32px;
+      }
+
+      .final-brand {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+      }
+
+      .final-logo {
+        width: 98px;
+        height: 98px;
+        border-radius: 24px;
+        display: grid;
+        place-items: center;
+        background: #3152d4;
+        box-shadow: 0 28px 90px rgba(79, 110, 247, 0.32);
+      }
+
+      .final-logo img {
+        width: 62px;
+        height: 62px;
+      }
+
+      .final-name {
+        font-family: "Archivo", sans-serif;
+        font-size: 88px;
+        line-height: 1;
+        font-weight: 900;
+        color: #141b2d;
+      }
+
+      .final-copy {
+        font-size: 36px;
+        line-height: 1.25;
+        color: #4f5d73;
+        max-width: 780px;
+      }
+
+      .final-board {
+        height: 620px;
+        border-radius: 20px;
+        background: #ffffff;
+        border: 1px solid #e2e6f0;
+        box-shadow: 0 28px 80px rgba(20, 27, 45, 0.12);
+        padding: 34px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .workflow-row {
+        height: 78px;
+        border-radius: 14px;
+        background: #f7f8fc;
+        border: 1px solid #e2e6f0;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 0 22px;
+      }
+
+      .workflow-row.active {
+        background: #eef1fe;
+        border-color: #c7d0fc;
+      }
+
+      .workflow-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        background: #3152d4;
+        color: #ffffff;
+        font-weight: 900;
+      }
+
+      .workflow-text {
+        font-size: 23px;
+        font-weight: 900;
+        color: #141b2d;
+      }
+
+      .workflow-meta {
+        margin-left: auto;
+        font-family: "JetBrains Mono", monospace;
+        color: #087a55;
+        font-size: 18px;
+        font-weight: 900;
+      }
+
+      #transition-wipe {
+        position: absolute;
+        inset: 0;
+        z-index: 20;
+        pointer-events: none;
+        display: grid;
+        grid-template-columns: 1fr 90px 1fr;
+      }
+
+      .wipe-main {
+        background: #ffffff;
+      }
+
+      .wipe-accent {
+        background: #4f6ef7;
+        box-shadow: 0 0 42px rgba(79, 110, 247, 0.48);
+      }
+
+      .scene-marker {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #3152d4;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 16px;
+        font-weight: 800;
+      }
+
+      .scene-marker::before {
+        content: "";
+        width: 44px;
+        height: 2px;
+        border-radius: 2px;
+        background: #3152d4;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="20"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div class="noise" data-layout-ignore></div>
+      <div class="ambient-ring" data-layout-ignore></div>
+      <div class="ambient-ring secondary" data-layout-ignore></div>
+      <div class="ambient-line" data-layout-ignore></div>
+
+      <section id="s1" class="scene">
+        <div class="scene-content two-col">
+          <div class="copy-stack">
+            <div class="brand-chip s1-chip">
+              <span class="nav-dot" style="background:#4F6EF7; border-color:#4F6EF7"></span>
+              <span>FlowDesk</span>
+            </div>
+            <h1 class="s1-title">One desk for every <span>AI workflow</span>.</h1>
+            <p class="subcopy s1-copy">Switch accounts, launch tools, inject prompts, and manage creator work without drowning in browser tabs.</p>
+            <div class="scene-marker s1-marker">20 second product tour</div>
+          </div>
+
+          <div class="product-shell app-window s1-window">
+            <aside class="sidebar">
+              <div class="side-brand">
+                <div class="logo-box">F</div>
+                FlowDesk
+              </div>
+              <div class="nav-list">
+                <div class="nav-item active"><span class="nav-dot"></span>Dashboard</div>
+                <div class="nav-item"><span class="nav-dot"></span>AI Browser</div>
+                <div class="nav-item"><span class="nav-dot"></span>Prompts</div>
+                <div class="nav-item"><span class="nav-dot"></span>Accounts</div>
+                <div class="nav-item"><span class="nav-dot"></span>YT Studio</div>
+                <div class="nav-item"><span class="nav-dot"></span>Workspace</div>
+              </div>
+            </aside>
+            <main class="app-main">
+              <div class="app-header">
+                <div>
+                  <div class="app-title">Dashboard</div>
+                  <div class="app-meta">Overview of your AI workspace</div>
+                </div>
+                <div class="select-pill">Personal Workspace</div>
+              </div>
+              <div class="stats">
+                <div class="stat-card">
+                  <div class="stat-label">Total Prompts</div>
+                  <div class="stat-value">24</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">AI Accounts</div>
+                  <div class="stat-value green">8</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Workspaces</div>
+                  <div class="stat-value amber">3</div>
+                </div>
+              </div>
+              <div class="panel-row">
+                <div class="mini-panel">
+                  <div class="panel-title">Recent Prompts</div>
+                  <div class="list-line"><span>Video hook writer</span><span class="tag">#yt</span></div>
+                  <div class="list-line"><span>Code review</span><span class="tag">#dev</span></div>
+                  <div class="list-line"><span>Sponsor email</span><span class="tag">#ops</span></div>
+                </div>
+                <div class="mini-panel">
+                  <div class="panel-title">Active AI Sessions</div>
+                  <div class="list-line"><span>ChatGPT</span><span>main@gmail</span></div>
+                  <div class="list-line"><span>Claude</span><span>client@gmail</span></div>
+                  <div class="list-line"><span>Gemini</span><span>team@gmail</span></div>
+                </div>
+              </div>
+            </main>
+          </div>
+        </div>
+      </section>
+
+      <section id="s2" class="scene">
+        <div class="scene-content two-col">
+          <div class="copy-stack">
+            <div class="scene-marker s2-marker">AI Browser</div>
+            <div class="headline s2-title">Every AI tool. <span>Every Gmail.</span> Isolated.</div>
+            <p class="subcopy s2-copy">Open ChatGPT, Claude, Gemini, Grok, and custom tools as separate sessions tied to the right account.</p>
+          </div>
+          <div class="product-shell browser-shell s2-browser">
+            <div class="browser-main">
+              <div class="tabbar">
+                <div class="tab active"><span class="favicon" style="background:#16C98D"></span><span>ChatGPT</span><span class="account-dot"></span></div>
+                <div class="tab"><span class="favicon" style="background:#8B5CF6"></span><span>Claude</span><span class="account-dot" style="background:#F59E0B"></span></div>
+                <div class="tab"><span class="favicon" style="background:#4F6EF7"></span><span>Gemini</span><span class="account-dot" style="background:#EF4444"></span></div>
+              </div>
+              <div class="toolbar">
+                <div class="tool-button"></div>
+                <div class="tool-button"></div>
+                <div class="tool-button"></div>
+                <div class="active-title">ChatGPT - main@gmail.com</div>
+              </div>
+              <div class="promptbar">
+                <div class="inject-pill">Inject Prompt</div>
+                <div class="active-title" style="color:#5D6A82">Session stays separate</div>
+              </div>
+              <div class="webview">
+                <div class="ai-card dark">
+                  <div class="ai-head"><span class="favicon" style="background:#16C98D"></span>ChatGPT</div>
+                  <div class="bubble">Draft a high-retention intro for tomorrow's upload.</div>
+                  <div class="bubble">Ready with three angles and a cleaner hook.</div>
+                </div>
+                <div class="ai-card">
+                  <div class="ai-head"><span class="favicon" style="background:#8B5CF6"></span>Claude</div>
+                  <div class="bubble">Analyze the sponsor brief for conflicts.</div>
+                  <div class="bubble">Found two claims to verify before posting.</div>
+                </div>
+                <div class="ai-card">
+                  <div class="ai-head"><span class="favicon" style="background:#4F6EF7"></span>Gemini</div>
+                  <div class="bubble">Summarize Calendar tasks for the shoot day.</div>
+                </div>
+                <div class="ai-card">
+                  <div class="ai-head"><span class="favicon" style="background:#141B2D"></span>Grok</div>
+                  <div class="bubble">Compare title variants for speed and clarity.</div>
+                </div>
+              </div>
+            </div>
+            <aside class="dock">
+              <div class="dock-title">Accounts</div>
+              <div class="session-pill"><div class="avatar" style="background:#087A55">M</div>main@gmail</div>
+              <div class="session-pill"><div class="avatar" style="background:#5B21B6">C</div>client@gmail</div>
+              <div class="session-pill"><div class="avatar" style="background:#9A5800">T</div>team@gmail</div>
+              <div class="dock-title" style="margin-top:18px">Tools</div>
+              <div class="session-pill">ChatGPT</div>
+              <div class="session-pill">Claude</div>
+              <div class="session-pill">Gemini</div>
+              <div class="session-pill">Custom URL</div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section id="s3" class="scene">
+        <div class="scene-content two-col">
+          <div class="copy-stack">
+            <div class="scene-marker s3-marker">Prompt Library</div>
+            <div class="headline s3-title">Prompts become <span>reusable systems</span>.</div>
+            <p class="subcopy s3-copy">Save templates, organize categories, fill variables, and inject the right prompt into the active AI session.</p>
+          </div>
+          <div style="position:relative">
+            <div class="product-shell prompt-shell s3-prompts">
+              <aside class="cat-pane">
+                <div class="pane-label">Categories</div>
+                <div class="cat-row active"><span class="nav-dot"></span>All Prompts</div>
+                <div class="cat-row"><span class="nav-dot" style="color:#16C98D"></span>YouTube</div>
+                <div class="cat-row"><span class="nav-dot" style="color:#F59E0B"></span>Email</div>
+                <div class="cat-row"><span class="nav-dot" style="color:#8B5CF6"></span>Research</div>
+              </aside>
+              <section class="prompt-pane">
+                <div class="pane-label">Prompts</div>
+                <div class="prompt-row active">
+                  <div class="prompt-name">Video Hook Writer</div>
+                  <div class="prompt-preview">Write a {{tone}} hook about {{topic}}</div>
+                </div>
+                <div class="prompt-row">
+                  <div class="prompt-name">Sponsor Reply</div>
+                  <div class="prompt-preview">Draft a reply to {{brand}}</div>
+                </div>
+                <div class="prompt-row">
+                  <div class="prompt-name">Comment Analysis</div>
+                  <div class="prompt-preview">Cluster feedback by {{theme}}</div>
+                </div>
+              </section>
+              <section class="editor-pane">
+                <div class="editor-head">
+                  <div class="editor-title">Video Hook Writer</div>
+                  <div class="save-pill">Saved</div>
+                </div>
+                <div class="editor-body">
+                  <div class="code-area">
+                    Write a <span class="var-chip">{{tone}}</span> intro for a video about <span class="var-chip">{{topic}}</span>.
+                    Keep it direct, creator-friendly, and under 18 words.
+                  </div>
+                  <div class="var-panel">
+                    <div class="pane-label">Variables</div>
+                    <span class="var-chip">{{tone}}</span>
+                    <span class="var-chip">{{topic}}</span>
+                    <span class="var-chip">{{audience}}</span>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div class="inject-overlay s3-overlay">
+              <div class="overlay-title">Fill once. Inject cleanly.</div>
+              <div class="overlay-field"><span>tone</span><strong>fast, sharp</strong></div>
+              <div class="overlay-field"><span>topic</span><strong>AI workflow chaos</strong></div>
+              <div class="inject-pill" style="width:150px; justify-content:center">Inject</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="s4" class="scene">
+        <div class="scene-content two-col">
+          <div class="copy-stack">
+            <div class="scene-marker s4-marker">Creator Ops</div>
+            <div class="headline s4-title">One place for the work around the work.</div>
+            <p class="subcopy s4-copy">YouTube Studio, Calendar, Tasks, Gmail, and social platforms stay close to the AI work that drives them.</p>
+          </div>
+          <div class="ops-grid s4-grid">
+            <div class="ops-card s4-card">
+              <div class="ops-head">
+                <div class="ops-name"><span class="ops-icon" style="background:#B91C1C">YT</span>YouTube Studio</div>
+                <span class="tag">3 channels</span>
+              </div>
+              <div class="mock-line blue" style="width:90%"></div>
+              <div class="mock-line" style="width:74%"></div>
+              <div class="mock-line green" style="width:62%"></div>
+              <div class="mock-line amber" style="width:82%"></div>
+            </div>
+            <div class="ops-card s4-card">
+              <div class="ops-head">
+                <div class="ops-name"><span class="ops-icon" style="background:#087A55">G</span>Workspace</div>
+                <span class="tag">Calendar + Tasks</span>
+              </div>
+              <div class="calendar-row"><span class="time-label">09:30</span><div class="mock-line blue"></div><span class="tag">Shoot</span></div>
+              <div class="calendar-row"><span class="time-label">13:00</span><div class="mock-line green"></div><span class="tag">Edit</span></div>
+              <div class="calendar-row"><span class="time-label">16:45</span><div class="mock-line amber"></div><span class="tag">Post</span></div>
+            </div>
+            <div class="ops-card wide s4-card">
+              <div class="ops-head">
+                <div class="ops-name"><span class="ops-icon" style="background:#4F6EF7">S</span>Social Hub</div>
+                <span class="tag">Logged in separately</span>
+              </div>
+              <div class="social-row"><span class="time-label">X</span><div class="mock-line blue"></div><span class="tag">live</span></div>
+              <div class="social-row"><span class="time-label">IG</span><div class="mock-line green"></div><span class="tag">draft</span></div>
+              <div class="social-row"><span class="time-label">LI</span><div class="mock-line amber"></div><span class="tag">queued</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="s5" class="scene">
+        <div class="scene-content cta-layout">
+          <div class="final-lockup">
+            <div class="final-brand s5-brand">
+              <div class="final-logo"><img src="assets/flowdesk-icon.png" alt="" /></div>
+              <div class="final-name">FlowDesk</div>
+            </div>
+            <div class="headline s5-title" style="font-size:82px; max-width:920px">Manage AI work without the tab chaos.</div>
+            <p class="final-copy s5-copy">A focused desktop command center for creators, teams, and account-heavy workflows.</p>
+          </div>
+          <div class="final-board s5-board">
+            <div class="workflow-row active">
+              <div class="workflow-icon">AI</div>
+              <div class="workflow-text">AI sessions tied to the right account</div>
+              <div class="workflow-meta">ready</div>
+            </div>
+            <div class="workflow-row">
+              <div class="workflow-icon" style="background:#9A5800">P</div>
+              <div class="workflow-text">Reusable prompt systems</div>
+              <div class="workflow-meta">saved</div>
+            </div>
+            <div class="workflow-row">
+              <div class="workflow-icon" style="background:#B91C1C">YT</div>
+              <div class="workflow-text">YouTube and creator ops</div>
+              <div class="workflow-meta">open</div>
+            </div>
+            <div class="workflow-row">
+              <div class="workflow-icon" style="background:#087A55">G</div>
+              <div class="workflow-text">Calendar, Tasks, Gmail</div>
+              <div class="workflow-meta">synced</div>
+            </div>
+            <div class="workflow-row">
+              <div class="workflow-icon" style="background:#141B2D">S</div>
+              <div class="workflow-text">Social platforms in one dock</div>
+              <div class="workflow-meta">live</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div id="transition-wipe" data-layout-ignore>
+        <div class="wipe-main"></div>
+        <div class="wipe-accent"></div>
+        <div class="wipe-main"></div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+
+      const tl = gsap.timeline({ paused: true });
+      const sceneIds = ["#s1", "#s2", "#s3", "#s4", "#s5"];
+
+      tl.set(sceneIds.join(","), { display: "none", pointerEvents: "none" }, 0);
+      tl.set("#s1", { display: "flex", pointerEvents: "auto" }, 0);
+      tl.set("#transition-wipe", { xPercent: -105 }, 0);
+
+      tl.to(".ambient-ring", { rotation: 28, scale: 1.04, duration: 20, ease: "none" }, 0);
+      tl.to(".ambient-ring.secondary", { rotation: -18, scale: 1.07, duration: 20, ease: "none" }, 0);
+      tl.to(".ambient-line", { x: -90, opacity: 0.72, duration: 20, ease: "sine.inOut" }, 0);
+
+      function revealScene(scene, at) {
+        tl.set(scene, { display: "flex", pointerEvents: "auto" }, at);
+      }
+
+      function hideScene(scene, at) {
+        tl.set(scene, { display: "none", pointerEvents: "none" }, at);
+      }
+
+      function wipe(fromScene, toScene, at) {
+        tl.to("#transition-wipe", { xPercent: 0, duration: 0.28, ease: "power3.inOut", overwrite: "auto" }, at);
+        revealScene(toScene, at + 0.18);
+        hideScene(fromScene, at + 0.19);
+        tl.to("#transition-wipe", { xPercent: 105, duration: 0.34, ease: "power2.inOut", overwrite: "auto" }, at + 0.28);
+        tl.set("#transition-wipe", { xPercent: -105 }, at + 0.66);
+      }
+
+      function sceneOne(at) {
+        tl.from(".s1-chip", { y: 28, opacity: 0, scale: 0.94, duration: 0.54, ease: "back.out(1.5)" }, at + 0.18);
+        tl.from(".s1-title", { y: 46, opacity: 0, duration: 0.68, ease: "power3.out" }, at + 0.32);
+        tl.from(".s1-copy", { x: -32, opacity: 0, duration: 0.52, ease: "sine.out" }, at + 0.62);
+        tl.from(".s1-marker", { scaleX: 0.65, opacity: 0, duration: 0.42, ease: "power2.out" }, at + 0.82);
+        tl.from(".s1-window", { x: 84, y: 28, opacity: 0, scale: 0.96, duration: 0.74, ease: "expo.out" }, at + 0.42);
+        tl.from("#s1 .stat-card", { y: 34, opacity: 0, duration: 0.44, ease: "back.out(1.3)", stagger: 0.09 }, at + 0.95);
+        tl.from("#s1 .mini-panel", { y: 24, opacity: 0, duration: 0.42, ease: "power2.out", stagger: 0.1 }, at + 1.18);
+      }
+
+      function sceneTwo(at) {
+        tl.from(".s2-marker", { x: -28, opacity: 0, duration: 0.42, ease: "power3.out" }, at + 0.18);
+        tl.from(".s2-title", { y: 44, opacity: 0, duration: 0.6, ease: "expo.out" }, at + 0.28);
+        tl.from(".s2-copy", { y: 30, opacity: 0, duration: 0.46, ease: "sine.out" }, at + 0.56);
+        tl.from(".s2-browser", { x: 72, opacity: 0, scale: 0.97, duration: 0.72, ease: "power3.out" }, at + 0.26);
+        tl.from("#s2 .tab", { y: -22, opacity: 0, duration: 0.34, ease: "back.out(1.6)", stagger: 0.07 }, at + 0.84);
+        tl.from("#s2 .ai-card", { y: 32, opacity: 0, scale: 0.98, duration: 0.42, ease: "power2.out", stagger: 0.08 }, at + 1.06);
+        tl.from("#s2 .session-pill", { x: 26, opacity: 0, duration: 0.38, ease: "sine.out", stagger: 0.05 }, at + 1.2);
+      }
+
+      function sceneThree(at) {
+        tl.from(".s3-marker", { x: -24, opacity: 0, duration: 0.4, ease: "power3.out" }, at + 0.16);
+        tl.from(".s3-title", { y: 42, opacity: 0, duration: 0.58, ease: "expo.out" }, at + 0.28);
+        tl.from(".s3-copy", { y: 26, opacity: 0, duration: 0.46, ease: "sine.out" }, at + 0.54);
+        tl.from(".s3-prompts", { x: 70, opacity: 0, scale: 0.97, duration: 0.7, ease: "power3.out" }, at + 0.24);
+        tl.from("#s3 .cat-row", { x: -24, opacity: 0, duration: 0.32, ease: "power2.out", stagger: 0.05 }, at + 0.84);
+        tl.from("#s3 .prompt-row", { y: 24, opacity: 0, duration: 0.36, ease: "back.out(1.35)", stagger: 0.07 }, at + 1.04);
+        tl.from("#s3 .editor-body", { y: 26, opacity: 0, duration: 0.42, ease: "power2.out" }, at + 1.24);
+        tl.from(".s3-overlay", { y: 44, opacity: 0, scale: 0.94, duration: 0.52, ease: "back.out(1.6)" }, at + 1.58);
+      }
+
+      function sceneFour(at) {
+        tl.from(".s4-marker", { x: -24, opacity: 0, duration: 0.38, ease: "power3.out" }, at + 0.16);
+        tl.from(".s4-title", { y: 44, opacity: 0, duration: 0.58, ease: "expo.out" }, at + 0.28);
+        tl.from(".s4-copy", { y: 28, opacity: 0, duration: 0.46, ease: "sine.out" }, at + 0.56);
+        tl.from(".s4-grid", { x: 70, opacity: 0, scale: 0.98, duration: 0.7, ease: "power3.out" }, at + 0.24);
+        tl.from(".s4-card", { y: 34, opacity: 0, duration: 0.48, ease: "back.out(1.25)", stagger: 0.12 }, at + 0.86);
+        tl.from("#s4 .mock-line, #s4 .calendar-row, #s4 .social-row", { scaleX: 0.42, transformOrigin: "left center", opacity: 0, duration: 0.42, ease: "power2.out", stagger: 0.04 }, at + 1.24);
+      }
+
+      function sceneFive(at) {
+        tl.from(".s5-brand", { y: 36, opacity: 0, scale: 0.96, duration: 0.56, ease: "back.out(1.45)" }, at + 0.16);
+        tl.from(".s5-title", { y: 46, opacity: 0, duration: 0.66, ease: "expo.out" }, at + 0.38);
+        tl.from(".s5-copy", { y: 30, opacity: 0, duration: 0.52, ease: "sine.out" }, at + 0.72);
+        tl.from(".s5-board", { x: 74, opacity: 0, scale: 0.97, duration: 0.72, ease: "power3.out" }, at + 0.26);
+        tl.from(".workflow-row", { x: 34, opacity: 0, duration: 0.42, ease: "back.out(1.25)", stagger: 0.1 }, at + 1.02);
+        tl.to("#s5 .scene-content", { opacity: 0.88, duration: 0.5, ease: "sine.inOut" }, 19.42);
+      }
+
+      sceneOne(0);
+      wipe("#s1", "#s2", 3.65);
+      sceneTwo(4.12);
+      wipe("#s2", "#s3", 7.85);
+      sceneThree(8.32);
+      wipe("#s3", "#s4", 11.9);
+      sceneFour(12.36);
+      wipe("#s4", "#s5", 15.98);
+      sceneFive(16.44);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>
