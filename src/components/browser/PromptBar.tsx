@@ -13,10 +13,19 @@
  */
 
 import { useState, useEffect, useRef } from 'react'
-import { Zap, X, Search, ArrowLeft, Send } from 'lucide-react'
+import { Zap, X, Search, ArrowLeft, Send, ClipboardPlus, GitBranch, Trash2, Radar } from 'lucide-react'
 import type { BrowserTab } from '@/types/browser'
 import { getInjectTool, isToolTab } from '@/types/browser'
 import type { Prompt, PromptCategory } from '@/types/electron'
+import {
+  CONTINUITY_STORE_KEY,
+  appendUniqueContinuityEntry,
+  appendContinuityEntry,
+  buildContextPassport,
+  createContinuityThread,
+  getContinuityStats,
+  type ContinuityThread,
+} from '@/lib/conversationContinuity'
 
 const BAR_H = 40  // combined browser chrome is 40 tabs + 44 header + 40 prompt bar
 
@@ -53,6 +62,19 @@ function renderPreview(text: string) {
   )
 }
 
+function isContinuityThread(value: unknown): value is ContinuityThread {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<ContinuityThread>
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.title === 'string' &&
+    typeof candidate.summary === 'string' &&
+    Array.isArray(candidate.entries) &&
+    typeof candidate.created_at === 'string' &&
+    typeof candidate.updated_at === 'string'
+  )
+}
+
 type OverlayStep = 'list' | 'fill'
 
 export default function PromptBar({ activeTab, isActive }: Props) {
@@ -65,7 +87,33 @@ export default function PromptBar({ activeTab, isActive }: Props) {
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null)
   const [varValues, setVarValues] = useState<Record<string, string>>({})
   const [injectStatus, setInjectStatus] = useState<'idle' | 'success' | 'error' | 'unsupported'>('idle')
+  const [continuityThread, setContinuityThread] = useState<ContinuityThread | null>(null)
+  const [continuityStatus, setContinuityStatus] = useState<'idle' | 'captured' | 'continued' | 'empty' | 'unsupported' | 'error' | 'cleared' | 'duplicate' | 'auto-on' | 'auto-off'>('idle')
+  const [autoCapture, setAutoCapture] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
+  const continuityStats = getContinuityStats(continuityThread)
+
+  async function getOrCreateContinuityThread(): Promise<ContinuityThread> {
+    const stored = await api.storeGet(CONTINUITY_STORE_KEY)
+    if (isContinuityThread(stored)) {
+      setContinuityThread(stored)
+      return stored
+    }
+
+    const created = createContinuityThread({ title: 'AI Browser Continuity', workspaceId: null })
+    await saveContinuityThread(created)
+    return created
+  }
+
+  async function saveContinuityThread(thread: ContinuityThread): Promise<void> {
+    await api.storeSet(CONTINUITY_STORE_KEY, thread)
+    setContinuityThread(thread)
+  }
+
+  async function loadContinuityThread(): Promise<void> {
+    const stored = await api.storeGet(CONTINUITY_STORE_KEY)
+    setContinuityThread(isContinuityThread(stored) ? stored : null)
+  }
 
   // Reset overlay state on close
   function resetOverlay() {
@@ -104,6 +152,10 @@ export default function PromptBar({ activeTab, isActive }: Props) {
     if (open) setTimeout(() => searchRef.current?.focus(), 50)
   }, [open])
 
+  useEffect(() => {
+    loadContinuityThread().catch(() => setContinuityStatus('error'))
+  }, [])
+
   // Global hotkey: open-prompt-bar event from App.tsx
   useEffect(() => {
     const handler = () => { if (activeTab && isToolTab(activeTab)) openOverlay() }
@@ -118,6 +170,125 @@ export default function PromptBar({ activeTab, isActive }: Props) {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [open, isActive, activeTab])
+
+  useEffect(() => {
+    if (!autoCapture || !isActive || !activeTab || !isToolTab(activeTab)) return
+    const tool = getInjectTool(activeTab.url)
+    if (!tool) return
+
+    const interval = window.setInterval(() => {
+      captureLatestAssistantResponse(false).catch(() => setContinuityStatus('error'))
+    }, 5000)
+
+    return () => window.clearInterval(interval)
+  }, [autoCapture, activeTab?.id, activeTab?.url, isActive])
+
+  function getActiveProvider(tab: BrowserTab): string | null {
+    if (!isToolTab(tab)) return null
+    return getInjectTool(tab.url) ?? tab.tool.name
+  }
+
+  async function captureSelectedResponse() {
+    if (!activeTab || !isToolTab(activeTab)) {
+      setContinuityStatus('unsupported')
+      return
+    }
+
+    const selectedText = await api.getSelectedText().catch(() => '')
+    if (!selectedText.trim()) {
+      setContinuityStatus('empty')
+      return
+    }
+
+    try {
+      const thread = await getOrCreateContinuityThread()
+      const updated = appendContinuityEntry(thread, {
+        role: 'assistant',
+        content: selectedText,
+        provider: getActiveProvider(activeTab),
+        accountEmail: activeTab.gmail.email,
+      })
+      await saveContinuityThread(updated)
+      setContinuityStatus('captured')
+    } catch {
+      setContinuityStatus('error')
+    }
+  }
+
+  async function captureLatestAssistantResponse(showDuplicateStatus = true) {
+    if (!activeTab || !isToolTab(activeTab)) {
+      setContinuityStatus('unsupported')
+      return false
+    }
+
+    const tool = getInjectTool(activeTab.url)
+    if (!tool) {
+      setContinuityStatus('unsupported')
+      return false
+    }
+
+    const assistantText = await api.captureLatestAssistant(activeTab.id, tool).catch(() => '')
+    if (!assistantText.trim()) {
+      if (showDuplicateStatus) setContinuityStatus('empty')
+      return false
+    }
+
+    try {
+      const thread = await getOrCreateContinuityThread()
+      const result = appendUniqueContinuityEntry(thread, {
+        role: 'assistant',
+        content: assistantText,
+        provider: getActiveProvider(activeTab),
+        accountEmail: activeTab.gmail.email,
+      })
+      await saveContinuityThread(result.thread)
+      setContinuityStatus(result.added ? 'captured' : (showDuplicateStatus ? 'duplicate' : 'idle'))
+      return result.added
+    } catch {
+      setContinuityStatus('error')
+      return false
+    }
+  }
+
+  async function injectHandoffPrompt() {
+    if (!activeTab || !isToolTab(activeTab)) {
+      setContinuityStatus('unsupported')
+      return
+    }
+
+    const thread = await getOrCreateContinuityThread()
+    if (!getContinuityStats(thread).hasContext) {
+      setContinuityStatus('empty')
+      return
+    }
+
+    const tool = getInjectTool(activeTab.url)
+    if (!tool) {
+      setContinuityStatus('unsupported')
+      return
+    }
+
+    const prompt = buildContextPassport(thread, {
+      targetProvider: getActiveProvider(activeTab),
+      targetAccountEmail: activeTab.gmail.email,
+    })
+    const ok = await api.injectToTab(activeTab.id, prompt, tool).catch(() => false)
+    setContinuityStatus(ok ? 'continued' : 'error')
+  }
+
+  async function clearContinuityThread() {
+    await api.storeSet(CONTINUITY_STORE_KEY, null)
+    setContinuityThread(null)
+    setContinuityStatus('cleared')
+  }
+
+  function toggleAutoCapture() {
+    setAutoCapture(current => {
+      const next = !current
+      setContinuityStatus(next ? 'auto-on' : 'auto-off')
+      return next
+    })
+  }
 
   function selectPrompt(p: Prompt) {
     const vars = extractVars(p.content)
@@ -147,6 +318,15 @@ export default function PromptBar({ activeTab, isActive }: Props) {
     const ok = await api.injectToTab(activeTab.id, filled, tool).catch(() => false)
     setInjectStatus(ok ? 'success' : 'error')
     if (ok) {
+      const thread = await getOrCreateContinuityThread()
+      const updated = appendContinuityEntry(thread, {
+        role: 'user',
+        content: filled,
+        provider: getActiveProvider(activeTab),
+        accountEmail: activeTab.gmail.email,
+      })
+      await saveContinuityThread(updated)
+      setContinuityStatus('captured')
       setTimeout(() => closeOverlay(), 600)
     }
   }
@@ -160,6 +340,18 @@ export default function PromptBar({ activeTab, isActive }: Props) {
   const vars = selectedPrompt ? extractVars(selectedPrompt.content) : []
   const filledContent = selectedPrompt ? fillVars(selectedPrompt.content, varValues) : ''
   const canInject = !!selectedPrompt && vars.every(v => varValues[v]?.trim())
+  const continuityStatusText = {
+    idle: '',
+    captured: 'Context saved',
+    continued: 'Handoff injected',
+    empty: 'Select text or save a prompt first',
+    unsupported: 'Continuity works on supported AI tabs',
+    error: 'Continuity action failed',
+    cleared: 'Continuity cleared',
+    duplicate: 'Already captured',
+    'auto-on': 'Auto capture on',
+    'auto-off': 'Auto capture off',
+  }[continuityStatus]
 
   // ── Bar (always rendered when there's an active tab) ──────────
 
@@ -205,6 +397,121 @@ export default function PromptBar({ activeTab, isActive }: Props) {
         ) : (
           <span style={{ fontSize: '11px', color: 'var(--text-3)' }}>
             Prompt injection sirf AI tabs ke liye available hai
+          </span>
+        )}
+
+        <div style={{ width: '1px', height: '18px', background: 'var(--border)', margin: '0 2px' }} />
+
+        <span
+          title={continuityStats.lastUpdatedAt ? `Last saved: ${continuityStats.lastUpdatedAt}` : 'No continuity context yet'}
+          style={{
+            fontSize: '10.5px',
+            color: continuityStats.hasContext ? 'var(--accent)' : 'var(--text-3)',
+            fontWeight: 700,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Continuity {continuityStats.entryCount}
+        </span>
+
+        {isToolTab(activeTab) && (
+          <>
+            <button
+              onClick={captureSelectedResponse}
+              title="Save selected text from the current AI page as context"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '5px',
+                padding: '5px 9px', borderRadius: '7px', cursor: 'pointer',
+                background: 'transparent', border: '1px solid var(--border)',
+                color: 'var(--text-2)', fontSize: '11px', fontWeight: 600,
+                flexShrink: 0,
+              }}
+            >
+              <ClipboardPlus size={11} />
+              Capture
+            </button>
+
+            <button
+              onClick={toggleAutoCapture}
+              title="Automatically capture the latest assistant response from this AI tab"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '5px',
+                padding: '5px 9px', borderRadius: '7px', cursor: 'pointer',
+                background: autoCapture ? 'var(--success-muted)' : 'transparent',
+                border: `1px solid ${autoCapture ? 'var(--success)' : 'var(--border)'}`,
+                color: autoCapture ? 'var(--success)' : 'var(--text-2)',
+                fontSize: '11px', fontWeight: 600,
+                flexShrink: 0,
+              }}
+            >
+              <Radar size={11} />
+              Auto
+            </button>
+
+            <button
+              onClick={() => { captureLatestAssistantResponse(true).catch(() => setContinuityStatus('error')) }}
+              title="Capture the latest visible assistant response now"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '5px',
+                padding: '5px 9px', borderRadius: '7px', cursor: 'pointer',
+                background: 'transparent', border: '1px solid var(--border)',
+                color: 'var(--text-2)', fontSize: '11px', fontWeight: 600,
+                flexShrink: 0,
+              }}
+            >
+              Sync
+            </button>
+
+            <button
+              onClick={injectHandoffPrompt}
+              disabled={!continuityStats.hasContext}
+              title="Inject a structured Context Passport into this AI tab"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '5px',
+                padding: '5px 9px', borderRadius: '7px',
+                cursor: continuityStats.hasContext ? 'pointer' : 'not-allowed',
+                background: continuityStats.hasContext ? 'var(--accent-muted)' : 'transparent',
+                border: '1px solid var(--accent-border)',
+                color: continuityStats.hasContext ? 'var(--accent)' : 'var(--text-3)',
+                fontSize: '11px', fontWeight: 600,
+                flexShrink: 0,
+              }}
+            >
+              <GitBranch size={11} />
+              Passport
+            </button>
+
+            {continuityStats.hasContext && (
+              <button
+                onClick={clearContinuityThread}
+                title="Clear saved continuity context"
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: '26px', height: '26px', borderRadius: '7px',
+                  background: 'transparent', border: '1px solid var(--border)',
+                  color: 'var(--text-3)', cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                <Trash2 size={11} />
+              </button>
+            )}
+          </>
+        )}
+
+        {continuityStatusText && (
+          <span style={{
+            marginLeft: 'auto',
+            fontSize: '10.5px',
+            color: continuityStatus === 'error' || continuityStatus === 'unsupported' || continuityStatus === 'empty'
+              ? 'var(--danger)'
+              : 'var(--success)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}>
+            {continuityStatusText}
           </span>
         )}
       </div>

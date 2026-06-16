@@ -36,14 +36,12 @@ const win = new BrowserWindow({
   height: 780,
   minWidth: 900,
   minHeight: 600,
+  frame: true,
   webPreferences: {
-    preload: path.join(__dirname, '../preload/index.js'),
+    preload: path.join(__dirname, '../preload/preload.mjs'),
     contextIsolation: true,
     nodeIntegration: false,
-    webviewTag: false,
   },
-  // icon: generated PNG (no external file dependency)
-  autoHideMenuBar: true,
 });
 
 // Remove application menu completely
@@ -427,20 +425,25 @@ const store = new Store({
     settings: {
       launchOnStartup: false,
       minimizeToTray: false,
-      autoSyncInterval: 300,
-      theme: 'light',
+      theme: 'system',
       hotkeys: {
-        injectPanel: 'Ctrl+Shift+P',
-        captureSelection: 'Ctrl+Shift+S',
-        switchAccount: 'Ctrl+Tab',
+        injectPanel: 'CommandOrControl+Shift+P',
+        captureSelection: 'CommandOrControl+Shift+S',
+        switchAccount: 'CommandOrControl+Tab',
       }
     },
-    'gmail-sessions': [],
-    'yt-accounts': [],
-    'custom-tools': DEFAULT_TOOLS,
-    'prompts': [],
-    'prompt-categories': [],
-    'workspace-email': null,
+    gmailSessions: [],
+    ytAccounts: [],
+    customTools: DEFAULT_TOOLS,
+    prompts: [],
+    promptCategories: [],
+    workspaceEmail: null,
+    activeWorkspaceId: null,
+    workspaces: [],
+    folders: [],
+    workspacePrompts: [],
+    promptVersions: [],
+    aiAccounts: [],
   }
 });
 ```

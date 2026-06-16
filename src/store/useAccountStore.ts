@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import { getSupabase } from '@/lib/supabase'
 import type { AIAccount, AIToolName } from '@/types/database'
+import { createLocalAIAccount, LOCAL_KEYS } from './localData'
 
 interface AccountStore {
   accounts: AIAccount[]
@@ -15,6 +15,14 @@ interface AccountStore {
   getAccountsForTool: (tool: AIToolName) => AIAccount[]
 }
 
+async function readAccounts(): Promise<AIAccount[]> {
+  return ((await window.electronAPI.storeGet(LOCAL_KEYS.aiAccounts)) as AIAccount[] | null) ?? []
+}
+
+async function writeAccounts(accounts: AIAccount[]): Promise<void> {
+  await window.electronAPI.storeSet(LOCAL_KEYS.aiAccounts, accounts)
+}
+
 export const useAccountStore = create<AccountStore>((set, get) => ({
   accounts: [],
   activeTab: 'chatgpt',
@@ -22,53 +30,56 @@ export const useAccountStore = create<AccountStore>((set, get) => ({
 
   fetch: async () => {
     try {
-      const sb = getSupabase()
-      const { data } = await sb.from('ai_accounts').select('*').order('created_at')
-      set({ accounts: data ?? [] })
+      const accounts = await readAccounts()
+      set({ accounts })
     } catch (e) {
-      console.error('Failed to fetch accounts:', e)
+      console.error('Failed to fetch local AI accounts:', e)
     }
   },
 
   create: async (data) => {
     try {
-      const sb = getSupabase()
-      const { data: row } = await sb.from('ai_accounts').insert(data).select().single()
-      if (row) set(s => ({ accounts: [...s.accounts, row] }))
-      return row
+      const accounts = await readAccounts()
+      const account = createLocalAIAccount(data)
+      const next = [...accounts, account]
+      await writeAccounts(next)
+      set({ accounts: next })
+      return account
     } catch (e) {
-      console.error('Failed to create account:', e)
+      console.error('Failed to create local AI account:', e)
       return null
     }
   },
 
   update: async (id, patch) => {
     try {
-      const sb = getSupabase()
-      await sb.from('ai_accounts').update(patch).eq('id', id)
-      set(s => ({ accounts: s.accounts.map(a => a.id === id ? { ...a, ...patch } : a) }))
+      const accounts = await readAccounts()
+      const next = accounts.map(account => account.id === id ? { ...account, ...patch } : account)
+      await writeAccounts(next)
+      set({ accounts: next })
     } catch (e) {
-      console.error('Failed to update account:', e)
+      console.error('Failed to update local AI account:', e)
     }
   },
 
   remove: async (id) => {
     try {
-      const sb = getSupabase()
-      await sb.from('ai_accounts').delete().eq('id', id)
-      set(s => ({ accounts: s.accounts.filter(a => a.id !== id) }))
+      const accounts = await readAccounts()
+      const next = accounts.filter(account => account.id !== id)
+      await writeAccounts(next)
+      set({ accounts: next })
     } catch (e) {
-      console.error('Failed to remove account:', e)
+      console.error('Failed to remove local AI account:', e)
     }
   },
 
   setActiveTab: (tool) => {
     set({ activeTab: tool })
-    const first = get().accounts.find(a => a.tool_name === tool)
+    const first = get().accounts.find(account => account.tool_name === tool)
     set({ activeAccountId: first?.id ?? null })
   },
 
   setActiveAccount: (id) => set({ activeAccountId: id }),
 
-  getAccountsForTool: (tool) => get().accounts.filter(a => a.tool_name === tool),
+  getAccountsForTool: (tool) => get().accounts.filter(account => account.tool_name === tool),
 }))

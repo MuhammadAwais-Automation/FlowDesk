@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   injectPrompt: (text: string, tool: string) => ipcRenderer.invoke('view:inject', text, tool),
   injectToTab: (tabId: string, text: string, tool: string) => ipcRenderer.invoke('view:injectToTab', tabId, text, tool),
   getSelectedText: () => ipcRenderer.invoke('view:getSelection'),
+  captureLatestAssistant: (tabId: string, tool: string) => ipcRenderer.invoke('view:captureLatestAssistant', tabId, tool),
   pageChanged: (page: string) => ipcRenderer.invoke('page:changed', page),
   setCustomBounds: (x: number, y: number, w: number, h: number) =>
     ipcRenderer.invoke('view:setCustomBounds', x, y, w, h),

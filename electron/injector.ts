@@ -40,3 +40,79 @@ export async function getSelectedText(webContents: WebContents): Promise<string>
     return ''
   }
 }
+
+export async function getLatestAssistantText(webContents: WebContents, tool: AITool): Promise<string> {
+  const escapedTool = JSON.stringify(tool)
+
+  try {
+    return await webContents.executeJavaScript(`
+      (function() {
+        const tool = ${escapedTool}
+        const selectors = {
+          chatgpt: [
+            '[data-message-author-role="assistant"]',
+            'article[data-testid^="conversation-turn-"]:has([data-message-author-role="assistant"])',
+            '[data-testid*="assistant"]'
+          ],
+          claude: [
+            '[data-is-streaming="false"]',
+            '[data-testid*="message"]',
+            '.font-claude-message',
+            '.prose'
+          ],
+          gemini: [
+            'message-content',
+            '.model-response-text',
+            '[data-response-index]',
+            '.markdown'
+          ],
+          grok: [
+            '[data-testid*="assistant"]',
+            '[data-testid*="message"]',
+            '.response-content',
+            '.prose'
+          ]
+        }
+
+        function clean(text) {
+          return String(text || '')
+            .replace(/\\u00a0/g, ' ')
+            .replace(/[ \\t]+/g, ' ')
+            .replace(/\\n{3,}/g, '\\n\\n')
+            .trim()
+        }
+
+        function visible(el) {
+          const rect = el.getBoundingClientRect()
+          const style = window.getComputedStyle(el)
+          return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+        }
+
+        function textFrom(selectorsForTool) {
+          for (const selector of selectorsForTool) {
+            const nodes = Array.from(document.querySelectorAll(selector)).filter(visible)
+            const texts = nodes.map(node => clean(node.innerText || node.textContent)).filter(text => text.length > 20)
+            if (texts.length > 0) return texts[texts.length - 1]
+          }
+          return ''
+        }
+
+        const providerText = textFrom(selectors[tool] || [])
+        if (providerText) return providerText
+
+        const genericSelectors = [
+          '[data-message-author-role="assistant"]',
+          '[data-testid*="assistant"]',
+          '[data-testid*="message"]',
+          'article',
+          '.prose',
+          'main p'
+        ]
+
+        return textFrom(genericSelectors)
+      })()
+    `)
+  } catch {
+    return ''
+  }
+}

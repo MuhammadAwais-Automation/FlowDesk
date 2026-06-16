@@ -1,4 +1,4 @@
-import { session, WebContentsView, BrowserWindow, shell } from 'electron'
+import { session, WebContentsView, BrowserWindow } from 'electron'
 
 const SOCIAL_NAV_H  = 44
 const SOCIAL_DOCK_W = 56  // right AppDock width — keep in sync with src/components/social/AppDock.tsx

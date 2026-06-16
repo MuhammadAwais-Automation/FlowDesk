@@ -43,6 +43,7 @@ export interface ElectronAPI {
   injectPrompt: (text: string, tool: string) => Promise<boolean>
   injectToTab: (tabId: string, text: string, tool: string) => Promise<boolean>
   getSelectedText: () => Promise<string>
+  captureLatestAssistant: (tabId: string, tool: string) => Promise<string>
   pageChanged: (page: string) => Promise<void>
   openLoginWindow: (partition: string, url: string) => Promise<void>
   setCustomBounds: (x: number, y: number, w: number, h: number) => Promise<void>
@@ -52,6 +53,14 @@ export interface ElectronAPI {
   viewNavigate: (url: string) => Promise<void>
   viewSetNavWidth: (w: number) => Promise<void>
   clearPartitionStorage: (partition: string) => Promise<void>
+
+  // Social Hub view controls
+  socialShow: (id: string, partition: string, url: string) => Promise<void>
+  socialHide: () => Promise<void>
+  socialDestroy: (id: string) => Promise<void>
+  socialGoBack: () => Promise<void>
+  socialGoForward: () => Promise<void>
+  socialReload: () => Promise<void>
 
   // Gmail session management
   gmailList: () => Promise<GmailSession[]>

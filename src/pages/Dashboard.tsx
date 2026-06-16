@@ -3,7 +3,7 @@ import { useWorkspaceStore } from '@/store/useWorkspaceStore'
 import { usePromptStore } from '@/store/usePromptStore'
 import { useAccountStore } from '@/store/useAccountStore'
 import { AI_TOOL_COLORS } from '@/types/database'
-import { FileText, Users, Globe, Plus, UserPlus, Layers } from 'lucide-react'
+import { FileText, Users, Globe, Plus, UserPlus } from 'lucide-react'
 import type { Page } from '@/types/pages'
 
 interface Props {

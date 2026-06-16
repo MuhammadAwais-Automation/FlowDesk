@@ -30,19 +30,6 @@ function VarChip({ name }: { name: string }) {
   )
 }
 
-function PromptPreview({ content }: { content: string }) {
-  const parts = content.split(/({{[\w]+}})/)
-  return (
-    <span>
-      {parts.map((part, i) =>
-        part.startsWith('{{') && part.endsWith('}}')
-          ? <VarChip key={i} name={part.slice(2, -2)} />
-          : <span key={i}>{part}</span>
-      )}
-    </span>
-  )
-}
-
 const PRESET_COLORS = [
   '#4F6EF7', '#10B981', '#F59E0B', '#EF4444',
   '#8B5CF6', '#EC4899', '#14B8A6', '#F97316',
@@ -77,7 +64,6 @@ export default function PromptLibrary() {
   const [isNew, setIsNew]                      = useState(false)
   const editorNameRef = useRef<HTMLInputElement>(null)
 
-  const selectedPrompt = prompts.find(p => p.id === selectedPromptId) ?? null
   const vars = extractVars(editContent)
 
   // Load data

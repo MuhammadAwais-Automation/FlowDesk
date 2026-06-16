@@ -70,11 +70,8 @@ export interface AIAccount {
 
 
 export interface AppSettings {
-  supabaseUrl: string
-  supabaseKey: string
   launchOnStartup: boolean
   minimizeToTray: boolean
-  autoSyncInterval: number
   theme: 'light' | 'dark' | 'system'
   hotkeys: {
     injectPanel: string

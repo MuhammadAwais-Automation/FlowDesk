@@ -7,18 +7,18 @@ import { useSocialStore } from '@/store/useSocialStore'
 interface Props { isActive: boolean }
 
 export default function SocialHub({ isActive }: Props) {
-  const { activePlatform, setActive } = useSocialStore()
-  const api = window.electronAPI as any
+  const { activePlatform } = useSocialStore()
+  const api = window.electronAPI
   const activeApp = SOCIAL_APPS.find(a => a.id === activePlatform)
 
   // Show / hide the WebContentsView when platform or page changes
   useEffect(() => {
     if (!isActive || !activePlatform || !activeApp) {
-      api?.socialHide?.()
+      void api.socialHide()
       return
     }
-    api?.socialShow?.(activePlatform, `social-hub-${activePlatform}`, activeApp.url)
-  }, [activePlatform, isActive])
+    void api.socialShow(activePlatform, `social-hub-${activePlatform}`, activeApp.url)
+  }, [activePlatform, activeApp, api, isActive])
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden', background: 'var(--bg)' }}>
@@ -38,17 +38,17 @@ export default function SocialHub({ isActive }: Props) {
           borderBottom: '1px solid var(--border)',
         }}>
           {/* Back */}
-          <NavBtn onClick={() => api?.socialGoBack?.()} title="Back">
+          <NavBtn onClick={() => { void api.socialGoBack() }} title="Back">
             <ChevronLeft size={15} strokeWidth={2} />
           </NavBtn>
 
           {/* Forward */}
-          <NavBtn onClick={() => api?.socialGoForward?.()} title="Forward">
+          <NavBtn onClick={() => { void api.socialGoForward() }} title="Forward">
             <ChevronRight size={15} strokeWidth={2} />
           </NavBtn>
 
           {/* Reload */}
-          <NavBtn onClick={() => api?.socialReload?.()} title="Reload">
+          <NavBtn onClick={() => { void api.socialReload() }} title="Reload">
             <RotateCw size={13} strokeWidth={2} />
           </NavBtn>
 

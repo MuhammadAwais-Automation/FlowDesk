@@ -13,11 +13,8 @@ const DEFAULT_HOTKEYS: AppSettings['hotkeys'] = {
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
-  supabaseUrl: '',
-  supabaseKey: '',
   launchOnStartup: false,
   minimizeToTray: false,
-  autoSyncInterval: 5,
   theme: 'system',
   hotkeys: DEFAULT_HOTKEYS,
 }
@@ -244,20 +241,6 @@ function GeneralSection({ settings, set }: {
             value={settings.minimizeToTray}
             onChange={() => set({ minimizeToTray: !settings.minimizeToTray })}
           />
-        </Row>
-      </Card>
-
-      <Card title="Sync">
-        <Row label="Auto-sync interval" desc="How often to sync data with the cloud">
-          <select
-            style={selectStyle}
-            value={settings.autoSyncInterval}
-            onChange={e => set({ autoSyncInterval: Number(e.target.value) })}
-          >
-            {[1, 5, 15, 30, 60].map(n => (
-              <option key={n} value={n}>{n} {n === 1 ? 'minute' : 'minutes'}</option>
-            ))}
-          </select>
         </Row>
       </Card>
 

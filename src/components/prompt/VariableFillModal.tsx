@@ -23,6 +23,11 @@ export default function VariableFillModal({ prompt, tab, onClose }: Props) {
     setInjecting(true)
     setError('')
     try {
+      if (!tab.tool) {
+        setError('Select an AI tool tab before injecting.')
+        return
+      }
+
       const filled = fillVariables(prompt.content, values)
       await window.electronAPI.switchView(tab.id, tab.gmail.partition, tab.tool.url)
 
@@ -83,7 +88,7 @@ export default function VariableFillModal({ prompt, tab, onClose }: Props) {
 
         <p className="text-xs text-gray-400 mb-4">
           Injecting to:{' '}
-          <span className="font-medium text-gray-600">{tab.tool.name}</span>
+          <span className="font-medium text-gray-600">{tab.tool?.name ?? 'AI tool'}</span>
           {' · '}{tab.gmail.email}
         </p>
 

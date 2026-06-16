@@ -47,7 +47,7 @@ import { join } from 'path'
 import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth } from './sessions'
 import { setSocialMainWindow, showSocialView, hideAllSocialViews, destroySocialView, setSocialNavWidth, socialGoBack, socialGoForward, socialReload } from './socialHub'
-import { injectPrompt, getSelectedText } from './injector'
+import { injectPrompt, getLatestAssistantText, getSelectedText } from './injector'
 import type { AppSettings } from '../src/types/database'
 
 const DEFAULT_TOOLS: CustomTool[] = [
@@ -65,14 +65,17 @@ const store = new Store<{
   workspaceEmail: string | null
   prompts: Prompt[]
   promptCategories: PromptCategory[]
+  activeWorkspaceId: string | null
+  workspaces: unknown[]
+  folders: unknown[]
+  workspacePrompts: unknown[]
+  promptVersions: unknown[]
+  aiAccounts: unknown[]
 }>({
   defaults: {
     settings: {
-      supabaseUrl: '',
-      supabaseKey: '',
       launchOnStartup: false,
       minimizeToTray: false,
-      autoSyncInterval: 5,
       theme: 'system',
       hotkeys: {
         injectPanel: 'CommandOrControl+Shift+P',
@@ -86,6 +89,12 @@ const store = new Store<{
     workspaceEmail: null,
     prompts: [],
     promptCategories: [],
+    activeWorkspaceId: null,
+    workspaces: [],
+    folders: [],
+    workspacePrompts: [],
+    promptVersions: [],
+    aiAccounts: [],
   }
 })
 
@@ -178,10 +187,9 @@ function createWindow() {
     minHeight: 600,
     frame: true,
     webPreferences: {
-      preload: join(__dirname, '../preload/preload.js'),
+      preload: join(__dirname, '../preload/preload.mjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false,   // allow Supabase requests in both dev and prod
     }
   })
 
@@ -814,8 +822,12 @@ ipcMain.handle('view:getSelection', async () => {
   return getSelectedText(view.webContents)
 })
 
-app.commandLine.appendSwitch('no-sandbox')
-app.commandLine.appendSwitch('disable-gpu-sandbox')
+// IPC: capture the latest assistant response from a specific AI tab.
+ipcMain.handle('view:captureLatestAssistant', async (_e, tabId: string, tool: string) => {
+  const view = getViewById(tabId)
+  if (!view) return ''
+  return getLatestAssistantText(view.webContents, tool as 'chatgpt' | 'claude' | 'gemini' | 'grok')
+})
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
