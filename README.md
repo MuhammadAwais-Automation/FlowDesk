@@ -1,60 +1,51 @@
+<div align="center">
+
 # FlowDesk
 
-Local-first AI creator workstation built with Electron, React, and TypeScript.
+### Local-first AI creator workstation for prompts, accounts, AI sessions, and social workflows.
 
-FlowDesk helps creators manage AI tools, reusable prompts, social platforms, Gmail accounts, YouTube Studio, Calendar, and Tasks from one desktop app. The core workflow runs on the user's machine, so no hosted database or cloud account is required.
+![Electron](https://img.shields.io/badge/Electron-Desktop-111111?style=flat-square&logo=electron)
+![React](https://img.shields.io/badge/React-TypeScript-111111?style=flat-square&logo=react)
+![Local First](https://img.shields.io/badge/Local--first-No%20hosted%20DB-111111?style=flat-square)
+![Tests](https://img.shields.io/badge/Tests-Vitest-111111?style=flat-square)
 
-## Why FlowDesk
+</div>
 
-- Manage multiple AI tool sessions without constant login switching.
-- Keep Gmail, YouTube, and AI tool accounts isolated in Electron session partitions.
-- Save reusable prompt templates with `{{variables}}`.
-- Inject prompts into supported AI tools from the AI Browser.
-- Open social platforms, YouTube Studio, Gmail, Calendar, and Tasks in persistent native browser views.
-- Store prompts, workspaces, account metadata, and settings locally with `electron-store`.
+FlowDesk is a desktop workstation for creators who work across AI tools, reusable prompts, Gmail accounts, YouTube Studio, social platforms, Calendar, and Tasks. The core workflow runs locally, so no hosted database or cloud account is required for the app itself.
 
-## Features
+## At a Glance
 
-### AI Browser
+| Area | Details |
+|---|---|
+| Product type | Local-first desktop productivity app |
+| Users | Creators, solo operators, social media managers, AI-heavy workflows |
+| Desktop stack | Electron, React, TypeScript, electron-vite |
+| Storage model | Local app storage with isolated Electron session partitions |
+| Showcase value | Desktop product engineering, account isolation, prompt tooling, local-first UX |
 
-- Open ChatGPT, Claude, Gemini, Grok, or custom AI tools.
-- Pair AI tool tabs with isolated account sessions.
-- Use back, forward, reload, clear-session, and prompt-injection controls.
+## What It Proves
 
-### Prompt Library
+| Capability | Example in this project |
+|---|---|
+| Desktop app architecture | Electron main/preload/renderer split with typed IPC patterns |
+| Local-first product design | Prompts, workspaces, accounts, and settings stored locally |
+| Session isolation | Separate Electron partitions for AI tools, Gmail, YouTube Studio, and social platforms |
+| Creator workflow design | Prompt templates, AI browser, account switching, social hub, personal workspace |
+| Engineering verification | Vitest tests, TypeScript checks, production build scripts |
 
-- Create and organize reusable prompts locally.
-- Use fillable `{{variable}}` placeholders.
-- Search prompts and group them by category.
-- Track prompt metadata, version history, and last-used state locally.
+## Product Surface
 
-### Creator Workspaces
+| Module | Purpose |
+|---|---|
+| AI Browser | Open ChatGPT, Claude, Gemini, Grok, or custom AI tools with isolated sessions |
+| Prompt Library | Save reusable prompts with `{{variables}}`, categories, search, metadata, and local history |
+| Workspaces | Organize projects, clients, brands, folders, prompt versions, and account profiles |
+| Accounts | Add and isolate multiple Gmail accounts inside native browser views |
+| YouTube Studio | Switch between isolated YouTube Studio sessions |
+| Social Hub | Open Instagram, Facebook, X/Twitter, LinkedIn, TikTok, Threads, Reddit, YouTube, Telegram, Discord, WhatsApp, and more |
+| Personal Workspace | Use Calendar and Tasks with a local isolated Google session |
 
-- Create local workspaces for personal projects, channels, clients, or brands.
-- Keep workspace prompts, folders, versions, and AI account profiles organized.
-
-### Accounts
-
-- Add multiple Gmail accounts through isolated login windows.
-- Rename accounts, set colors, and open Gmail inboxes inside the app.
-
-### YouTube Studio
-
-- Add multiple YouTube or Google accounts.
-- Switch between isolated YouTube Studio sessions.
-- Re-authenticate, rename, reload, remove, or open Studio externally.
-
-### Social Hub
-
-- Open Instagram, Facebook, X/Twitter, LinkedIn, TikTok, Threads, Reddit, YouTube, Telegram, Discord, WhatsApp, and more.
-- Keep each platform in a persistent native `WebContentsView`.
-
-### Personal Workspace
-
-- Connect one personal Google account.
-- Use Google Calendar and Google Tasks from an isolated local session.
-
-## Tech Stack
+## Stack
 
 | Layer | Technology |
 |---|---|
@@ -68,21 +59,20 @@ FlowDesk helps creators manage AI tools, reusable prompts, social platforms, Gma
 | Testing | Vitest |
 | Packaging | electron-builder |
 
-## Project Structure
+## Project Map
 
 ```text
-FlowDesk/
-  electron/          Electron main and preload process
-  src/               React renderer
-    components/      Reusable UI components
-    config/          Social platform definitions
-    lib/             Utilities and local continuity logic
-    pages/           Dashboard, browser, prompts, accounts, social, settings
-    store/           Local-first Zustand stores
-    types/           Shared TypeScript types
-  docs/              Project documentation
-  resources/         App icons
-  flowdesk-promo/    Promo prototype assets
+electron/          Electron main and preload process
+src/
+  components/      Reusable UI components
+  config/          Social platform definitions
+  lib/             Utilities and local continuity logic
+  pages/           Dashboard, browser, prompts, accounts, social, settings
+  store/           Local-first Zustand stores
+  types/           Shared TypeScript types
+docs/              Project documentation
+resources/         App icons
+flowdesk-promo/    Promo prototype assets
 ```
 
 ## Run Locally
@@ -109,7 +99,7 @@ npm run build:mac
 
 ## Privacy Model
 
-FlowDesk is local-first. Application data is stored locally through Electron storage, while account sessions stay isolated through Electron session partitions. No Supabase project, hosted database, or external backend is required for the core app.
+FlowDesk is local-first. App data is stored locally through Electron storage, while account sessions stay isolated through Electron session partitions. No Supabase project, hosted database, or external backend is required for the core app.
 
 ## License
 
