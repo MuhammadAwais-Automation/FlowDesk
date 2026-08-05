@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useWorkspaceStore } from '@/store/useWorkspaceStore'
+import { useThemeStore } from '@/store/useThemeStore'
 import {
   Monitor, Keyboard, Layers, Info, Plus, Trash2,
   Check, Zap
@@ -249,7 +250,14 @@ function GeneralSection({ settings, set }: {
           <select
             style={selectStyle}
             value={settings.theme}
-            onChange={e => set({ theme: e.target.value as AppSettings['theme'] })}
+            onChange={e => {
+              const theme = e.target.value as AppSettings['theme']
+              set({ theme })
+              // Applies + persists immediately, unlike the rest of this page
+              // (gated behind the Save button) — a theme toggle is expected
+              // to show its effect right away.
+              useThemeStore.getState().setSetting(theme)
+            }}
           >
             <option value="light">Light</option>
             <option value="dark">Dark</option>

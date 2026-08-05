@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   viewReload: () => ipcRenderer.invoke('view:reload'),
   viewNavigate: (url: string) => ipcRenderer.invoke('view:navigate', url),
   viewSetNavWidth: (w: number) => ipcRenderer.invoke('view:setNavWidth', w),
+  viewSetDockWidth: (w: number) => ipcRenderer.invoke('view:setDockWidth', w),
   clearPartitionStorage: (partition: string) =>
     ipcRenderer.invoke('session:clearPartition', partition),
 
@@ -90,4 +91,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onCaptureSelection: (cb: () => void) => ipcRenderer.on('capture-selection', cb),
   offInjectPanel: (cb: () => void) => ipcRenderer.removeListener('open-inject-panel', cb),
   offCaptureSelection: (cb: () => void) => ipcRenderer.removeListener('capture-selection', cb),
+
+  // PoC: live capture of streamed AI responses (ChatGPT only, for now)
+  onCaptureLive: (cb: (e: unknown, data: { id: string; tool: string; textSoFar: string }) => void) =>
+    ipcRenderer.on('capture:live', cb),
+  onCaptureComplete: (cb: (e: unknown, data: { id: string; tool: string; text: string; error?: string }) => void) =>
+    ipcRenderer.on('capture:complete', cb),
+  offCaptureLive: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('capture:live', cb),
+  offCaptureComplete: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('capture:complete', cb),
+
+  // ChatGPT-only, for now: account usage/quota snapshot (deep_research,
+  // file_upload, image_gen, ... remaining + reset_after), pulled out of the
+  // same "conversation_detail_metadata" SSE events the capture pipeline
+  // already sees but previously discarded.
+  onCaptureUsage: (cb: (e: unknown, data: { tool: string; limits: { feature: string; remaining: number; resetAfter: string }[] }) => void) =>
+    ipcRenderer.on('capture:usage', cb),
+  offCaptureUsage: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('capture:usage', cb),
+
+  // ChatGPT-only, for now: which model actually served the turn, plan type,
+  // whether it auto-switched to reasoning, and time-to-first-visible-token.
+  onCaptureModelInfo: (cb: (e: unknown, data: { tool: string; info: { modelSlug: string; planType: string; autoSwitchedToReasoning: boolean; ttfvtMs: number; clusterRegion: string } }) => void) =>
+    ipcRenderer.on('capture:modelInfo', cb),
+  offCaptureModelInfo: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('capture:modelInfo', cb),
+
+  // ChatGPT-only, for now: conversation_id + message_id for the turn just captured.
+  onCaptureIds: (cb: (e: unknown, data: { tool: string; ids: { conversationId: string; messageId?: string } }) => void) =>
+    ipcRenderer.on('capture:ids', cb),
+  offCaptureIds: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('capture:ids', cb),
+
+  // Universal Chat: one background worker tab per provider
+  universalChatEnsureView: (provider: string) => ipcRenderer.invoke('universalChat:ensureView', provider),
+  universalChatSend: (tabId: string, text: string, tool: string) => ipcRenderer.invoke('universalChat:send', tabId, text, tool),
+
+  // Agent: lead Claude (SDK) that can call the 5 browser-driven worker tools
+  agentSendMessage: (prompt: string) => ipcRenderer.invoke('agent:sendMessage', prompt),
+  agentAbort: () => ipcRenderer.invoke('agent:abort'),
+  onAgentEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.on('agent:event', cb),
+  offAgentEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('agent:event', cb),
+
+  // Dark mode: OS theme readout + live change notifications
+  themeGetSystem: () => ipcRenderer.invoke('theme:getSystem'),
+  onSystemThemeChanged: (cb: (e: unknown, data: { shouldUseDarkColors: boolean }) => void) => ipcRenderer.on('theme:systemChanged', cb),
+  offSystemThemeChanged: (cb: (e: unknown, data: { shouldUseDarkColors: boolean }) => void) => ipcRenderer.removeListener('theme:systemChanged', cb),
 })

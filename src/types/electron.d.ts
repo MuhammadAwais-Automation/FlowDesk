@@ -52,6 +52,7 @@ export interface ElectronAPI {
   viewReload: () => Promise<void>
   viewNavigate: (url: string) => Promise<void>
   viewSetNavWidth: (w: number) => Promise<void>
+  viewSetDockWidth: (w: number) => Promise<void>
   clearPartitionStorage: (partition: string) => Promise<void>
 
   // Social Hub view controls
@@ -111,7 +112,54 @@ export interface ElectronAPI {
   onCaptureSelection: (cb: () => void) => void
   offInjectPanel: (cb: () => void) => void
   offCaptureSelection: (cb: () => void) => void
+
+  // PoC: live capture of streamed AI responses (ChatGPT only, for now)
+  onCaptureLive: (cb: (e: unknown, data: { id: string; tool: string; textSoFar: string }) => void) => void
+  onCaptureComplete: (cb: (e: unknown, data: { id: string; tool: string; text: string; error?: string }) => void) => void
+  offCaptureLive: (cb: (e: unknown, data: { id: string; tool: string; textSoFar: string }) => void) => void
+  offCaptureComplete: (cb: (e: unknown, data: { id: string; tool: string; text: string; error?: string }) => void) => void
+
+  // ChatGPT-only, for now: account usage/quota snapshot
+  onCaptureUsage: (cb: (e: unknown, data: { tool: string; limits: { feature: string; remaining: number; resetAfter: string }[] }) => void) => void
+  offCaptureUsage: (cb: (e: unknown, data: { tool: string; limits: { feature: string; remaining: number; resetAfter: string }[] }) => void) => void
+
+  // ChatGPT-only, for now: which model served the turn, plan type, etc.
+  onCaptureModelInfo: (cb: (e: unknown, data: { tool: string; info: { modelSlug: string; planType: string; autoSwitchedToReasoning: boolean; ttfvtMs: number; clusterRegion: string } }) => void) => void
+  offCaptureModelInfo: (cb: (e: unknown, data: { tool: string; info: { modelSlug: string; planType: string; autoSwitchedToReasoning: boolean; ttfvtMs: number; clusterRegion: string } }) => void) => void
+
+  // ChatGPT-only, for now: conversation_id + message_id for the turn
+  onCaptureIds: (cb: (e: unknown, data: { tool: string; ids: { conversationId: string; messageId?: string } }) => void) => void
+  offCaptureIds: (cb: (e: unknown, data: { tool: string; ids: { conversationId: string; messageId?: string } }) => void) => void
+
+  // Universal Chat: one background worker tab per provider
+  universalChatEnsureView: (provider: string) => Promise<{ tabId: string } | { error: 'unknown_provider' | 'no_google_account' }>
+  universalChatSend: (tabId: string, text: string, tool: string) => Promise<boolean>
+
+  // Agent: lead Claude (SDK) that can call the 5 browser-driven worker tools
+  agentSendMessage: (prompt: string) => Promise<boolean>
+  agentAbort: () => Promise<void>
+  onAgentEvent: (cb: (e: unknown, data: AgentStreamEvent) => void) => void
+  offAgentEvent: (cb: (e: unknown, data: AgentStreamEvent) => void) => void
+
+  // Dark mode: OS theme readout + live change notifications
+  themeGetSystem: () => Promise<{ shouldUseDarkColors: boolean }>
+  onSystemThemeChanged: (cb: (e: unknown, data: { shouldUseDarkColors: boolean }) => void) => void
+  offSystemThemeChanged: (cb: (e: unknown, data: { shouldUseDarkColors: boolean }) => void) => void
 }
+
+// Mirrors electron/agent/leadAgent.ts's AgentStreamEvent — main and renderer
+// are separate TS build roots (same reason claudeSdkProvider.ts needs a
+// dynamic import), so this is kept in sync by hand, matching the existing
+// CaptureChunk/onCaptureComplete precedent.
+export type AgentToolName = 'chatgpt' | 'claude' | 'gemini' | 'grok' | 'perplexity'
+
+export type AgentStreamEvent =
+  | { type: 'text'; text: string }
+  | { type: 'tool_call'; toolUseId: string; tool: string; prompt: string }
+  | { type: 'tool_progress'; toolUseId: string; tool: string; elapsedSeconds: number }
+  | { type: 'tool_result'; toolUseId: string; tool: string; text: string; isError: boolean }
+  | { type: 'done'; text: string }
+  | { type: 'error'; message: string }
 
 declare global {
   interface Window {

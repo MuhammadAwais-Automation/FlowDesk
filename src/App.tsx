@@ -1,9 +1,12 @@
 import { useState, useEffect, lazy, Suspense } from 'react'
 import LeftNav from '@/components/layout/LeftNav'
 import AIBrowser from '@/pages/AIBrowser'
+import { useThemeStore } from '@/store/useThemeStore'
 import type { Page } from '@/types/pages'
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
+const UniversalChat = lazy(() => import('@/pages/UniversalChat'))
+const Agent = lazy(() => import('@/pages/Agent'))
 const PromptLibrary = lazy(() => import('@/pages/PromptLibrary'))
 const Accounts = lazy(() => import('@/pages/Accounts'))
 const Settings = lazy(() => import('@/pages/Settings'))
@@ -22,6 +25,16 @@ export default function App() {
     if (!api) return
     api.pageChanged(currentPage).catch(() => {})
   }, [currentPage])
+
+
+
+  // Resolves the real theme setting (incl. System) and subscribes to live
+  // OS theme changes — src/main.tsx already applied a cached guess synchronously
+  // before this mounted, so there's no flash while this resolves.
+  useEffect(() => {
+    if (!api) return
+    useThemeStore.getState().init()
+  }, [])
 
   // Navigate and immediately hide any native WebContentsView BEFORE React re-renders.
   // This prevents the native view from covering the new page during the transition.
@@ -70,6 +83,8 @@ export default function App() {
   function renderPage() {
     switch (currentPage) {
       case 'dashboard': return <Dashboard onNavigate={navigateTo} />
+      case 'universalChat': return <UniversalChat />
+      case 'agent': return <Agent />
       case 'prompts': return <PromptLibrary />
       case 'accounts': return <Accounts />
       case 'settings': return <Settings />
@@ -81,9 +96,9 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
+    <div className="flex h-screen w-screen overflow-hidden bg-[#FAF7F0] bg-dot-matrix">
       <LeftNav current={currentPage} onChange={navigateTo} />
-      <main className="flex-1 overflow-hidden relative">
+      <main className="flex-1 overflow-hidden relative bg-[#FAF7F0] bg-dot-matrix">
 
         {/* AIBrowser is always mounted — tabs and view state persist across navigation */}
         <div style={{ display: currentPage === 'browser' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>

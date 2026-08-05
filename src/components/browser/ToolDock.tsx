@@ -1,5 +1,8 @@
-import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Mail, Plus, Settings, X } from 'lucide-react'
+import { useMemo, useState, useEffect } from 'react'
+import {
+  ChevronDown, ChevronRight, Mail, Plus, Settings, X,
+  PanelLeftClose, PanelLeftOpen
+} from 'lucide-react'
 import { getFaviconUrl, isToolTab } from '@/types/browser'
 import type { BrowserTab, CustomTool } from '@/types/browser'
 import type { GmailSession } from '@/types/electron'
@@ -23,6 +26,21 @@ export default function ToolDock({
 }: Props) {
   const { isExpanded, toggle } = useDockExpanded()
   const [hoverTabId, setHoverTabId] = useState<string | null>(null)
+  const [dockCollapsed, setDockCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('aiToolDockCollapsed') === 'true'
+  })
+
+  useEffect(() => {
+    window.electronAPI?.viewSetDockWidth?.(dockCollapsed ? 52 : 230)
+  }, [dockCollapsed])
+
+  function toggleDockCollapse() {
+    setDockCollapsed(prev => {
+      const next = !prev
+      localStorage.setItem('aiToolDockCollapsed', String(next))
+      return next
+    })
+  }
 
   const tabsByTool = useMemo(() => {
     const m = new Map<string, BrowserTab[]>()
@@ -36,22 +54,51 @@ export default function ToolDock({
   }, [tabs])
 
   return (
-    <div style={{
-      width: '220px',
-      flexShrink: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      background: 'var(--surface)',
-      borderLeft: '1px solid var(--border)',
-      overflow: 'hidden',
-    }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 6px' }}>
+    <div
+      className="flex flex-col shrink-0 bg-[#EBE5D5] border-l border-[#D6CFC0] relative transition-all duration-200 select-none overflow-hidden"
+      style={{ width: dockCollapsed ? '52px' : '230px' }}
+    >
+      {/* Dock Panel Header */}
+      <div className={`flex items-center h-11 border-b border-[#D6CFC0] bg-[#EBE5D5] shrink-0 ${
+        dockCollapsed ? 'justify-center px-1' : 'justify-between px-3'
+      }`}>
+        {!dockCollapsed ? (
+          <>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 mr-1">
+                <span className="w-2 h-2 rounded-full bg-[#FF5F56]" />
+                <span className="w-2 h-2 rounded-full bg-[#FFBD2E]" />
+                <span className="w-2 h-2 rounded-full bg-[#27C93F]" />
+              </div>
+              <span className="font-retro-mono text-xs font-bold text-stone-800 uppercase tracking-wider">
+                AI Accounts
+              </span>
+            </div>
+
+            <button
+              onClick={toggleDockCollapse}
+              title="Collapse Dock Panel"
+              className="p-1.5 rounded-lg hover:bg-[#FAF7F0] text-stone-600 hover:text-stone-900 transition-colors border border-transparent hover:border-[#D6CFC0] cursor-pointer"
+            >
+              <PanelLeftClose size={14} />
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={toggleDockCollapse}
+            title="Expand Dock Panel"
+            className="w-8 h-8 rounded-xl bg-white border border-[#D8D1C3] hover:border-[#D97706] hover:bg-[#FEF3C7] text-stone-700 hover:text-[#B45309] flex items-center justify-center transition-all shadow-2xs cursor-pointer"
+          >
+            <PanelLeftOpen size={14} />
+          </button>
+        )}
+      </div>
+
+      {/* Main Tool Content List */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-[#FAF7F0] bg-dot-matrix">
         {customTools.length === 0 && (
-          <div style={{
-            padding: '20px 12px', textAlign: 'center',
-            color: 'var(--text-3)', fontSize: '11px',
-          }}>
-            No tools yet — click <strong>Manage Tools</strong> below.
+          <div className="p-4 text-center text-stone-500 font-retro-mono text-xs">
+            No tools yet — click <strong className="text-stone-800">Manage Tools</strong> below.
           </div>
         )}
 
@@ -60,53 +107,65 @@ export default function ToolDock({
           const expanded = isExpanded(tool.id, toolTabs.length > 0)
           const Chevron = expanded ? ChevronDown : ChevronRight
 
+          if (dockCollapsed) {
+            // ── Collapsed Slim Icon View ──
+            return (
+              <div key={tool.id} className="relative group flex justify-center py-1">
+                <button
+                  onClick={() => {
+                    if (toolTabs.length > 0) {
+                      onSelectTab(toolTabs[0].id)
+                    } else {
+                      onAddSession(tool.id)
+                    }
+                  }}
+                  title={`${tool.name} (${toolTabs.length} sessions)`}
+                  className="relative p-2 rounded-xl bg-white border border-[#D8D1C3] hover:border-[#D97706] hover:bg-[#FEF3C7]/40 transition-all shadow-2xs cursor-pointer"
+                >
+                  <img
+                    src={getFaviconUrl(tool.url)}
+                    alt={tool.name}
+                    className="w-5 h-5 object-contain rounded"
+                    onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                  />
+
+                  {toolTabs.length > 0 && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#D97706] text-white font-retro-mono text-[9px] font-bold flex items-center justify-center shadow-xs border border-white">
+                      {toolTabs.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )
+          }
+
+          // ── Expanded Full Accordion View ──
           return (
-            <div key={tool.id} style={{ marginBottom: '4px' }}>
+            <div key={tool.id} className="rounded-xl border border-[#D8D1C3] bg-white overflow-hidden shadow-2xs">
               <button
                 onClick={() => toggle(tool.id)}
-                style={{
-                  width: '100%',
-                  display: 'flex', alignItems: 'center', gap: '7px',
-                  padding: '7px 8px', borderRadius: '8px',
-                  background: 'transparent', border: 'none', cursor: 'pointer',
-                  color: 'var(--text-2)',
-                  transition: 'background 0.12s',
-                }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-2)' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 text-left bg-white hover:bg-[#FAF7F0] transition-colors"
               >
-                <Chevron size={11} style={{ flexShrink: 0, color: 'var(--text-3)' }} />
+                <Chevron size={12} className="text-stone-500 shrink-0" />
                 <img
                   src={getFaviconUrl(tool.url)}
                   alt=""
-                  style={{ width: '14px', height: '14px', borderRadius: '3px', flexShrink: 0, objectFit: 'contain' }}
+                  className="w-4 h-4 rounded object-contain shrink-0"
                   onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
                 />
-                <span style={{
-                  flex: 1, textAlign: 'left',
-                  fontSize: '12px', fontWeight: 600,
-                  color: 'var(--text)',
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                }}>
+                <span className="flex-1 font-retro-mono text-xs font-bold text-stone-800 truncate">
                   {tool.name}
                 </span>
-                <span style={{
-                  fontSize: '10px', fontWeight: 600,
-                  background: 'var(--surface-2)',
-                  color: 'var(--text-3)',
-                  borderRadius: '8px',
-                  padding: '1px 7px',
-                  flexShrink: 0,
-                }}>
+                <span className="font-retro-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EBE5D5] border border-[#D6CFC0] text-stone-700 shrink-0">
                   {toolTabs.length}
                 </span>
               </button>
 
               {expanded && (
-                <div style={{ paddingLeft: '14px' }}>
+                <div className="p-2.5 pt-2.5 space-y-2 border-t border-[#D6CFC0] bg-[#FAF7F0]">
                   {toolTabs.map(tab => {
                     const isActive = tab.id === activeId
-                    const color    = tab.gmail.color ?? '#6B7280'
+                    const color    = tab.gmail.color ?? '#D97706'
                     const isHover  = hoverTabId === tab.id
 
                     return (
@@ -117,80 +176,41 @@ export default function ToolDock({
                         onMouseEnter={() => setHoverTabId(tab.id)}
                         onMouseLeave={() => setHoverTabId(null)}
                         title={tab.gmail.email}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: '7px',
-                          padding: '5px 8px', borderRadius: '7px',
-                          margin: '2px 0',
-                          cursor: 'pointer',
-                          background:
-                            isActive ? `${color}1F` :
-                            isHover  ? 'var(--surface-2)' : 'transparent',
-                          border: `1px solid ${isActive ? color + '55' : 'transparent'}`,
-                          transition: 'all 0.1s',
-                        }}
+                        className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer border transition-all ${
+                          isActive
+                            ? 'bg-[#FEF3C7] border-[#F59E0B] text-[#B45309] font-retro-mono font-bold shadow-2xs'
+                            : 'bg-white border-[#E2DBD0] hover:border-[#D97706]/40 text-stone-700 font-retro-sans text-xs'
+                        }`}
                       >
-                        <div style={{
-                          width: '6px', height: '6px',
-                          borderRadius: '50%',
-                          background: color,
-                          flexShrink: 0,
-                          boxShadow: isActive ? `0 0 6px ${color}` : 'none',
-                        }} />
-                        <span style={{
-                          flex: 1,
-                          fontSize: '11px',
-                          color: isActive ? 'var(--text)' : 'var(--text-2)',
-                          fontWeight: isActive ? 600 : 400,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                        }}>
+                        <div
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{
+                            backgroundColor: color,
+                            boxShadow: isActive ? `0 0 6px ${color}` : 'none',
+                          }}
+                        />
+                        <span className="flex-1 truncate text-xs">
                           {tab.gmail.email}
                         </span>
+
                         <button
                           onClick={e => { e.stopPropagation(); onOpenGmail(tab.gmail) }}
                           aria-label="Open Gmail tab"
                           title="Open Gmail in new tab"
-                          style={{
-                            width: '18px', height: '18px',
-                            borderRadius: '5px', flexShrink: 0,
-                            display: isHover || isActive ? 'flex' : 'none',
-                            alignItems: 'center', justifyContent: 'center',
-                            background: 'transparent', border: 'none', cursor: 'pointer',
-                            color: 'var(--text-3)',
-                            transition: 'all 0.1s',
-                          }}
-                          onMouseEnter={e => {
-                            (e.currentTarget as HTMLElement).style.background = 'var(--accent-muted)'
-                            ;(e.currentTarget as HTMLElement).style.color = 'var(--accent)'
-                          }}
-                          onMouseLeave={e => {
-                            (e.currentTarget as HTMLElement).style.background = 'transparent'
-                            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-3)'
-                          }}
+                          className={`p-1 rounded hover:bg-[#D97706]/20 text-stone-500 hover:text-[#D97706] transition-colors ${
+                            isHover || isActive ? 'flex' : 'hidden'
+                          }`}
                         >
-                          <Mail size={11} strokeWidth={2.2} />
+                          <Mail size={12} />
                         </button>
                         <button
                           onClick={e => { e.stopPropagation(); onCloseTab(tab.id) }}
                           aria-label="Close session"
-                          style={{
-                            width: '18px', height: '18px',
-                            borderRadius: '5px', flexShrink: 0,
-                            display: isHover || isActive ? 'flex' : 'none',
-                            alignItems: 'center', justifyContent: 'center',
-                            background: 'transparent', border: 'none', cursor: 'pointer',
-                            color: 'var(--text-3)',
-                            transition: 'all 0.1s',
-                          }}
-                          onMouseEnter={e => {
-                            (e.currentTarget as HTMLElement).style.background = 'var(--danger-muted)'
-                            ;(e.currentTarget as HTMLElement).style.color = 'var(--danger)'
-                          }}
-                          onMouseLeave={e => {
-                            (e.currentTarget as HTMLElement).style.background = 'transparent'
-                            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-3)'
-                          }}
+                          className={`p-1 rounded hover:bg-[#FEE2E2] text-stone-500 hover:text-[#DC2626] transition-colors ${
+                            isHover || isActive ? 'flex' : 'hidden'
+                          }`}
                         >
-                          <X size={11} strokeWidth={2.5} />
+                          <X size={12} />
                         </button>
                       </div>
                     )
@@ -198,28 +218,10 @@ export default function ToolDock({
 
                   <button
                     onClick={() => onAddSession(tool.id)}
-                    style={{
-                      width: '100%',
-                      display: 'flex', alignItems: 'center', gap: '6px',
-                      padding: '5px 8px', borderRadius: '7px',
-                      margin: '2px 0',
-                      background: 'transparent', border: '1px dashed var(--border)',
-                      cursor: 'pointer',
-                      color: 'var(--text-3)',
-                      fontSize: '10.5px',
-                      transition: 'all 0.12s',
-                    }}
-                    onMouseEnter={e => {
-                      (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-border)'
-                      ;(e.currentTarget as HTMLElement).style.color = 'var(--accent)'
-                    }}
-                    onMouseLeave={e => {
-                      (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'
-                      ;(e.currentTarget as HTMLElement).style.color = 'var(--text-3)'
-                    }}
+                    className="w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl border-2 border-dashed border-[#D8D1C3] hover:border-[#D97706] bg-white hover:bg-[#FEF3C7]/50 text-stone-700 hover:text-[#B45309] font-retro-mono text-[11px] font-bold transition-all shadow-2xs my-0.5"
                   >
-                    <Plus size={10} strokeWidth={2.5} />
-                    Add account
+                    <Plus size={12} />
+                    <span>Add account</span>
                   </button>
                 </div>
               )}
@@ -228,53 +230,44 @@ export default function ToolDock({
         })}
       </div>
 
-      <div style={{
-        flexShrink: 0,
-        borderTop: '1px solid var(--border)',
-        padding: '8px',
-        display: 'flex', flexDirection: 'column', gap: '4px',
-      }}>
-        <button
-          onClick={() => onAddSession()}
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-            padding: '7px 10px', borderRadius: '8px', cursor: 'pointer',
-            background: 'var(--accent-muted)', border: '1px solid var(--accent-border)',
-            color: 'var(--accent)', fontSize: '11.5px', fontWeight: 600,
-            transition: 'all 0.12s',
-          }}
-          onMouseEnter={e => {
-            (e.currentTarget as HTMLElement).style.background = 'var(--accent)'
-            ;(e.currentTarget as HTMLElement).style.color = 'white'
-          }}
-          onMouseLeave={e => {
-            (e.currentTarget as HTMLElement).style.background = 'var(--accent-muted)'
-            ;(e.currentTarget as HTMLElement).style.color = 'var(--accent)'
-          }}
-        >
-          <Plus size={12} strokeWidth={2.5} />
-          New Session
-        </button>
+      {/* Dock Footer Controls */}
+      <div className="shrink-0 p-2 border-t border-[#D6CFC0] bg-[#EBE5D5] flex flex-col gap-1.5">
+        {!dockCollapsed ? (
+          <>
+            <button
+              onClick={() => onAddSession()}
+              className="retro-btn flex items-center justify-center gap-1.5 w-full py-2 px-3 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white border border-[#B45309] font-retro-mono text-xs font-bold shadow-[1px_1px_0px_0px_rgba(180,83,9,0.3)] transition-all"
+            >
+              <Plus size={13} />
+              <span>New Session</span>
+            </button>
 
-        <button
-          onClick={onManageTools}
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-            padding: '6px 10px', borderRadius: '8px', cursor: 'pointer',
-            background: 'transparent', border: '1px solid var(--border)',
-            color: 'var(--text-2)', fontSize: '11px', fontWeight: 500,
-            transition: 'all 0.12s',
-          }}
-          onMouseEnter={e => {
-            (e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'
-          }}
-          onMouseLeave={e => {
-            (e.currentTarget as HTMLElement).style.background = 'transparent'
-          }}
-        >
-          <Settings size={11} />
-          Manage Tools
-        </button>
+            <button
+              onClick={onManageTools}
+              className="flex items-center justify-center gap-1.5 w-full py-1.5 px-3 rounded-xl bg-white hover:bg-[#FAF7F0] border border-[#D8D1C3] text-stone-700 font-retro-mono text-xs font-bold transition-all"
+            >
+              <Settings size={12} />
+              <span>Manage Tools</span>
+            </button>
+          </>
+        ) : (
+          <div className="flex flex-col items-center gap-1.5">
+            <button
+              onClick={() => onAddSession()}
+              title="New Session"
+              className="retro-btn p-2 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white border border-[#B45309] shadow-2xs transition-all"
+            >
+              <Plus size={14} />
+            </button>
+            <button
+              onClick={onManageTools}
+              title="Manage Tools"
+              className="p-2 rounded-xl bg-white hover:bg-[#FAF7F0] border border-[#D8D1C3] text-stone-700 transition-all"
+            >
+              <Settings size={13} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

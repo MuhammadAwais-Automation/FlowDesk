@@ -15,7 +15,18 @@ function emailToHue(email: string): number {
 }
 
 function getDisplayName(s: GmailSession): string {
-  return s.label ?? s.email
+  let label = s.label?.trim() || ''
+  if (label.includes('Google Account:')) {
+    const match = label.match(/Google Account:\s*([^(]+)/i)
+    if (match && match[1]?.trim()) {
+      return match[1].trim()
+    }
+  }
+  if (label && label.toLowerCase() !== s.email.toLowerCase()) {
+    return label
+  }
+  const localPart = s.email.split('@')[0] || ''
+  return localPart ? localPart.charAt(0).toUpperCase() + localPart.slice(1) : s.email
 }
 
 function relativeDate(iso: string): string {
@@ -305,30 +316,17 @@ export default function Accounts() {
       )}
 
       {/* ── LEFT SIDEBAR ── */}
-      <div style={{
-        width: '240px', flexShrink: 0, display: 'flex', flexDirection: 'column',
-        background: 'var(--surface)', borderRight: '1px solid var(--border)',
-      }}>
+      <div className="w-[260px] flex-shrink-0 flex flex-col bg-[#FAF7F0] border-r border-[#D8D1C3]">
         {/* Sidebar header */}
-        <div style={{
-          padding: '18px 16px 12px', display: 'flex',
-          alignItems: 'center', justifyContent: 'space-between',
-          borderBottom: '1px solid var(--border)',
-        }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
-            Accounts
+        <div className="p-4 flex items-center justify-between border-b border-[#D8D1C3] bg-[#EBE5D5]">
+          <span className="font-retro-mono text-xs font-bold uppercase tracking-wider text-stone-800 flex items-center gap-1.5">
+            <span className="text-[#D97706]">[02]</span> Accounts
           </span>
           <button
             onClick={handleAdd}
             disabled={adding}
             title="Add account"
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '6px 10px', borderRadius: '8px', cursor: 'pointer',
-              background: 'var(--accent)', color: 'white', border: 'none',
-              fontSize: '11px', fontWeight: 500,
-              opacity: adding ? 0.6 : 1,
-            }}
+            className="retro-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#D97706] hover:bg-[#B45309] text-white border border-[#B45309] font-retro-mono text-xs font-bold shadow-[1px_1px_0px_0px_rgba(180,83,9,0.3)] transition-all"
           >
             {adding ? <Loader2 size={12} className="animate-spin" /> : <UserPlus size={12} />}
             {adding ? 'Adding…' : 'Add'}
@@ -336,16 +334,12 @@ export default function Accounts() {
         </div>
 
         {/* Account list */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+        <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
           {sessions.length === 0 ? (
-            <div style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              justifyContent: 'center', height: '200px', gap: '8px',
-            }}>
-              <Mail size={28} style={{ color: 'var(--text-3)' }} />
-              <p style={{ fontSize: '12px', color: 'var(--text-3)', textAlign: 'center' }}>
-                No accounts yet
-              </p>
+            <div className="flex flex-col items-center justify-center h-48 gap-2 text-center p-4">
+              <Mail size={24} className="text-stone-400" />
+              <p className="font-retro-sans text-xs font-semibold text-stone-800">No accounts yet</p>
+              <p className="font-retro-mono text-[11px] text-stone-500">Click + Add to connect session</p>
             </div>
           ) : (
             sessions.map(s => {
@@ -353,59 +347,43 @@ export default function Accounts() {
               const hue = emailToHue(s.email)
               const displayName = getDisplayName(s)
               return (
-                <button
+                <div
                   key={s.email}
                   onClick={() => handleSelectAccount(s.email)}
-                  style={{
-                    width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                    padding: '9px 10px', borderRadius: '9px', cursor: 'pointer',
-                    marginBottom: '2px', textAlign: 'left',
-                    background: isSelected ? 'var(--accent-muted)' : 'transparent',
-                    border: 'none',
-                    borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent',
-                    transition: 'background 0.15s',
-                  }}
-                  onMouseEnter={e => {
-                    if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'
-                  }}
-                  onMouseLeave={e => {
-                    if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'transparent'
-                  }}
+                  className={`p-3 rounded-xl cursor-pointer flex items-center gap-3 transition-all duration-150 relative ${
+                    isSelected
+                      ? 'border-2 border-[#D97706] bg-[#FEF3C7] shadow-[2px_2px_0px_0px_rgba(217,119,6,0.2)]'
+                      : 'border border-[#E2DBD0] bg-white hover:border-[#D97706]/40 hover:bg-[#FAF7F0] shadow-[0_2px_6px_rgba(0,0,0,0.03)]'
+                  }`}
                 >
                   {/* Avatar */}
-                  <div style={{
-                    width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0,
-                    background: `hsl(${hue}, 60%, 50%)`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'white', fontWeight: 700, fontSize: '13px',
-                  }}>
-                    {displayName[0].toUpperCase()}
+                  <div className="relative flex-shrink-0">
+                    <div
+                      className="w-8 h-8 rounded-lg border border-white/40 flex items-center justify-center font-retro-mono font-bold text-white text-xs shadow-xs"
+                      style={{ background: `hsl(${hue}, 60%, 45%)` }}
+                    >
+                      {displayName[0].toUpperCase()}
+                    </div>
+                    <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-[#10B981] border-2 border-white shadow-xs" />
                   </div>
+
                   {/* Name + email */}
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <p style={{
-                      fontSize: '12px', fontWeight: 600, color: 'var(--text)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
+                  <div className="min-w-0 flex-1">
+                    <p className={`font-retro-sans text-xs font-bold truncate ${
+                      isSelected ? 'text-[#92400E]' : 'text-stone-900'
+                    }`}>
                       {displayName}
                     </p>
-                    {s.label && (
-                      <p style={{
-                        fontSize: '10px', color: 'var(--text-3)',
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {s.email}
-                      </p>
-                    )}
+                    <p className="font-retro-mono text-[10px] text-stone-500 truncate mt-0.5">
+                      {s.email}
+                    </p>
                   </div>
-                  {/* Active dot */}
+
+                  {/* Selected Active dot */}
                   {isSelected && (
-                    <div style={{
-                      width: '7px', height: '7px', borderRadius: '50%',
-                      background: 'var(--accent)', flexShrink: 0,
-                    }} />
+                    <div className="w-2 h-2 rounded-full bg-[#D97706] flex-shrink-0 animate-pulse" />
                   )}
-                </button>
+                </div>
               )
             })
           )}
@@ -471,29 +449,23 @@ function DetailPanel({
   const displayName = getDisplayName(session)
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg)', minWidth: 0 }}>
+    <div className="flex-1 flex flex-col bg-[#FAF7F0] min-w-0">
 
       {/* ── Header ── */}
-      <div style={{
-        padding: '20px 24px 0',
-        borderBottom: '1px solid var(--border)',
-        background: 'var(--surface)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '16px' }}>
+      <div className="p-6 border-b border-[#D8D1C3] bg-[#FAF7F0]">
+        <div className="flex items-center gap-4 mb-5">
           {/* Large avatar */}
-          <div style={{
-            width: '52px', height: '52px', borderRadius: '50%', flexShrink: 0,
-            background: `hsl(${hue}, 60%, 50%)`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: 'white', fontWeight: 700, fontSize: '22px',
-          }}>
+          <div
+            className="w-14 h-14 rounded-2xl border-2 border-white flex items-center justify-center font-retro-mono font-bold text-white text-2xl shadow-md flex-shrink-0"
+            style={{ background: `hsl(${hue}, 60%, 45%)` }}
+          >
             {displayName[0].toUpperCase()}
           </div>
 
           {/* Name + email */}
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="flex-1 min-w-0">
             {editingName ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div className="flex items-center gap-2">
                 <input
                   ref={nameInputRef}
                   value={nameInput}
@@ -502,69 +474,55 @@ function DetailPanel({
                     if (e.key === 'Enter') onSaveName()
                     if (e.key === 'Escape') onCancelEdit()
                   }}
-                  style={{
-                    fontSize: '16px', fontWeight: 600, color: 'var(--text)',
-                    background: 'var(--surface-2)', border: '1px solid var(--accent-border)',
-                    borderRadius: '6px', padding: '3px 8px', outline: 'none', flex: 1,
-                  }}
+                  className="font-retro-sans text-base font-bold text-stone-900 bg-white border border-[#D97706] rounded-lg px-3 py-1 outline-none flex-1 shadow-xs"
                 />
                 <button
                   onClick={onSaveName}
-                  style={{
-                    padding: '4px 10px', borderRadius: '6px', fontSize: '11px',
-                    background: 'var(--accent)', color: 'white', border: 'none', cursor: 'pointer',
-                  }}
+                  className="retro-btn px-3 py-1 rounded-lg bg-[#D97706] hover:bg-[#B45309] text-white font-retro-mono text-xs font-bold shadow-xs"
                 >
                   Save
                 </button>
                 <button
                   onClick={onCancelEdit}
-                  style={{
-                    padding: '4px 8px', borderRadius: '6px', fontSize: '11px',
-                    background: 'var(--surface-2)', color: 'var(--text-2)',
-                    border: '1px solid var(--border)', cursor: 'pointer',
-                  }}
+                  className="retro-btn px-3 py-1 rounded-lg bg-[#FAF7F0] border border-[#D6CFC0] text-stone-700 font-retro-mono text-xs font-semibold"
                 >
                   Cancel
                 </button>
               </div>
             ) : (
               <div
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}
+                className="flex items-center gap-2 cursor-pointer group"
                 onClick={onStartEditName}
                 title="Click to rename"
               >
-                <span style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text)' }}>
+                <h2 className="font-retro-sans text-lg font-bold text-stone-900 group-hover:text-[#D97706] transition-colors">
                   {displayName}
-                </span>
-                <Pencil size={12} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                </h2>
+                <Pencil size={13} className="text-stone-400 group-hover:text-[#D97706] transition-colors" />
               </div>
             )}
-            <p style={{ fontSize: '11px', color: 'var(--text-3)', marginTop: '2px' }}>
-              {session.email}
-              {' · '}Added {relativeDate(session.addedAt)}
+            <p className="font-retro-mono text-xs text-stone-500 mt-1 flex items-center gap-2">
+              <span>{session.email}</span>
+              <span>•</span>
+              <span>Added {relativeDate(session.addedAt)}</span>
             </p>
           </div>
         </div>
 
         {/* Tab bar */}
-        <div style={{ display: 'flex', gap: '4px' }}>
+        <div className="flex gap-2">
           {(['info', 'gmail'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => onTabChange(tab)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '6px',
-                padding: '8px 14px', borderRadius: '8px 8px 0 0',
-                fontSize: '12px', fontWeight: 500, cursor: 'pointer',
-                background: activeTab === tab ? 'var(--bg)' : 'transparent',
-                color: activeTab === tab ? 'var(--accent)' : 'var(--text-3)',
-                border: 'none',
-                borderBottom: activeTab === tab ? '2px solid var(--accent)' : '2px solid transparent',
-              }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-t-xl font-retro-mono text-xs font-bold transition-all ${
+                activeTab === tab
+                  ? 'bg-white text-[#D97706] border-t-2 border-x border-[#D8D1C3] border-b-transparent -mb-[1px]'
+                  : 'text-stone-600 hover:text-stone-900 hover:bg-[#EBE5D5]/50'
+              }`}
             >
-              {tab === 'info' ? <User size={13} /> : <Mail size={13} />}
-              {tab === 'info' ? 'Info' : 'Gmail'}
+              {tab === 'info' ? <User size={14} /> : <Mail size={14} />}
+              {tab === 'info' ? 'Info' : 'Gmail Inbox'}
             </button>
           ))}
         </div>
@@ -600,44 +558,26 @@ function InfoTab({ session, loggingIn, onLogin, onRemove }: InfoTabProps) {
   const isLoggingIn = loggingIn === session.email
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
+    <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-gradient-to-b from-[#FAF7F0] to-[#F5F1E6]/40">
 
       {/* Re-authenticate */}
-      <section style={{ marginBottom: '28px' }}>
-        <p style={{
-          fontSize: '10px', fontWeight: 600, textTransform: 'uppercase',
-          letterSpacing: '0.08em', color: 'var(--text-3)', marginBottom: '12px',
-        }}>
-          Authentication
-        </p>
-        <div style={{
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: '12px', padding: '16px',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
-        }}>
+      <section className="bg-white border border-[#E2DBD0] rounded-2xl p-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
+        <div className="flex items-center justify-between gap-4">
           <div>
-            <p style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text)', marginBottom: '3px' }}>
-              Google Session
-            </p>
-            <p style={{ fontSize: '11px', color: 'var(--text-3)' }}>
-              Session sab AI tools ke liye shared hai
+            <h3 className="font-retro-sans text-sm font-bold text-stone-900 flex items-center gap-2">
+              <CheckCircle2 size={16} className="text-[#10B981]" />
+              Google Authentication Session
+            </h3>
+            <p className="font-retro-mono text-xs text-stone-500 mt-1">
+              Session tab sab AI tools ke browser mein automatically share hoti hai.
             </p>
           </div>
           <button
             onClick={onLogin}
             disabled={isLoggingIn}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '8px 14px', borderRadius: '8px', cursor: 'pointer',
-              background: 'var(--accent-muted)', color: 'var(--accent)',
-              border: '1px solid var(--accent-border)',
-              fontSize: '12px', fontWeight: 500, flexShrink: 0,
-              opacity: isLoggingIn ? 0.7 : 1,
-            }}
+            className="retro-btn flex items-center gap-2 px-4 py-2 rounded-xl bg-[#FEF3C7] border border-[#F59E0B]/50 text-[#B45309] hover:bg-[#FDE68A] font-retro-mono text-xs font-bold shadow-xs transition-all flex-shrink-0"
           >
-            {isLoggingIn
-              ? <Loader2 size={13} className="animate-spin" />
-              : <RefreshCw size={13} />}
+            {isLoggingIn ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
             {isLoggingIn ? 'Opening…' : 'Re-authenticate'}
           </button>
         </div>
@@ -647,40 +587,23 @@ function InfoTab({ session, loggingIn, onLogin, onRemove }: InfoTabProps) {
       <ColorPickerSection email={session.email} currentColor={session.color} />
 
       {/* Danger zone */}
-      <section>
-        <p style={{
-          fontSize: '10px', fontWeight: 600, textTransform: 'uppercase',
-          letterSpacing: '0.08em', color: 'var(--danger)', marginBottom: '12px',
-        }}>
-          Danger Zone
-        </p>
-        <div style={{
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: '12px', padding: '16px',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
-        }}>
+      <section className="bg-[#FEF2F2] border border-[#FCA5A5] rounded-2xl p-5 shadow-xs">
+        <div className="flex items-center justify-between gap-4">
           <div>
-            <p style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text)', marginBottom: '3px' }}>
+            <h3 className="font-retro-sans text-sm font-bold text-[#DC2626] flex items-center gap-2">
+              <AlertCircle size={16} />
               Remove Account
-            </p>
-            <p style={{ fontSize: '11px', color: 'var(--text-3)' }}>
-              Saved session aur data delete ho jayega
+            </h3>
+            <p className="font-retro-mono text-xs text-stone-600 mt-1">
+              Saved session tokens aur custom tab preferences delete ho jayenge.
             </p>
           </div>
           <button
             onClick={onRemove}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '8px 14px', borderRadius: '8px', cursor: 'pointer',
-              background: 'transparent', color: 'var(--danger)',
-              border: '1px solid var(--danger)',
-              fontSize: '12px', fontWeight: 500, flexShrink: 0,
-            }}
-            onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--danger-muted)'}
-            onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+            className="retro-btn flex items-center gap-2 px-4 py-2 rounded-xl bg-[#DC2626] hover:bg-[#B91C1C] text-white border border-[#B91C1C] font-retro-mono text-xs font-bold shadow-xs transition-all flex-shrink-0"
           >
             <Trash2 size={13} />
-            Remove
+            Remove Account
           </button>
         </div>
       </section>
@@ -696,13 +619,10 @@ interface GmailTabProps {
 
 function GmailNavBtn({ onClick, title, children }: { onClick: () => void; title: string; children: React.ReactNode }) {
   return (
-    <button onClick={onClick} title={title} style={{
-      padding: '4px 5px', borderRadius: '6px', cursor: 'pointer',
-      background: 'none', border: 'none', color: 'var(--text-3)',
-      display: 'flex', alignItems: 'center',
-    }}
-      onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'}
-      onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'none'}
+    <button
+      onClick={onClick}
+      title={title}
+      className="p-1.5 rounded-lg text-stone-500 hover:text-stone-900 hover:bg-[#EBE5D5] transition-colors flex items-center justify-center"
     >
       {children}
     </button>
@@ -711,13 +631,9 @@ function GmailNavBtn({ onClick, title, children }: { onClick: () => void; title:
 
 function GmailTab({ gmailPanelRef, gmailLoading, session }: GmailTabProps) {
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      {/* Gmail toolbar — back/forward/reload only, URL bar removed */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: '2px',
-        padding: '5px 10px', borderBottom: '1px solid var(--border)',
-        background: 'var(--surface)',
-      }}>
+    <div className="flex-1 flex flex-col min-h-0 bg-white">
+      {/* Gmail toolbar */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-[#D8D1C3] bg-[#FAF7F0]">
         <GmailNavBtn onClick={() => window.electronAPI.viewGoBack()} title="Back">
           <ChevronLeft size={14} />
         </GmailNavBtn>
@@ -727,29 +643,24 @@ function GmailTab({ gmailPanelRef, gmailLoading, session }: GmailTabProps) {
         <GmailNavBtn onClick={() => window.electronAPI.viewReload()} title="Refresh">
           <RotateCw size={13} />
         </GmailNavBtn>
-        <span style={{ marginLeft: '8px', fontSize: '11px', color: 'var(--text-3)' }}>
+        <span className="font-retro-mono text-xs text-stone-600 font-medium ml-2">
           {session.email}
         </span>
       </div>
 
-      {/* Gmail content area — WebContentsView renders here */}
+      {/* Gmail content area */}
       <div
         ref={gmailPanelRef}
-        style={{ flex: 1, background: 'var(--bg)', position: 'relative' }}
+        className="flex-1 bg-white relative"
       >
         {gmailLoading && (
-          <div style={{
-            position: 'absolute', inset: 0, display: 'flex',
-            alignItems: 'center', justifyContent: 'center',
-            background: 'var(--bg)',
-          }}>
-            <div style={{ textAlign: 'center' }}>
+          <div className="absolute inset-0 flex items-center justify-center bg-white">
+            <div className="text-center">
               <Loader2
                 size={28}
-                className="animate-spin"
-                style={{ color: 'var(--text-3)', display: 'block', margin: '0 auto 12px' }}
+                className="animate-spin text-[#D97706] mx-auto mb-3"
               />
-              <p style={{ fontSize: '13px', color: 'var(--text-3)' }}>Gmail load ho raha hai…</p>
+              <p className="font-retro-mono text-xs text-stone-600">Gmail load ho raha hai…</p>
             </div>
           </div>
         )}
@@ -765,6 +676,8 @@ function ColorPickerSection({ email, currentColor }: { email: string; currentCol
   const [saved, setSaved] = useState(false)
   const colorInputRef = useRef<HTMLInputElement>(null)
 
+  const presets = ['#4F6EF7', '#059669', '#D97706', '#DC2626', '#7C3AED', '#DB2777']
+
   async function handleSave(value: string) {
     await window.electronAPI.gmailUpdateColor(email, value)
     setSaved(true)
@@ -772,110 +685,79 @@ function ColorPickerSection({ email, currentColor }: { email: string; currentCol
   }
 
   return (
-    <section style={{ marginBottom: '28px' }}>
-      <p style={{
-        fontSize: '10px', fontWeight: 600, textTransform: 'uppercase',
-        letterSpacing: '0.08em', color: 'var(--text-3)', marginBottom: '12px',
-      }}>
-        Tab Color
+    <section className="bg-white border border-[#E2DBD0] rounded-2xl p-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
+      <h3 className="font-retro-sans text-sm font-bold text-stone-900 mb-1">
+        Tab Accent Color
+      </h3>
+      <p className="font-retro-mono text-xs text-stone-500 mb-4">
+        Yeh color AI Browser mein is Gmail ke saare tabs pe apply hoga.
       </p>
-      <div style={{
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: '12px', padding: '16px',
-        display: 'flex', alignItems: 'center', gap: '12px',
-      }}>
-        {/* Color swatch — click to open native picker */}
+
+      <div className="flex items-center gap-3">
         <button
           onClick={() => colorInputRef.current?.click()}
           title="Pick color"
-          style={{
-            width: '36px', height: '36px', borderRadius: '10px',
-            background: hex, border: '2px solid var(--border)',
-            cursor: 'pointer', flexShrink: 0, transition: 'transform 0.1s',
-          }}
-          onMouseEnter={e => (e.currentTarget as HTMLElement).style.transform = 'scale(1.08)'}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.transform = 'scale(1)'}
+          className="w-10 h-10 rounded-xl border-2 border-white shadow-md cursor-pointer flex-shrink-0 hover:scale-105 transition-transform"
+          style={{ background: hex }}
         />
-        {/* Hidden native color input */}
         <input
           ref={colorInputRef}
           type="color"
           value={hex}
           onChange={e => setHex(e.target.value)}
-          style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 0, height: 0 }}
+          className="hidden"
         />
-        {/* Hex text input */}
         <input
           type="text"
           value={hex}
           maxLength={7}
-          onChange={e => {
-            const v = e.target.value
-            setHex(v)
-          }}
+          onChange={e => setHex(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleSave(hex) }}
-          style={{
-            flex: 1, fontSize: '13px', fontFamily: 'JetBrains Mono, monospace',
-            padding: '7px 10px', borderRadius: '8px',
-            background: 'var(--surface-2)', border: '1px solid var(--border)',
-            color: 'var(--text)', outline: 'none',
-          }}
-          onFocus={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-border)'}
-          onBlur={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'}
+          className="w-32 font-retro-mono text-xs text-stone-900 bg-[#FAF7F0] border border-[#D8D1C3] rounded-xl px-3 py-2 outline-none focus:border-[#D97706] shadow-xs"
         />
-        {/* Save button */}
+        <div className="flex items-center gap-1.5 ml-1">
+          {presets.map(c => (
+            <button
+              key={c}
+              onClick={() => { setHex(c); handleSave(c); }}
+              className="w-6 h-6 rounded-full border border-white shadow-xs hover:scale-110 transition-transform cursor-pointer"
+              style={{ background: c }}
+            />
+          ))}
+        </div>
         <button
           onClick={() => handleSave(hex)}
-          style={{
-            padding: '7px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer',
-            background: saved ? 'var(--success-muted)' : 'var(--accent)',
-            color: saved ? 'var(--success)' : 'white',
-            border: saved ? '1px solid var(--success)' : 'none',
-            fontWeight: 500, flexShrink: 0, transition: 'all 0.2s',
-          }}
+          className={`retro-btn px-4 py-2 rounded-xl font-retro-mono text-xs font-bold transition-all ml-auto ${
+            saved
+              ? 'bg-[#D1FAE5] text-[#047857] border border-[#A7F3D0]'
+              : 'bg-[#D97706] hover:bg-[#B45309] text-white border border-[#B45309] shadow-xs'
+          }`}
         >
-          {saved ? '✓ Saved' : 'Save'}
+          {saved ? '✓ Saved' : 'Save Color'}
         </button>
       </div>
-      <p style={{ fontSize: '10px', color: 'var(--text-3)', marginTop: '7px' }}>
-        Yeh color AI Browser mein is Gmail ke saare tabs pe apply hoga
-      </p>
     </section>
   )
 }
 
 function EmptyDetail({ onAdd, adding }: { onAdd: () => void; adding: boolean }) {
   return (
-    <div style={{
-      flex: 1, display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center',
-      background: 'var(--bg)', gap: '16px',
-    }}>
-      <div style={{
-        width: '64px', height: '64px', borderRadius: '20px',
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <User size={28} style={{ color: 'var(--text-3)' }} />
+    <div className="flex-1 flex flex-col items-center justify-center p-8 bg-gradient-to-b from-[#FAF7F0] to-[#F5F1E6]/50 text-center gap-4">
+      <div className="w-16 h-16 rounded-2xl bg-white border border-[#D8D1C3] shadow-md flex items-center justify-center">
+        <User size={32} className="text-[#D97706]" />
       </div>
-      <div style={{ textAlign: 'center' }}>
-        <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text)', marginBottom: '6px' }}>
-          Account select karo
-        </p>
-        <p style={{ fontSize: '12px', color: 'var(--text-3)' }}>
-          Ya pehla account add karo
+      <div>
+        <h3 className="font-retro-sans text-base font-bold text-stone-900">
+          Account Select Karo
+        </h3>
+        <p className="font-retro-mono text-xs text-stone-500 mt-1">
+          Left sidebar se kisi account ko choose karo ya new Gmail add karo.
         </p>
       </div>
       <button
         onClick={onAdd}
         disabled={adding}
-        style={{
-          display: 'flex', alignItems: 'center', gap: '6px',
-          padding: '10px 18px', borderRadius: '10px', cursor: 'pointer',
-          background: 'var(--accent)', color: 'white', border: 'none',
-          fontSize: '13px', fontWeight: 500,
-          opacity: adding ? 0.6 : 1,
-        }}
+        className="retro-btn flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white font-retro-mono text-xs font-bold shadow-[2px_2px_0px_0px_rgba(180,83,9,0.3)] transition-all"
       >
         {adding ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
         {adding ? 'Adding…' : 'Add Account'}

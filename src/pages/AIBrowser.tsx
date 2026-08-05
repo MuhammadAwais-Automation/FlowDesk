@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Mail, Plus, X, ChevronLeft, ChevronRight, RotateCcw, Trash2 } from 'lucide-react'
+import { Mail, Plus, X, ChevronLeft, ChevronRight, RotateCcw, Trash2, Loader2 } from 'lucide-react'
 import { getCompactTabTitle, getFaviconUrl, getInjectTool, getTabColor, isToolTab } from '@/types/browser'
 import type { BrowserTab, CustomTool } from '@/types/browser'
 import type { GmailSession } from '@/types/electron'
@@ -7,6 +7,7 @@ import PromptBar from '@/components/browser/PromptBar'
 import ToolDock from '@/components/browser/ToolDock'
 import AccountContextMenu from '@/components/browser/AccountContextMenu'
 import NewSessionDialog from '@/components/browser/NewSessionDialog'
+import CaptureDebugPanel from '@/components/browser/CaptureDebugPanel'
 import { applyAccentForTool, resetAccent } from '@/lib/accentTheme'
 
 interface AIBrowserProps {
@@ -35,6 +36,7 @@ export default function AIBrowser({ isActive }: AIBrowserProps) {
   const [addToolError, setAddToolError] = useState('')
 
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null)
+  const [isReloading, setIsReloading] = useState(false)
 
   const activeTab = tabs.find(t => t.id === activeId) ?? null
   const activeTabDisplayTitle = activeTab ? getCompactTabTitle(activeTab, tabs) : null
@@ -152,8 +154,11 @@ export default function AIBrowser({ isActive }: AIBrowserProps) {
     setCtxMenu({ tab, x: e.clientX, y: e.clientY })
   }
 
-  function handleReloadTab(_tab: BrowserTab) {
+  function handleReloadTab(_tab?: BrowserTab) {
+    if (isReloading) return
+    setIsReloading(true)
     window.electronAPI.viewReload()
+    setTimeout(() => setIsReloading(false), 1000)
   }
 
   async function handleClearSession(tab: BrowserTab) {
@@ -215,20 +220,21 @@ export default function AIBrowser({ isActive }: AIBrowserProps) {
   }
 
   return (
-    <div className="flex h-full" style={{ background: 'var(--bg)' }}>
+    <div className="flex h-full bg-[#FAF7F0] bg-dot-matrix">
       <div className="flex flex-col flex-1 min-w-0">
+        {/* Session Tabs Bar */}
         <div
-          className="flex items-center gap-1 shrink-0 overflow-x-auto"
+          className="flex items-center gap-1 shrink-0 overflow-x-auto select-none"
           style={{
             height: '40px',
-            padding: '0 8px',
-            background: 'var(--surface)',
-            borderBottom: '1px solid var(--border)',
+            padding: '0 10px',
+            background: '#EBE5D5',
+            borderBottom: '1px solid #D6CFC0',
           }}
         >
           {tabs.length === 0 ? (
-            <span style={{ fontSize: '11px', color: 'var(--text-3)', paddingLeft: '4px' }}>
-              Open sessions appear here
+            <span className="font-retro-mono text-xs font-semibold text-stone-500 px-2">
+              // Open sessions appear here
             </span>
           ) : (
             tabs.map(tab => {
@@ -239,87 +245,44 @@ export default function AIBrowser({ isActive }: AIBrowserProps) {
                 <div
                   key={tab.id}
                   title={`${label} · ${tab.gmail.email}`}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0',
-                    minWidth: '0',
-                    maxWidth: '156px',
-                    height: '28px',
-                    borderRadius: '8px',
-                    border: `1px solid ${isActive ? colors.border : 'var(--border)'}`,
-                    background: isActive ? colors.bg : 'var(--surface-2)',
-                    flexShrink: 0,
-                  }}
+                  className={`flex items-center gap-0 min-w-0 max-w-[160px] h-7 rounded-xl border transition-all ${
+                    isActive
+                      ? 'bg-white border-[#D8D1C3] text-stone-900 shadow-2xs font-retro-mono font-bold'
+                      : 'bg-[#FAF7F0]/80 border-transparent hover:border-[#D6CFC0] text-stone-700 font-retro-sans'
+                  }`}
                 >
                   <button
                     onClick={() => handleSelectTab(tab.id)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '7px',
-                      minWidth: 0,
-                      flex: 1,
-                      height: '100%',
-                      padding: '0 8px 0 9px',
-                      border: 'none',
-                      background: 'transparent',
-                      color: isActive ? 'var(--text)' : 'var(--text-2)',
-                      cursor: 'pointer',
-                      borderTopLeftRadius: '8px',
-                      borderBottomLeftRadius: '8px',
-                    }}
+                    className="flex items-center gap-2 min-w-0 flex-1 h-full px-2.5 bg-transparent border-none cursor-pointer"
                     aria-label={`${label} tab`}
                   >
                     {isToolTab(tab) ? (
                       <img
                         src={getFaviconUrl(tab.url)}
                         alt=""
-                        style={{ width: '13px', height: '13px', borderRadius: '3px', flexShrink: 0, objectFit: 'contain' }}
+                        className="w-3.5 h-3.5 object-contain shrink-0 rounded"
                         onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
                       />
                     ) : (
-                      <Mail size={12} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                      <Mail size={12} className="text-stone-500 shrink-0" />
                     )}
                     <div
+                      className="w-1.5 h-1.5 rounded-full shrink-0"
                       style={{
-                        width: '5px',
-                        height: '5px',
-                        borderRadius: '50%',
-                        background: colors.dot,
+                        backgroundColor: colors.dot,
                         boxShadow: isActive ? `0 0 6px ${colors.dot}` : 'none',
-                        flexShrink: 0,
                       }}
                     />
-                    <span style={{
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      minWidth: 0,
-                    }}>
+                    <span className="text-xs truncate text-left">
                       {label}
                     </span>
                   </button>
                   <button
                     onClick={() => handleCloseTab(tab.id)}
                     aria-label={`Close ${label}`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: '24px',
-                      height: '100%',
-                      borderRadius: '5px',
-                      color: 'var(--text-3)',
-                      flexShrink: 0,
-                      background: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                    }}
+                    className="w-6 h-full flex items-center justify-center rounded-r-xl text-stone-400 hover:text-[#DC2626] hover:bg-[#FEE2E2] transition-colors"
                   >
-                    <X size={10} strokeWidth={2.5} />
+                    <X size={11} />
                   </button>
                 </div>
               )
@@ -327,167 +290,193 @@ export default function AIBrowser({ isActive }: AIBrowserProps) {
           )}
         </div>
 
+        {/* Retro Browser Address & Toolbar */}
         <div
-          className="flex items-center shrink-0"
+          className="flex items-center shrink-0 font-retro-sans select-none"
           style={{
-            height: '44px',
-            background: 'var(--surface)',
-            borderBottom: '1px solid var(--border)',
-            padding: '0 12px',
-            gap: '6px',
+            height: '46px',
+            background: '#EBE5D5',
+            borderBottom: '1px solid #D6CFC0',
+            padding: '0 14px',
+            gap: '8px',
           }}
         >
-          {[
-            { icon: ChevronLeft, title: 'Back', onClick: () => window.electronAPI.viewGoBack() },
-            { icon: ChevronRight, title: 'Forward', onClick: () => window.electronAPI.viewGoForward() },
-            { icon: RotateCcw, title: 'Reload', onClick: () => window.electronAPI.viewReload() },
-          ].map(({ icon: Icon, title, onClick }) => (
-            <button
-              key={title}
-              onClick={onClick}
-              title={title}
-              disabled={!activeTab}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: '28px', height: '28px', borderRadius: '7px',
-                background: 'transparent', border: 'none',
-                cursor: activeTab ? 'pointer' : 'not-allowed',
-                color: 'var(--text-3)',
-                opacity: activeTab ? 1 : 0.4,
-                transition: 'all 0.12s',
-                flexShrink: 0,
-              }}
-              onMouseEnter={e => {
-                if (!activeTab) return
-                ;(e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'
-                ;(e.currentTarget as HTMLElement).style.color = 'var(--text)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLElement).style.background = 'transparent'
-                ;(e.currentTarget as HTMLElement).style.color = 'var(--text-3)'
-              }}
-            >
-              <Icon size={14} strokeWidth={2} />
-            </button>
-          ))}
+          {/* Retro Window Dots */}
+          <div className="flex items-center gap-1.5 mr-2 shrink-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#FF5F56]" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]" />
+            <span className="w-2.5 h-2.5 rounded-full bg-[#27C93F]" />
+          </div>
 
-          <div style={{ width: '1px', height: '18px', background: 'var(--border)', margin: '0 4px' }} />
+          {/* Navigation Controls */}
+          <button
+            onClick={() => window.electronAPI.viewGoBack()}
+            title="Go Back"
+            disabled={!activeTab}
+            className="retro-btn w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-[#D8D1C3] text-stone-700 hover:bg-[#FAF7F0] disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-2xs"
+          >
+            <ChevronLeft size={13} strokeWidth={2.2} />
+          </button>
 
-          {activeTab ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-              {isToolTab(activeTab) ? (
-                <img
-                  src={getFaviconUrl(activeTab.url)}
-                  alt=""
-                  style={{ width: '14px', height: '14px', borderRadius: '3px', flexShrink: 0, objectFit: 'contain' }}
-                  onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
-                />
-              ) : (
-                <Mail size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
-              )}
-              <span style={{
-                fontSize: '12px',
-                fontWeight: 600,
-                color: 'var(--text)',
-                whiteSpace: 'nowrap',
-              }}>
-                {activeTabDisplayTitle}
+          <button
+            onClick={() => window.electronAPI.viewGoForward()}
+            title="Go Forward"
+            disabled={!activeTab}
+            className="retro-btn w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-[#D8D1C3] text-stone-700 hover:bg-[#FAF7F0] disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-2xs"
+          >
+            <ChevronRight size={13} strokeWidth={2.2} />
+          </button>
+
+          <button
+            onClick={() => handleReloadTab(activeTab!)}
+            title="Reload Page"
+            disabled={!activeTab}
+            className="retro-btn w-7 h-7 rounded-lg flex items-center justify-center bg-white border border-[#D8D1C3] hover:border-[#D97706] hover:bg-[#FEF3C7]/40 text-stone-700 disabled:opacity-40 disabled:pointer-events-none cursor-pointer shadow-2xs transition-all"
+          >
+            <RotateCcw
+              size={13}
+              strokeWidth={2.2}
+              className={`transition-all ${isReloading ? 'animate-spin text-[#D97706]' : 'text-stone-700'}`}
+            />
+          </button>
+
+          <div className="w-[1px] h-4 bg-[#C8C1B0] mx-1 shrink-0" />
+
+          {/* Address Bar */}
+          <div className="flex-1 flex items-center gap-2 bg-white border-2 border-[#D8D1C3] px-3 py-1 rounded-xl min-w-0 font-retro-mono text-xs text-stone-900 shadow-2xs">
+            {activeTab ? (
+              <>
+                {isToolTab(activeTab) ? (
+                  <img
+                    src={getFaviconUrl(activeTab.url)}
+                    alt=""
+                    className="w-3.5 h-3.5 object-contain shrink-0 rounded"
+                    onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                  />
+                ) : (
+                  <Mail size={13} className="text-stone-500 shrink-0" />
+                )}
+                <span className="truncate font-medium text-stone-900">
+                  {activeTabDisplayTitle}
+                </span>
+
+                {isReloading ? (
+                  <span className="font-retro-mono text-[10px] font-bold text-[#B45309] flex items-center gap-1.5 bg-[#FEF3C7] px-2 py-0.5 rounded-full border border-[#F59E0B]/50 animate-pulse ml-auto shrink-0">
+                    <Loader2 size={10} className="animate-spin text-[#D97706]" />
+                    <span>RELOADING…</span>
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-stone-500 ml-auto shrink-0 font-mono">
+                    [{activeTab.gmail.email}]
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-stone-500 text-[11px] truncate">
+                retro://ai-studio-launchpad
               </span>
-              <div style={{
-                width: '5px',
-                height: '5px',
-                borderRadius: '50%',
-                background: activeTab.gmail.color ?? '#6B7280',
-                flexShrink: 0,
-              }} />
-            </div>
-          ) : (
-            <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>
-              Select a session from the right or open a new one
-            </span>
-          )}
+            )}
+          </div>
         </div>
 
         <PromptBar activeTab={activeTab} isActive={isActive} />
 
+        {/* Start Screen Launchpad */}
         {!activeTab ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-5 px-8">
-            <div style={{ textAlign: 'center' }}>
-              <h3 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text)', fontFamily: 'Outfit, sans-serif', marginBottom: '4px' }}>
-                AI Browser
-              </h3>
-              <p style={{ fontSize: '11px', color: 'var(--text-3)' }}>
-                {customTools.length === 0
-                  ? 'Pehle tools library mein koi tool add karo'
-                  : 'Right panel se naya session ya Gmail tab khol kar shuru karo'}
-              </p>
-            </div>
-
-            {customTools.length === 0 ? (
-              <button
-                onClick={openManageTools}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  padding: '11px 18px', borderRadius: '11px', cursor: 'pointer',
-                  background: 'var(--accent-muted)', border: '1px solid var(--accent-border)',
-                  color: 'var(--accent)', fontSize: '12px', fontWeight: 600,
-                  transition: 'all 0.15s',
-                }}
-                onMouseEnter={e => {
-                  ;(e.currentTarget as HTMLElement).style.background = 'var(--accent)'
-                  ;(e.currentTarget as HTMLElement).style.color = 'white'
-                }}
-                onMouseLeave={e => {
-                  ;(e.currentTarget as HTMLElement).style.background = 'var(--accent-muted)'
-                  ;(e.currentTarget as HTMLElement).style.color = 'var(--accent)'
-                }}
-              >
-                <Plus size={14} />
-                Tools Library Setup Karo
-              </button>
-            ) : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(76px, 1fr))',
-                gap: '8px', width: '100%', maxWidth: '320px',
-              }}>
-                {customTools.slice(0, 6).map(tool => (
-                  <button
-                    key={tool.id}
-                    onClick={() => openAddSession(tool.id)}
-                    style={{
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '7px',
-                      padding: '13px 10px', borderRadius: '11px', cursor: 'pointer',
-                      background: 'var(--surface)', border: '1px solid var(--border)',
-                      transition: 'all 0.15s',
-                    }}
-                    onMouseEnter={e => {
-                      ;(e.currentTarget as HTMLElement).style.background = 'var(--accent-muted)'
-                      ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--accent-border)'
-                    }}
-                    onMouseLeave={e => {
-                      ;(e.currentTarget as HTMLElement).style.background = 'var(--surface)'
-                      ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'
-                    }}
-                  >
-                    <img
-                      src={getFaviconUrl(tool.url)}
-                      alt=""
-                      style={{ width: '22px', height: '22px', objectFit: 'contain' }}
-                      onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
-                    />
-                    <span style={{ fontSize: '10px', fontWeight: 500, color: 'var(--text-2)', textAlign: 'center', lineHeight: 1.2 }}>
-                      {tool.name}
-                    </span>
-                  </button>
-                ))}
+          <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-dot-matrix">
+            <div className="relative z-10 max-w-2xl w-full text-center space-y-7">
+              {/* Retro Hero Header */}
+              <div className="space-y-3">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-400 font-retro-mono text-[10px] uppercase tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                  [v1.0.0 :: LOCAL RETRO WORKSTATION]
+                </div>
+                <h1 className="font-retro-serif text-5xl font-normal text-tx leading-tight tracking-tight">
+                  The Retro-AI Studio.
+                </h1>
+                <p className="font-retro-sans text-xs text-t2 max-w-md mx-auto">
+                  Launch isolated AI model partitions with local session storage and instant memory handoffs.
+                </p>
               </div>
-            )}
+
+              {/* Tool Cards Grid */}
+              {customTools.length === 0 ? (
+                <div className="p-8 rounded-2xl text-center space-y-3 bg-white border-2 border-[#281E14] shadow-[4px_4px_0px_0px_#281E14]">
+                  <p className="font-retro-mono text-xs text-stone-700 font-semibold">No tools registered in your local library.</p>
+                  <button
+                    onClick={openManageTools}
+                    className="retro-btn px-4 py-2 rounded-xl text-xs font-bold bg-[#D97706] hover:bg-[#B45309] text-white border-2 border-[#281E14] shadow-[2px_2px_0px_0px_#281E14] hover:shadow-[3px_3px_0px_0px_#281E14] transition-all inline-flex items-center gap-2 cursor-pointer font-retro-mono uppercase tracking-wider"
+                  >
+                    <Plus size={14} />
+                    Setup Tools Library
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 text-left">
+                  {customTools.map(tool => (
+                    <button
+                      key={tool.id}
+                      onClick={() => openAddSession(tool.id)}
+                      className="p-5 rounded-2xl flex flex-col justify-between h-36 group cursor-pointer relative bg-white border-2 border-[#281E14] shadow-[4px_4px_0px_0px_#281E14] hover:shadow-[7px_7px_0px_0px_#281E14] hover:-translate-y-1 transition-all duration-200 overflow-hidden select-none"
+                    >
+                      {/* Subtle Retro Texture Overlay */}
+                      <div className="absolute inset-0 bg-dot-matrix opacity-40 pointer-events-none" />
+
+                      {/* User's Creative Idea: 20% Opacity Background Watermark Logo */}
+                      <div className="absolute -bottom-3 -right-3 w-28 h-28 pointer-events-none opacity-20 group-hover:opacity-30 group-hover:scale-110 transition-all duration-300 transform -rotate-12">
+                        <img
+                          src={getFaviconUrl(tool.url)}
+                          alt=""
+                          className="w-full h-full object-contain filter grayscale group-hover:grayscale-0 transition-all"
+                          onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                        />
+                      </div>
+
+                      {/* Card Header: 3D Favicon Icon + Retro Tag */}
+                      <div className="flex items-center justify-between relative z-10">
+                        <div className="w-10 h-10 rounded-xl bg-[#FAF7F0] border-2 border-[#281E14] shadow-[2px_2px_0px_0px_#281E14] flex items-center justify-center group-hover:bg-[#FEF3C7] group-hover:scale-105 transition-all">
+                          <img
+                            src={getFaviconUrl(tool.url)}
+                            alt={tool.name}
+                            className="w-5 h-5 object-contain rounded"
+                            onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                          />
+                        </div>
+
+                        <span className="font-retro-mono text-[9px] font-bold uppercase tracking-wider px-2 py-1 rounded-md bg-[#FEF3C7] border border-[#F59E0B]/50 text-[#B45309] shadow-2xs">
+                          [{tool.name.toLowerCase()}]
+                        </span>
+                      </div>
+
+                      {/* Card Body & Action Directive */}
+                      <div className="relative z-10 mt-2">
+                        <h3 className="font-retro-tech text-base font-extrabold text-[#281E14] group-hover:text-[#D97706] transition-colors uppercase tracking-tight flex items-center gap-1.5">
+                          <span>{tool.name}</span>
+                          <span className="text-xs text-[#D97706] opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all">
+                            &rarr;
+                          </span>
+                        </h3>
+                        <p className="font-retro-mono text-[11px] text-stone-600 truncate mt-0.5">
+                          {tool.url.replace(/^https?:\/\//, '')}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <div className="flex-1" style={{ background: 'var(--surface)' }} />
         )}
       </div>
+
+      {isActive && activeTab && isToolTab(activeTab) && (
+        ['chatgpt', 'claude', 'gemini', 'grok'].includes(getInjectTool(activeTab.url) ?? '') ||
+        activeTab.url.includes('perplexity.ai')
+      ) && (
+        <CaptureDebugPanel />
+      )}
 
       <ToolDock
         tabs={tabs}
@@ -528,72 +517,136 @@ export default function AIBrowser({ isActive }: AIBrowserProps) {
 
       {showManageTools && (
         <div
-          className="fixed inset-0 flex items-center justify-center z-50 p-4 bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 flex items-center justify-center z-50 p-4 bg-stone-900/40 backdrop-blur-xs select-none"
           onClick={closeManageTools}
         >
           <div
-            className="w-full max-w-[400px] rounded-2xl overflow-hidden shadow-2xl bg-surface border border-border"
+            className="w-full max-w-[520px] rounded-3xl overflow-hidden shadow-[0_20px_60px_rgba(40,30,20,0.22)] bg-[#FAF7F0] border-2 border-[#D8D1C3] bg-dot-matrix animate-in fade-in zoom-in-95 duration-150"
             onClick={e => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-              <h3 className="font-semibold text-base font-display text-tx">Tools Library</h3>
-              <button onClick={closeManageTools} className="p-1.5 rounded-lg transition-colors text-t3 hover:text-tx hover:bg-s2">
-                <X size={16} />
-              </button>
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[#D6CFC0] bg-[#EBE5D5]">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#FF5F56]" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#27C93F]" />
+                </div>
+                <div className="h-4 w-[1px] bg-[#C8C1B0]" />
+                <h3 className="font-retro-mono text-xs font-bold text-stone-900 uppercase tracking-widest">
+                  Tools &amp; Model Registry
+                </h3>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="font-retro-mono text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-[#FEF3C7] border border-[#F59E0B]/50 text-[#B45309]">
+                  {customTools.length} Tools
+                </span>
+                <button
+                  onClick={closeManageTools}
+                  className="retro-btn font-retro-mono text-xs font-bold px-2.5 py-1 rounded-lg bg-[#FEE2E2] border border-[#FCA5A5] text-[#DC2626] hover:bg-[#DC2626] hover:text-white transition-colors"
+                >
+                  [ ESC ]
+                </button>
+              </div>
             </div>
 
-            <div className="p-5 flex flex-col gap-4">
-              <div className="flex flex-col gap-2">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-t3">Add New Tool</p>
-                <div className="flex gap-2">
+            <div className="p-6 flex flex-col gap-5">
+              {/* Add New Tool Form */}
+              <div className="flex flex-col gap-3 bg-white p-4 rounded-2xl border-2 border-[#D8D1C3] shadow-2xs">
+                <div className="flex items-center justify-between">
+                  <p className="font-retro-mono text-[10px] font-bold uppercase tracking-widest text-[#B45309]">
+                    // Register Custom AI Service
+                  </p>
+                  <span className="font-retro-mono text-[9px] text-stone-500">
+                    Auto-Favicon Enabled
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
                   <input
-                    className="flex-1 text-xs rounded-lg px-3 py-2 bg-s2 border border-border text-tx focus:outline-none focus:border-accent transition-colors"
-                    placeholder="Name"
+                    className="sm:col-span-4 font-retro-mono text-xs rounded-xl px-3 py-2 bg-[#FAF7F0] border-2 border-[#D8D1C3] text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-[#D97706] transition-colors"
+                    placeholder="Tool Name"
                     value={addToolName}
                     onChange={e => setAddToolName(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAddTool()}
                   />
                   <input
-                    className="flex-[2] text-xs rounded-lg px-3 py-2 bg-s2 border border-border text-tx focus:outline-none focus:border-accent transition-colors"
+                    className="sm:col-span-8 font-retro-mono text-xs rounded-xl px-3 py-2 bg-[#FAF7F0] border-2 border-[#D8D1C3] text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-[#D97706] transition-colors"
                     placeholder="URL (e.g. elevenlabs.io)"
                     value={addToolUrl}
                     onChange={e => setAddToolUrl(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAddTool()}
                   />
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  {addToolError ? (
+                    <p className="font-retro-mono text-xs text-[#DC2626] font-semibold">{addToolError}</p>
+                  ) : (
+                    <p className="font-retro-mono text-[10px] text-stone-500 italic">
+                      Supports web apps, custom LLMs, or internal tools.
+                    </p>
+                  )}
+
                   <button
                     onClick={handleAddTool}
-                    className="flex-shrink-0 px-3 py-2 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-h transition-colors flex items-center justify-center"
+                    className="retro-btn px-4 py-2 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white border border-[#B45309] font-retro-mono text-xs font-bold shadow-[1px_1px_0px_0px_rgba(180,83,9,0.3)] transition-all flex items-center justify-center gap-1.5 shrink-0"
                   >
                     <Plus size={13} />
+                    <span>Register Tool</span>
                   </button>
                 </div>
-                {addToolError && <p className="text-[11px] text-red-500">{addToolError}</p>}
               </div>
 
-              <div className="flex flex-col gap-1.5 max-h-[260px] overflow-y-auto">
+              {/* Custom Tools List */}
+              <div className="flex flex-col gap-2 max-h-[260px] overflow-y-auto pr-0.5">
+                <p className="font-retro-mono text-[10px] font-bold uppercase tracking-widest text-stone-600 px-1">
+                  Installed AI Tools Library ({customTools.length})
+                </p>
+
                 {customTools.length === 0 && (
-                  <p className="text-xs text-center py-6 text-t3">No tools yet - add your first one above</p>
+                  <div className="p-8 text-center bg-white rounded-2xl border-2 border-dashed border-[#D8D1C3]">
+                    <p className="font-retro-mono text-xs text-stone-500">
+                      No custom tools registered yet — add your first tool above
+                    </p>
+                  </div>
                 )}
+
                 {customTools.map(tool => (
                   <div
                     key={tool.id}
-                    className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-s2 border border-border group"
+                    className="flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white border-2 border-[#D8D1C3] hover:border-[#D97706]/70 transition-all shadow-2xs group"
                   >
-                    <img
-                      src={getFaviconUrl(tool.url)}
-                      alt=""
-                      style={{ width: '15px', height: '15px', objectFit: 'contain', flexShrink: 0 }}
-                      onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-tx truncate">{tool.name}</p>
-                      <p className="text-[10px] text-t3 truncate">{tool.url}</p>
+                    <div className="w-8 h-8 rounded-xl bg-[#FAF7F0] border border-[#D8D1C3] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                      <img
+                        src={getFaviconUrl(tool.url)}
+                        alt=""
+                        className="w-4 h-4 object-contain"
+                        onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                      />
                     </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-retro-sans text-xs font-bold text-stone-900 truncate">
+                          {tool.name}
+                        </p>
+                        <span className="font-retro-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#FAF7F0] border border-[#D8D1C3] text-stone-600 uppercase">
+                          [{tool.name.toLowerCase()}]
+                        </span>
+                      </div>
+                      <p className="font-retro-mono text-[10px] text-stone-500 truncate mt-0.5">
+                        {tool.url}
+                      </p>
+                    </div>
+
                     <button
                       onClick={() => handleRemoveTool(tool.id)}
-                      className="flex-shrink-0 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all text-t3 hover:text-red-500 hover:bg-red-500/10"
+                      title="Remove Tool"
+                      className="shrink-0 p-1.5 rounded-lg opacity-60 group-hover:opacity-100 transition-all text-stone-400 hover:text-[#DC2626] hover:bg-[#FEE2E2]"
                     >
-                      <Trash2 size={12} />
+                      <Trash2 size={13} />
                     </button>
                   </div>
                 ))}

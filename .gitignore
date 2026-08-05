@@ -38,6 +38,7 @@ yarn-error.log*
 
 # Vite
 .vite/
+electron.vite.config.*.mjs
 
 # Test coverage
 coverage/

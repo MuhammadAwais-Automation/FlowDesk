@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import {
   LayoutDashboard, Globe, FileText, Users,
   Settings, Zap, Youtube, Calendar, Smartphone,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, MessagesSquare, Bot,
 } from 'lucide-react'
 import type { Page } from '@/types/pages'
 
@@ -20,6 +20,8 @@ interface NavItem {
 const items: NavItem[] = [
   { icon: LayoutDashboard, page: 'dashboard', label: 'Dashboard' },
   { icon: Globe,           page: 'browser',   label: 'AI Browser' },
+  { icon: MessagesSquare,  page: 'universalChat', label: 'Universal Chat' },
+  { icon: Bot,             page: 'agent',     label: 'Agent'       },
   { icon: FileText,        page: 'prompts',   label: 'Prompts'    },
   { icon: Users,           page: 'accounts',  label: 'Accounts'   },
   { icon: Youtube,         page: 'youtube',   label: 'YT Studio'  },
@@ -50,62 +52,32 @@ function NavButton({
   collapsed: boolean
   danger?: boolean
 }) {
-  const accentColor = danger ? 'var(--danger)' : 'var(--accent)'
-  const accentMuted = danger ? 'var(--danger-muted)' : 'var(--accent-muted)'
-
   return (
     <button
-      // Task 2: title always visible (not just when collapsed)
-      // — browser shows native tooltip on hover, useful when label is ellipsed
       title={label}
       onClick={onClick}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: collapsed ? 'center' : 'flex-start',
-        gap: collapsed ? 0 : '9px',
-        width: '100%',
-        padding: collapsed ? '7px 0' : '7px 10px',
-        borderRadius: '8px',
-        fontSize: '12.5px',
-        fontWeight: active ? 600 : 400,
-        cursor: 'pointer',
-        textAlign: 'left',
-        border: 'none',
-        transition: 'background 0.14s, color 0.14s, box-shadow 0.14s',
-        background: active ? accentMuted : 'transparent',
-        color: active ? accentColor : 'var(--text-2)',
-        // Luxury: subtle inner glow when active
-        boxShadow: active && !collapsed
-          ? `inset 3px 0 0 ${accentColor}, 0 0 0 0 transparent`
-          : 'none',
-      }}
-      onMouseEnter={e => {
-        if (!active) {
-          ;(e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'
-          ;(e.currentTarget as HTMLElement).style.color = 'var(--text)'
-        }
-      }}
-      onMouseLeave={e => {
-        if (!active) {
-          ;(e.currentTarget as HTMLElement).style.background = 'transparent'
-          ;(e.currentTarget as HTMLElement).style.color = 'var(--text-2)'
-        }
-      }}
+      className={`group relative flex items-center w-full transition-all duration-200 select-none ${
+        collapsed ? 'justify-center py-2 px-0' : 'justify-start gap-2.5 px-3 py-2'
+      } ${
+        active
+          ? danger
+            ? 'bg-[#FEE2E2] border-2 border-[#EF4444] text-[#DC2626] font-retro-mono font-bold text-xs rounded-xl shadow-[2px_2px_0px_0px_rgba(220,38,38,0.3)] -translate-y-0.5'
+            : 'bg-[#FEF3C7] border-2 border-[#F59E0B] text-[#B45309] font-retro-mono font-bold text-xs rounded-xl shadow-[2px_2px_0px_0px_rgba(180,83,9,0.3)] -translate-y-0.5'
+          : danger
+          ? 'bg-transparent hover:bg-[#FEE2E2]/60 text-[#DC2626] font-retro-sans font-medium text-xs rounded-xl border border-transparent'
+          : 'bg-transparent hover:bg-[#FAF7F0] text-stone-700 font-retro-sans font-medium text-xs rounded-xl border border-transparent hover:-translate-y-0.5'
+      }`}
     >
       <Icon
-        size={14}
-        style={{ flexShrink: 0, color: active ? accentColor : 'inherit', transition: 'color 0.14s' }}
+        size={16}
+        className={`shrink-0 transition-colors ${
+          active
+            ? danger ? 'text-[#DC2626]' : 'text-[#D97706]'
+            : 'text-stone-500 group-hover:text-[#D97706]'
+        }`}
       />
       {!collapsed && (
-        <span style={{
-          flex: 1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          // Task 2: ensure text clips gracefully at any width
-          minWidth: 0,
-        }}>
+        <span className="flex-1 truncate text-left tracking-tight">
           {label}
         </span>
       )}
@@ -124,11 +96,11 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
     return localStorage.getItem('navCollapsed') === 'true'
   })
 
-  // ── Refs for jank-free resize (Task 2) ─────────────────────────────────────
+  // ── Refs for jank-free resize ─────────────────────────────────────────────
   const isResizing   = useRef(false)
   const startX       = useRef(0)
   const startW       = useRef(0)
-  const liveWidth    = useRef(width)   // tracks width during drag without re-renders
+  const liveWidth    = useRef(width)
   const rafId        = useRef(0)
   const navRef       = useRef<HTMLElement>(null)
   const handleRef    = useRef<HTMLDivElement>(null)
@@ -142,7 +114,7 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
     window.dispatchEvent(new CustomEvent('nav-resize', { detail: { width: effectiveWidth } }))
   }, [effectiveWidth])
 
-  // ── Resize drag (Task 2: jank-free via direct DOM, RAF throttle) ───────────
+  // ── Resize drag ─────────────────────────────────────────────────────────────
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -156,7 +128,6 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
     document.body.style.cursor     = 'col-resize'
     document.body.style.userSelect = 'none'
 
-    // Kill CSS transition so the sidebar tracks the cursor instantly
     if (navRef.current) navRef.current.style.transition = 'none'
   }, [collapsed, width])
 
@@ -164,17 +135,14 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
     function onMouseMove(e: MouseEvent) {
       if (!isResizing.current) return
 
-      // Throttle to one DOM write per animation frame
       cancelAnimationFrame(rafId.current)
       rafId.current = requestAnimationFrame(() => {
         const delta = e.clientX - startX.current
         const newW  = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startW.current + delta))
         liveWidth.current = newW
 
-        // Direct DOM write — zero React re-renders during drag
         if (navRef.current) navRef.current.style.width = `${newW}px`
 
-        // Keep WebContentsView bounds in sync as user drags
         window.electronAPI.viewSetNavWidth(newW)
         window.dispatchEvent(new CustomEvent('nav-resize', { detail: { width: newW } }))
       })
@@ -188,10 +156,8 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
       document.body.style.cursor     = ''
       document.body.style.userSelect = ''
 
-      // Restore smooth transition
       if (navRef.current) navRef.current.style.transition = 'width 0.18s ease'
 
-      // Single React state commit (one re-render total for the whole drag)
       const finalWidth = liveWidth.current
       setWidth(finalWidth)
       localStorage.setItem('navWidth', String(finalWidth))
@@ -227,65 +193,34 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        background: 'var(--surface)',
-        borderRight: '1px solid var(--border)',
+        background: '#EBE5D5',
+        borderRight: '1px solid #D6CFC0',
         position: 'relative',
         transition: 'width 0.18s ease',
-        // Ensure nav content never overflows during resize
         overflow: 'hidden',
       }}
     >
-      {/* Logo */}
+      {/* Logo Section */}
       <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: collapsed ? 'center' : 'flex-start',
-          gap: collapsed ? 0 : '9px',
-          padding: collapsed ? '16px 0' : '16px 14px',
-          borderBottom: '1px solid var(--border)',
-          flexShrink: 0,
-          overflow: 'hidden',
-        }}
+        className={`flex items-center shrink-0 border-b border-[#D6CFC0] select-none ${
+          collapsed ? 'justify-center py-4 px-0' : 'justify-start gap-2.5 px-3.5 py-3.5'
+        }`}
       >
-        <div
-          style={{
-            width: '26px', height: '26px', borderRadius: '7px', flexShrink: 0,
-            background: 'var(--accent)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            // Luxury: logo block glows with current accent
-            boxShadow: '0 0 12px -2px var(--accent)',
-            transition: 'background 0.3s ease, box-shadow 0.3s ease',
-          }}
-        >
-          <Zap size={12} color="white" fill="white" />
+        <div className="w-7 h-7 rounded-lg bg-[#D97706] border border-[#B45309] flex items-center justify-center shrink-0 shadow-[1px_1px_0px_0px_rgba(180,83,9,0.3)]">
+          <Zap size={14} className="text-white fill-white" />
         </div>
         {!collapsed && (
-          <span style={{
-            fontSize: '13px', fontWeight: 700, letterSpacing: '-0.02em',
-            fontFamily: 'Outfit, sans-serif', color: 'var(--text)',
-            whiteSpace: 'nowrap', overflow: 'hidden',
-          }}>
+          <span className="font-retro-mono text-sm font-bold tracking-wider text-stone-900 uppercase truncate">
             FlowDesk
           </span>
         )}
       </div>
 
       {/* Nav items */}
-      <div style={{
-        flex: 1,
-        padding: collapsed ? '10px 4px' : '10px 6px',
-        display: 'flex', flexDirection: 'column', gap: '1px',
-        overflow: 'hidden',
-      }}>
+      <div className="flex-1 overflow-hidden flex flex-col gap-1 p-2">
         {!collapsed && (
-          <p style={{
-            fontSize: '9.5px', fontWeight: 600, letterSpacing: '0.08em',
-            textTransform: 'uppercase', color: 'var(--text-3)',
-            padding: '0 8px', marginBottom: '6px',
-            whiteSpace: 'nowrap',
-          }}>
-            Menu
+          <p className="font-retro-mono text-[9.5px] font-bold text-[#B45309] uppercase tracking-widest px-2.5 pt-1 mb-1 select-none">
+            // Menu
           </p>
         )}
 
@@ -302,11 +237,7 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
       </div>
 
       {/* Bottom: Settings + Collapse toggle */}
-      <div style={{
-        padding: collapsed ? '6px 4px' : '6px',
-        borderTop: '1px solid var(--border)',
-        flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '2px',
-      }}>
+      <div className="shrink-0 flex flex-col gap-1 p-2 border-t border-[#D6CFC0] bg-[#EBE5D5]">
         <NavButton
           icon={Settings}
           label="Settings"
@@ -318,53 +249,21 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
         <button
           onClick={toggleCollapse}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          style={{
-            display: 'flex', alignItems: 'center',
-            justifyContent: collapsed ? 'center' : 'flex-start',
-            gap: collapsed ? 0 : '9px',
-            width: '100%', padding: collapsed ? '7px 0' : '7px 10px',
-            borderRadius: '8px', fontSize: '12.5px', fontWeight: 400,
-            cursor: 'pointer', border: 'none',
-            background: 'transparent', color: 'var(--text-3)',
-            transition: 'background 0.14s, color 0.14s',
-          }}
-          onMouseEnter={e => {
-            ;(e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'
-            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-2)'
-          }}
-          onMouseLeave={e => {
-            ;(e.currentTarget as HTMLElement).style.background = 'transparent'
-            ;(e.currentTarget as HTMLElement).style.color = 'var(--text-3)'
-          }}
+          className={`flex items-center w-full font-retro-mono text-xs font-semibold text-stone-600 hover:bg-[#FAF7F0] hover:text-stone-900 rounded-xl transition-all ${
+            collapsed ? 'justify-center py-2 px-0' : 'justify-start gap-2.5 px-3 py-2'
+          }`}
         >
-          {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-          {!collapsed && <span style={{ whiteSpace: 'nowrap' }}>Collapse</span>}
+          {collapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+          {!collapsed && <span>Collapse</span>}
         </button>
       </div>
 
-      {/* ── Resize drag handle (Task 2: luxury glow on hover) ──────────────── */}
+      {/* Resize drag handle */}
       {!collapsed && (
         <div
           ref={handleRef}
           onMouseDown={handleResizeMouseDown}
-          style={{
-            position: 'absolute', top: 0, right: 0,
-            width: '4px', height: '100%',
-            cursor: 'col-resize',
-            zIndex: 10,
-            // Luxury: the handle itself is a hairline glow strip
-            background: 'transparent',
-            transition: 'background 0.2s ease',
-          }}
-          onMouseEnter={e => {
-            ;(e.currentTarget as HTMLElement).style.background =
-              'linear-gradient(to bottom, transparent 10%, var(--accent) 40%, var(--accent) 60%, transparent 90%)'
-            ;(e.currentTarget as HTMLElement).style.opacity = '0.35'
-          }}
-          onMouseLeave={e => {
-            ;(e.currentTarget as HTMLElement).style.background = 'transparent'
-            ;(e.currentTarget as HTMLElement).style.opacity = '1'
-          }}
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize z-10 bg-transparent hover:bg-[#D97706]/40 transition-colors"
         />
       )}
     </nav>

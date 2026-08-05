@@ -19,8 +19,10 @@ export default defineConfig({
       rollupOptions: {
         input: {
           preload: resolve('electron/preload.ts'),
+          webviewPreload: resolve('electron/webviewPreload.ts'),
         },
         output: {
+          format: 'cjs',
           entryFileNames: '[name].js',
         },
       },
