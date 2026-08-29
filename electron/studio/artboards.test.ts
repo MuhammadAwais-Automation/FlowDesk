@@ -87,6 +87,13 @@ describe('appendArtboard', () => {
     const doc = appendArtboard(DOC, { id: 'a&1', name: 'Existing', width: 10, height: 10 })
     expect(() => appendArtboard(doc, { id: 'a&1', name: 'Dup', width: 10, height: 10 })).toThrow(/a&1/)
   })
+
+  it('matches duplicate ids encoded with decimal and hexadecimal references', () => {
+    const decimal = `${DOC.replace('</body>', '')}<div class="fd-artboard" data-fd-id="a&#38;1"></div></body></html>`
+    const hexadecimal = `${DOC.replace('</body>', '')}<div class="fd-artboard" data-fd-id="a&#x26;1"></div></body></html>`
+    expect(() => appendArtboard(decimal, { id: 'a&1', name: 'Dup', width: 10, height: 10 })).toThrow(/already used|duplicated/i)
+    expect(() => appendArtboard(hexadecimal, { id: 'a&1', name: 'Dup', width: 10, height: 10 })).toThrow(/already used|duplicated/i)
+  })
 })
 
 describe('blankDocument', () => {

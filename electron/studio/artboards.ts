@@ -32,7 +32,14 @@ function attribute(attrs: string, name: string): string {
 }
 
 function decodeAttribute(value: string): string {
-  return value
+  return value.replace(/&#(x[0-9a-f]+|[0-9]+);/gi, (reference, digits: string) => {
+    const codePoint = digits[0].toLowerCase() === 'x'
+      ? Number.parseInt(digits.slice(1), 16)
+      : Number.parseInt(digits, 10)
+    return Number.isSafeInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+      ? String.fromCodePoint(codePoint)
+      : reference
+  })
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
 }
