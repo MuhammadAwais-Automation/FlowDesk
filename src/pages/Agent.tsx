@@ -322,19 +322,34 @@ export default function Agent() {
     initialScrollRef.current = false
   }, [session?.entries.length, liveText, sending])
 
+  /**
+   * Reuses an empty session instead of creating another one.
+   *
+   * Creating on every click filled the sidebar with identical "New Session"
+   * cards holding nothing, because a session with no turns is
+   * indistinguishable from the one the click before it made. An empty
+   * session IS a blank slate, so handing the existing one back is the same
+   * thing the user asked for, without the clutter.
+   */
   async function handleNewSession() {
     if (sendingRef.current) return
     clearWatchdog()
-    const created = await api.agentSessionCreate()
-    setSessions(await api.agentSessionList())
-    setActiveSessionId(created.id)
+    const existingEmpty = sessions.find(s => s.turnCount === 0)
+    const target = existingEmpty ?? await api.agentSessionCreate()
+    if (!existingEmpty) setSessions(await api.agentSessionList())
+    setActiveSessionId(target.id)
     setError(null)
     setLiveToolCalls([])
     setToolStatus({})
   }
 
+  /**
+   * Switching mid-run is allowed: the turn runs in the main process and
+   * publishes to a numbered run log, so leaving and coming back replays it.
+   * Blocking the switch stranded the user on one chat for the length of a
+   * long turn with no way to read anything else.
+   */
   function handleSelectSession(id: string) {
-    if (sendingRef.current) return
     setActiveSessionId(id)
     setLiveToolCalls([])
     setToolStatus({})

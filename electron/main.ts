@@ -75,6 +75,7 @@ import { orderBrowserAccounts } from './agent/accountFailover'
 import * as agentSessions from './agentSessionStore'
 import { buildCatchUp } from '../src/lib/agentCatchUp'
 import { runAgentTurn, type AgentStreamEvent } from './agent/leadAgent'
+import { recordProviderUsage, type ProviderLimits } from './providerUsage'
 import { alwaysApprove, type RequestApproval } from './agent/approval'
 
 // @anthropic-ai/claude-agent-sdk (electron/claudeSdkProvider.ts, currently
@@ -1490,7 +1491,10 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
         const thinking = extractThinkingSummaryFromSSEEvent(evt)
         if (thinking) console.log(`[FlowDesk thinking][qwen]`, JSON.stringify(thinking))
         const usage = extractQwenUsageFromSSEEvent(evt)
-        if (usage) mainWindow?.webContents.send('capture:usage', { tool: entry.tool, limits: usage })
+        if (usage) {
+          recordProviderUsage(entry.tool, usage as ProviderLimits)
+          mainWindow?.webContents.send('capture:usage', { tool: entry.tool, limits: usage })
+        }
       }
       mainWindow?.webContents.send('capture:live', { id: payload.id, tool: entry.tool, textSoFar: entry.text })
     }
@@ -1506,6 +1510,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
         const usage = extractQwenUsageFromSSEEvent(entry.buf)
         if (usage) {
           console.log(`[FlowDesk usage][qwen]`, `${usage.outputTokens}/${usage.totalTokens} tokens (input=${usage.inputTokens}, reasoning=${usage.reasoningTokens ?? 0})`)
+          recordProviderUsage(entry.tool, usage as ProviderLimits)
           mainWindow?.webContents.send('capture:usage', { tool: entry.tool, limits: usage })
         }
         entry.buf = ''
@@ -1600,6 +1605,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
         const usage = extractUsageFromSSEEvent(evt)
         if (usage) {
           console.log(`[FlowDesk usage][chatgpt]`, usage.map(u => `${u.feature}: ${u.remaining} left (resets ${u.resetAfter})`).join(' | '))
+          recordProviderUsage(entry.tool, usage as ProviderLimits)
           mainWindow?.webContents.send('capture:usage', { tool: entry.tool, limits: usage })
         }
         const modelInfo = extractModelInfoFromSSEEvent(evt)
@@ -1622,6 +1628,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
         const usage = extractClaudeUsageFromSSEEvent(evt)
         if (usage) {
           console.log(`[FlowDesk usage][claude]`, usage.map(w => `${w.window}: ${Math.round(w.utilization * 100)}% used (${w.status})`).join(' | '))
+          recordProviderUsage(entry.tool, usage as ProviderLimits)
           mainWindow?.webContents.send('capture:usage', { tool: entry.tool, limits: usage })
         }
       }
@@ -1649,6 +1656,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
         const usage = extractUsageFromSSEEvent(entry.buf)
         if (usage) {
           console.log(`[FlowDesk usage][chatgpt]`, usage.map(u => `${u.feature}: ${u.remaining} left (resets ${u.resetAfter})`).join(' | '))
+          recordProviderUsage(entry.tool, usage as ProviderLimits)
           mainWindow?.webContents.send('capture:usage', { tool: entry.tool, limits: usage })
         }
         const modelInfo = extractModelInfoFromSSEEvent(entry.buf)
@@ -1671,6 +1679,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
         const usage = extractClaudeUsageFromSSEEvent(entry.buf)
         if (usage) {
           console.log(`[FlowDesk usage][claude]`, usage.map(w => `${w.window}: ${Math.round(w.utilization * 100)}% used (${w.status})`).join(' | '))
+          recordProviderUsage(entry.tool, usage as ProviderLimits)
           mainWindow?.webContents.send('capture:usage', { tool: entry.tool, limits: usage })
         }
       }
