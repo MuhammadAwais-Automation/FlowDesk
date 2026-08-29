@@ -160,6 +160,15 @@ export interface AgentSessionMeta {
   providers: Partial<Record<'claude' | 'codex', AgentSessionProviderLink>>
 }
 
+export interface StudioArtboardMeta { id: string; name: string; width: number; height: number }
+export interface StudioDocumentMeta {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  artboards: StudioArtboardMeta[]
+}
+
 export interface ElectronAPI {
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<void>
@@ -303,6 +312,18 @@ export interface ElectronAPI {
   // Agent: selected lead SDK provider that can call the browser-driven worker tools
   agentSendMessage: (input: { prompt: string; sessionId: string; runId: string }) => Promise<{ runId: string }>
   agentGetRunState: () => Promise<AgentRunSnapshot>
+
+  // Studio canvas
+  studioListDocuments: () => Promise<StudioDocumentMeta[]>
+  studioCreateDocument: (title?: string) => Promise<StudioDocumentMeta>
+  studioReadHtml: (id: string) => Promise<string | null>
+  studioRenameDocument: (id: string, title: string) => Promise<void>
+  studioDeleteDocument: (id: string) => Promise<void>
+  studioExportPng: (documentId: string, artboardId: string) => Promise<string>
+  studioExportPdf: (documentId: string) => Promise<string>
+  onStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => void
+  offStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => void
+
   agentSessionList: () => Promise<AgentSessionMeta[]>
   agentSessionCreate: (title?: string) => Promise<AgentSessionMeta>
   agentSessionTurns: (id: string) => Promise<AgentSessionTurn[]>

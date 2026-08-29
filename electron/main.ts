@@ -73,6 +73,9 @@ import { PROVIDER_URLS } from './providerUrls'
 import { configureBrowserWorkerQueue, notifyCaptureComplete, workerProgress } from './agent/browserWorkerQueue'
 import { orderBrowserAccounts } from './agent/accountFailover'
 import * as agentSessions from './agentSessionStore'
+import * as studioStore from './studio/documentStore'
+import { isValidDocumentId as studioIsValidDocumentId } from './studio/paths'
+import { exportArtboardPng, exportDocumentPdf } from './studio/export'
 import { buildCatchUp } from '../src/lib/agentCatchUp'
 import { runAgentTurn, type AgentStreamEvent } from './agent/leadAgent'
 import { waStatus, waListChats, waListMessages, waSend } from './whatsapp'
@@ -1320,6 +1323,32 @@ ipcMain.handle('jarvis:sendMessage', async (_e, input: { messages?: unknown; run
 ipcMain.handle('jarvis:abort', () => {
   currentJarvisAbort?.abort()
   currentJarvisAbort = null
+})
+
+// ─────────────────────────────────────────────────────────────────
+// IPC: Studio canvas — documents the agent authors and the user exports.
+// Ids arrive from the renderer, so each is validated before it can reach
+// the filesystem (electron/studio/paths.ts).
+// ─────────────────────────────────────────────────────────────────
+
+function asStudioDocumentId(value: unknown): string {
+  if (!studioIsValidDocumentId(value)) throw new Error('Not a valid Studio document id.')
+  return value
+}
+
+ipcMain.handle('studio:listDocuments', () => studioStore.listDocuments())
+ipcMain.handle('studio:createDocument', (_e, title: unknown) =>
+  studioStore.createDocument(typeof title === 'string' && title.trim() ? title.trim() : undefined))
+ipcMain.handle('studio:readHtml', (_e, id: unknown) => studioStore.readDocumentHtml(asStudioDocumentId(id)))
+ipcMain.handle('studio:renameDocument', (_e, id: unknown, title: unknown) =>
+  studioStore.renameDocument(asStudioDocumentId(id), String(title ?? '').slice(0, 200)))
+ipcMain.handle('studio:deleteDocument', (_e, id: unknown) => studioStore.deleteDocument(asStudioDocumentId(id)))
+ipcMain.handle('studio:exportPng', (_e, documentId: unknown, artboardId: unknown) =>
+  exportArtboardPng(asStudioDocumentId(documentId), String(artboardId ?? '')))
+ipcMain.handle('studio:exportPdf', (_e, documentId: unknown) => exportDocumentPdf(asStudioDocumentId(documentId)))
+
+studioStore.studioDocumentChanged.on('changed', (documentId: string) => {
+  mainWindow?.webContents.send('studio:documentChanged', documentId)
 })
 
 ipcMain.handle('agent:getRunState', () => agentRunSnapshot())
