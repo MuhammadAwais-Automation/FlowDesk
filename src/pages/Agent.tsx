@@ -38,6 +38,12 @@ export default function Agent() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [session, setSession] = useState<AgentSession | null>(null)
   const { pending: pendingApprovals, respond: handleApprovalResponse } = useAgentApprovals(activeSessionId)
+  // Studio's chat panel attaches to whichever session the user was actually
+  // in here, rather than the most recently updated one (which would jump to
+  // whatever session an agent last wrote to).
+  useEffect(() => {
+    if (activeSessionId) localStorage.setItem('agentActiveSessionId', activeSessionId)
+  }, [activeSessionId])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [liveText, setLiveText] = useState('')

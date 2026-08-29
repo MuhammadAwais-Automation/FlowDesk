@@ -14,6 +14,7 @@ const Workspace = lazy(() => import('@/pages/Workspace'))
 const Social = lazy(() => import('@/pages/Social'))
 const Studio = lazy(() => import('@/pages/Studio'))
 const Jarvis = lazy(() => import('@/pages/Jarvis'))
+const StudioCanvas = lazy(() => import('@/pages/StudioCanvas'))
 
 // Safety check — if preload didn't load, show helpful error
 const api = window.electronAPI
@@ -74,6 +75,7 @@ export default function App() {
       case 'social': return <Social isActive={currentPage === 'social'} />
       case 'studio': return <Studio isActive={currentPage === 'studio'} />
       case 'jarvis': return <Jarvis />
+      case 'design': return <StudioCanvas isActive={currentPage === 'design'} />
       default: return null
     }
   }
