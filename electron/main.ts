@@ -13,6 +13,11 @@ crashReporter.start({ productName: 'FlowDesk', uploadToServer: false })
 // trouble (a bare file:// src can be blocked depending on webSecurity/CSP).
 protocol.registerSchemesAsPrivileged([
   { scheme: 'flowdesk-image', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
+  // Serves a Studio document's assets/ folder into both the canvas iframe
+  // (srcdoc) and the offscreen export window (a data: URL) — bypassCSP is
+  // what lets an <img src="studio-asset://..."> resolve from either of
+  // those origins rather than only a normal https:// page.
+  { scheme: 'studio-asset', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
 ])
 
 // Generated images (e.g. Gemini image-gen replies) are saved here rather
@@ -1910,6 +1915,21 @@ app.whenReady().then(async () => {
     // filePath has backslashes and a drive letter (C:\Users\...), which
     // isn't a valid file: URL as-is; pathToFileURL handles that escaping
     // correctly on every platform.
+    return net.fetch(pathToFileURL(filePath).href)
+  })
+
+  // Serves a Studio document's own assets/<file> — the host is the
+  // document id, so a request for a different document's asset is refused
+  // outright rather than silently mixing folders together.
+  protocol.handle('studio-asset', (request) => {
+    const url = new URL(request.url)
+    const documentId = url.hostname
+    if (!studioIsValidDocumentId(documentId)) return new Response('Forbidden', { status: 403 })
+    const fileName = basename(decodeURIComponent(url.pathname.replace(/^\/+/, '')))
+    if (!fileName) return new Response('Forbidden', { status: 403 })
+    const dir = studioStore.assetsDir(documentId)
+    const filePath = join(dir, fileName)
+    if (!filePath.startsWith(dir)) return new Response('Forbidden', { status: 403 })
     return net.fetch(pathToFileURL(filePath).href)
   })
 })
