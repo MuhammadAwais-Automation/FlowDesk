@@ -29,6 +29,16 @@ describe('parseArtboards', () => {
   it('throws on an artboard that is never closed rather than returning half a result', () => {
     expect(() => parseArtboards('<div class="fd-artboard" data-fd-id="x"><p>')).toThrow(/closed/i)
   })
+
+  it('rejects duplicate artboard ids instead of returning an ambiguous list', () => {
+    const duplicate = `${DOC.replace('</body>', '')}<div class="fd-artboard" data-fd-id="a1"></div></body></html>`
+    expect(() => parseArtboards(duplicate)).toThrow(/a1.*duplicate/i)
+  })
+
+  it('ignores div-like text in comments, scripts, styles, and quoted attributes', () => {
+    const tricky = `<div class="fd-artboard" data-fd-id="x" data-fd-name="N" data-fd-w="100" data-fd-h="100"><div data-note="<div>quoted </div>"></div><!-- <div> </div> --><style>.x::before{content:"<div> </div>"}</style><script>const x = "<div> </div>"</script><p>ok</p></div>`
+    expect(parseArtboards(tricky)[0].html).toBe('<div data-note="<div>quoted </div>"></div><!-- <div> </div> --><style>.x::before{content:"<div> </div>"}</style><script>const x = "<div> </div>"</script><p>ok</p>')
+  })
 })
 
 describe('replaceArtboardHtml', () => {
@@ -42,6 +52,11 @@ describe('replaceArtboardHtml', () => {
 
   it('throws with the real ids when the id does not exist', () => {
     expect(() => replaceArtboardHtml(DOC, 'nope', '<p/>')).toThrow(/a1/)
+  })
+
+  it('refuses to replace when the requested id is duplicated', () => {
+    const duplicate = `${DOC.replace('</body>', '')}<div class="fd-artboard" data-fd-id="a1"></div></body></html>`
+    expect(() => replaceArtboardHtml(duplicate, 'a1', '<p/>')).toThrow(/duplicate/i)
   })
 })
 
@@ -66,6 +81,11 @@ describe('appendArtboard', () => {
 
   it('refuses a duplicate id rather than creating an ambiguous document', () => {
     expect(() => appendArtboard(DOC, { id: 'a1', name: 'Dup', width: 10, height: 10 })).toThrow(/a1/)
+  })
+
+  it('matches duplicate ids after escaping special characters', () => {
+    const doc = appendArtboard(DOC, { id: 'a&1', name: 'Existing', width: 10, height: 10 })
+    expect(() => appendArtboard(doc, { id: 'a&1', name: 'Dup', width: 10, height: 10 })).toThrow(/a&1/)
   })
 })
 

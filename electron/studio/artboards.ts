@@ -20,8 +20,6 @@ export interface Artboard {
   html: string
 }
 
-const OPEN_TAG = /<div\s+class="fd-artboard"([^>]*)>/g
-
 function escapeAttribute(value: string): string {
   return String(value)
     .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
@@ -33,22 +31,70 @@ function attribute(attrs: string, name: string): string {
   return match ? match[1] : ''
 }
 
+function decodeAttribute(value: string): string {
+  return value
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+}
+
+function tagEnd(html: string, start: number): number {
+  let quote = ''
+  for (let i = start + 1; i < html.length; i++) {
+    const char = html[i]
+    if (quote) {
+      if (char === quote) quote = ''
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (char === '>') {
+      return i
+    }
+  }
+  return -1
+}
+
+function isTag(text: string, name: string): boolean {
+  return new RegExp(`^<${name}(?:\\s|>)`, 'i').test(text)
+}
+
+function isCloseTag(text: string, name: string): boolean {
+  return new RegExp(`^</${name}(?:\\s|>)`, 'i').test(text)
+}
+
+function skipRawElement(html: string, afterOpen: number, name: string): number {
+  const close = new RegExp(`</${name}\\s*>`, 'ig')
+  close.lastIndex = afterOpen
+  const match = close.exec(html)
+  return match ? match.index + match[0].length : -1
+}
+
 /** Index of the `</div>` closing the element opened just before `afterOpen`. */
 function findClose(html: string, afterOpen: number): number {
   let depth = 1
   let i = afterOpen
   while (i < html.length) {
-    const nextOpen = html.indexOf('<div', i)
-    const nextClose = html.indexOf('</div>', i)
-    if (nextClose === -1) return -1
-    if (nextOpen !== -1 && nextOpen < nextClose) {
-      depth++
-      i = nextOpen + 4
+    const next = html.indexOf('<', i)
+    if (next === -1) return -1
+    if (html.startsWith('<!--', next)) {
+      const commentEnd = html.indexOf('-->', next + 4)
+      if (commentEnd === -1) return -1
+      i = commentEnd + 3
       continue
     }
-    depth--
-    if (depth === 0) return nextClose
-    i = nextClose + 6
+    const end = tagEnd(html, next)
+    if (end === -1) return -1
+    const text = html.slice(next, end + 1)
+    if (isTag(text, 'style') || isTag(text, 'script')) {
+      const rawEnd = skipRawElement(html, end + 1, isTag(text, 'style') ? 'style' : 'script')
+      if (rawEnd === -1) return -1
+      i = rawEnd
+      continue
+    }
+    if (isTag(text, 'div') && !/\/\s*>$/.test(text)) depth++
+    else if (isCloseTag(text, 'div')) {
+      depth--
+      if (depth === 0) return next
+    }
+    i = end + 1
   }
   return -1
 }
@@ -60,15 +106,39 @@ interface Located extends Artboard {
 
 function locate(documentHtml: string): Located[] {
   const found: Located[] = []
-  OPEN_TAG.lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = OPEN_TAG.exec(documentHtml)) !== null) {
-    const attrs = match[1]
-    const start = match.index + match[0].length
+  let i = 0
+  while (i < documentHtml.length) {
+    const next = documentHtml.indexOf('<', i)
+    if (next === -1) break
+    if (documentHtml.startsWith('<!--', next)) {
+      const commentEnd = documentHtml.indexOf('-->', next + 4)
+      if (commentEnd === -1) break
+      i = commentEnd + 3
+      continue
+    }
+    const endTag = tagEnd(documentHtml, next)
+    if (endTag === -1) break
+    const text = documentHtml.slice(next, endTag + 1)
+    if (isTag(text, 'style') || isTag(text, 'script')) {
+      const rawEnd = skipRawElement(documentHtml, endTag + 1, isTag(text, 'style') ? 'style' : 'script')
+      if (rawEnd === -1) break
+      i = rawEnd
+      continue
+    }
+    if (!isTag(text, 'div') || !/\bclass="fd-artboard"/.test(text)) {
+      i = endTag + 1
+      continue
+    }
+    const attrs = text.slice(4, -1)
+    const start = endTag + 1
     const end = findClose(documentHtml, start)
     if (end === -1) throw new Error('Malformed document: an fd-artboard element is never closed.')
+    const id = attribute(attrs, 'data-fd-id')
+    if (found.some(board => decodeAttribute(board.id) === decodeAttribute(id))) {
+      throw new Error(`Artboard id "${id}" is duplicated in this document.`)
+    }
     found.push({
-      id: attribute(attrs, 'data-fd-id'),
+      id,
       name: attribute(attrs, 'data-fd-name'),
       width: Number(attribute(attrs, 'data-fd-w')) || 0,
       height: Number(attribute(attrs, 'data-fd-h')) || 0,
@@ -76,7 +146,7 @@ function locate(documentHtml: string): Located[] {
       start,
       end,
     })
-    OPEN_TAG.lastIndex = end
+    i = end + 6
   }
   return found
 }
@@ -87,7 +157,7 @@ export function parseArtboards(documentHtml: string): Artboard[] {
 
 export function replaceArtboardHtml(documentHtml: string, id: string, innerHtml: string): string {
   const boards = locate(documentHtml)
-  const target = boards.find(board => board.id === id)
+  const target = boards.find(board => decodeAttribute(board.id) === decodeAttribute(id))
   if (!target) {
     throw new Error(`No artboard "${id}" in this document. Real ids: ${boards.map(b => b.id).join(', ') || '(none)'}`)
   }
@@ -98,7 +168,7 @@ export function appendArtboard(
   documentHtml: string,
   artboard: Omit<Artboard, 'html'> & { html?: string },
 ): string {
-  if (parseArtboards(documentHtml).some(board => board.id === artboard.id)) {
+  if (parseArtboards(documentHtml).some(board => decodeAttribute(board.id) === decodeAttribute(artboard.id))) {
     throw new Error(`Artboard id "${artboard.id}" is already used in this document.`)
   }
   const { id, name, width, height } = artboard
