@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import {
   Globe, Users,
   Settings, Zap, Youtube, Calendar,
-  ChevronLeft, ChevronRight, MessagesSquare, Bot, BookOpen, Share2, Sparkles, Clapperboard,
+  ChevronLeft, ChevronRight, MessagesSquare, Bot, BookOpen, Share2, Sparkles, Clapperboard, LayoutTemplate,
 } from 'lucide-react'
 import type { Page } from '@/types/pages'
 
@@ -28,6 +28,7 @@ const items: NavItem[] = [
   { icon: Calendar,        page: 'workspace', label: 'Workspace'  },
   { icon: Share2,          page: 'social',    label: 'Social'     },
   { icon: Clapperboard,    page: 'studio',    label: 'Studio'     },
+  { icon: LayoutTemplate,  page: 'design',    label: 'Design'     },
 ]
 
 interface Props {

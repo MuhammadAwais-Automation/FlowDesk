@@ -168,6 +168,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Agent: selected lead SDK provider that can call the browser-driven worker tools
   agentSendMessage: (input: { prompt: string; sessionId: string; runId: string }) => ipcRenderer.invoke('agent:sendMessage', input),
   agentGetRunState: () => ipcRenderer.invoke('agent:getRunState'),
+
+  // Studio canvas
+  studioListDocuments: () => ipcRenderer.invoke('studio:listDocuments'),
+  studioCreateDocument: (title?: string) => ipcRenderer.invoke('studio:createDocument', title),
+  studioReadHtml: (id: string) => ipcRenderer.invoke('studio:readHtml', id),
+  studioRenameDocument: (id: string, title: string) => ipcRenderer.invoke('studio:renameDocument', id, title),
+  studioDeleteDocument: (id: string) => ipcRenderer.invoke('studio:deleteDocument', id),
+  studioExportPng: (documentId: string, artboardId: string) => ipcRenderer.invoke('studio:exportPng', documentId, artboardId),
+  studioExportPdf: (documentId: string) => ipcRenderer.invoke('studio:exportPdf', documentId),
+  onStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => ipcRenderer.on('studio:documentChanged', cb),
+  offStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => ipcRenderer.removeListener('studio:documentChanged', cb),
   agentSessionList: () => ipcRenderer.invoke('agentSession:list'),
   agentSessionCreate: (title?: string) => ipcRenderer.invoke('agentSession:create', title),
   agentSessionTurns: (id: string) => ipcRenderer.invoke('agentSession:turns', id),

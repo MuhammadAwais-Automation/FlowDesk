@@ -8,6 +8,7 @@ import { createLinkedInTools, LINKEDIN_TOOL_NAMES } from './linkedinTools'
 import { createFacebookTools, FACEBOOK_TOOL_NAMES } from './facebookTools'
 import { createFlowTools, FLOW_TOOL_NAMES } from './flowTools'
 import { createImageTools, IMAGE_TOOL_NAMES } from './imageTools'
+import { createStudioTools, STUDIO_TOOL_NAMES } from './studioTools'
 import { createProjectTools, PROJECT_TOOL_NAMES, type ProjectToolRuntime } from './projectTools'
 import { alwaysApprove, type RequestApproval } from './approval'
 
@@ -66,6 +67,7 @@ const BASE_AGENT_TOOL_NAMES = [
   ...FACEBOOK_TOOL_NAMES,
   ...FLOW_TOOL_NAMES,
   ...IMAGE_TOOL_NAMES,
+  ...STUDIO_TOOL_NAMES,
 ]
 
 export type { ProjectToolRuntime } from './projectTools'
@@ -77,10 +79,11 @@ export function createAgentToolSet(projectRuntime?: ProjectToolRuntime, requestA
   const facebookTools = createFacebookTools(requestApproval)
   const flowTools = createFlowTools(requestApproval)
   const imageTools = createImageTools()
+  const studioTools = createStudioTools(requestApproval)
   return {
     server: createSdkMcpServer({
       name: 'workers',
-      tools: [...WORKER_TOOLS.map(buildWorkerTool), ...NOTEBOOKLM_TOOLS, ...whatsappTools, ...linkedinTools, ...facebookTools, ...flowTools, ...imageTools, ...projectTools],
+      tools: [...WORKER_TOOLS.map(buildWorkerTool), ...NOTEBOOKLM_TOOLS, ...whatsappTools, ...linkedinTools, ...facebookTools, ...flowTools, ...imageTools, ...studioTools, ...projectTools],
     }),
     names: projectRuntime ? [...BASE_AGENT_TOOL_NAMES, ...PROJECT_TOOL_NAMES] : BASE_AGENT_TOOL_NAMES,
   }

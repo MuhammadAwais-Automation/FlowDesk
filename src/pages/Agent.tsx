@@ -16,7 +16,8 @@ import { ChatBubble } from '@/components/chat/ChatBubble'
 import { ChatInputBar } from '@/components/chat/ChatInputBar'
 import { InlineDictationControl } from '@/components/voice/InlineDictationControl'
 import { ProjectCommandDeck } from '@/components/agent/ProjectCommandDeck'
-import ToolApprovalDialog, { type PendingApproval } from '@/components/agent/ToolApprovalDialog'
+import ToolApprovalDialog from '@/components/agent/ToolApprovalDialog'
+import { useAgentApprovals } from '@/hooks/useAgentApprovals'
 import AgentToolsPanel from '@/components/agent/AgentToolsPanel'
 
 const AGENT_CAPABILITIES = [
@@ -36,6 +37,13 @@ export default function Agent() {
   const [sessions, setSessions] = useState<AgentSessionMeta[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [session, setSession] = useState<AgentSession | null>(null)
+  const { pending: pendingApprovals, respond: handleApprovalResponse } = useAgentApprovals(activeSessionId)
+  // Studio's chat panel attaches to whichever session the user was actually
+  // in here, rather than the most recently updated one (which would jump to
+  // whatever session an agent last wrote to).
+  useEffect(() => {
+    if (activeSessionId) localStorage.setItem('agentActiveSessionId', activeSessionId)
+  }, [activeSessionId])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [liveText, setLiveText] = useState('')
@@ -44,7 +52,6 @@ export default function Agent() {
   const [error, setError] = useState<string | null>(null)
   const [leadAgentProvider, setLeadAgentProvider] = useState<AppSettings['leadAgentProvider']>('claude')
   const [bypassPermissions, setBypassPermissions] = useState(false)
-  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([])
   const [showToolsPanel, setShowToolsPanel] = useState(false)
   const [hasActiveProject, setHasActiveProject] = useState(false)
 
@@ -142,16 +149,10 @@ export default function Agent() {
         syncLiveToolCalls()
       }
       setToolStatus(prev => ({ ...prev, [event.tool]: event.isError ? 'error' : 'done' }))
-    } else if (event.type === 'approval_request') {
-      // The run is genuinely paused server-side awaiting this — the SDK's
-      // canUseTool promise, or a worker tool's own await, is blocked until
-      // agentApprovalResponse is sent back. Queue rather than replace: the
-      // SDK can dispatch several tool calls concurrently in one turn (see
-      // buildWorkerTool's readOnlyHint comment), so more than one approval
-      // can be outstanding at once.
-      setPendingApprovals(prev =>
-        prev.some(a => a.requestId === event.requestId) ? prev : [...prev, event],
-      )
+      // approval_request is handled by useAgentApprovals via its own
+      // independent onAgentEvent subscription — Studio's chat panel needed
+      // the same handling and had none, which is why it lives in a shared
+      // hook rather than only here.
     } else if (event.type === 'done') {
       const persistedCalls = Array.from(toolCallsRef.current.values()).map(c => ({ ...c }))
       // SDK success results are occasionally an empty summary even though
@@ -165,11 +166,8 @@ export default function Agent() {
       setLiveText('')
       liveTextRef.current = ''
       setLiveToolCalls([])
-      // Any approval still queued belongs to a run that just ended — the
-      // main process already resolved it as denied (see denyAllPendingApprovals
-      // in main.ts's finally block), so clear the dialog rather than leave it
-      // showing a request that answering would silently do nothing for.
-      setPendingApprovals([])
+      // Any approval still queued for this run is cleared by
+      // useAgentApprovals itself on this same 'done' event.
       setSession(prev => {
         if (!prev || prev.entries.some(entry => entry.role === 'assistant' && entry.runId === runEvent.runId)) return prev
         const next = appendAgentTurn(prev, { role: 'assistant', content, toolCalls: persistedCalls, runId: runEvent.runId })
@@ -181,7 +179,7 @@ export default function Agent() {
       clearWatchdog()
       sendingRef.current = false
       setSending(false)
-      setPendingApprovals([])
+      // Cleared by useAgentApprovals itself on this same 'error' event.
       persistPartialRun(runEvent, event.message)
       setError(/maximum number of turns|reached max.*turn/i.test(event.message)
         ? 'Agent safety limit reached after 16 steps. Your completed tool work is saved; send “continue from the completed work” to resume safely.'
@@ -435,16 +433,6 @@ export default function Agent() {
   async function handleStop() {
     setError('Cancelling the Agent run…')
     await api.agentAbort().catch(() => setError('Could not cancel the Agent run. It may still be working.'))
-  }
-
-  function handleApprovalResponse(requestId: string, approved: boolean) {
-    // Drop it from the queue immediately rather than waiting on the IPC
-    // round trip: the run is blocked on this answer, so any delay here is
-    // felt directly as the dialog sitting there after a click.
-    setPendingApprovals(prev => prev.filter(a => a.requestId !== requestId))
-    api.agentApprovalResponse(requestId, approved).catch(() => {
-      setError('Could not deliver that approval decision. The Agent run may be stuck — stop it and retry.')
-    })
   }
 
   async function handleToggleBypass() {

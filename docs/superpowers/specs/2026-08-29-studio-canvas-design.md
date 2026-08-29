@@ -341,11 +341,40 @@ exactly one directory and refuses a non-UUID id.
 Tools: every write tool requests approval, no read tool does, `studio_screenshot`
 writes nothing to disk, unknown ids and presets are refused with real options.
 
-## Open questions
+## Export sizing
 
-Whether `printToPDF` reproduces an artboard's declared pixel size exactly is
-still unverified, and the measurement must include the PDF's own MediaBox
-rather than only its byte length — the first draft's spike measured bytes,
-which would not have answered the question it existed for. The spike runs
-before the exporter is built and covers square, landscape, and portrait
-artboards.
+The sizing question is resolved by the [measured result](#export-sizing-measured)
+below: set the offscreen window's content size after loading before capturing
+PNG, and preserve the PDF's raw MediaBox for precision-sensitive handling.
+
+## Export sizing (measured)
+
+Measured in the real Electron development app on 2026-08-29. The temporary
+probe created an offscreen `BrowserWindow` with `javascript: false`, loaded a
+zero-margin element at the requested size, then captured PNG and printed PDF.
+All cases reported `zoomFactor: 1`.
+
+| Case | Asked | PNG after `setContentSize` | `capturePage({ x: 0, y: 0, width, height })` after sizing | PDF MediaBox (points) | MediaBox as pixels |
+| --- | --- | --- | --- | --- | --- |
+| Square | 1080×1080 | 1080×1080 | 1080×1080 | `0 0 810 810` | `0 0 1080 1080` |
+| Landscape | 1280×720 | 1280×720 | 1280×720 | `0 0 960 540` | `0 0 1280 720` |
+| Portrait | 390×844 | 390×844 | 390×844 | `0 0 293.04001 633.12` | `0 0 391 844` |
+
+The initially constructed square window had a content size of 1080×852, so a
+plain `capturePage()` was clipped to 1080×852. Calling
+`win.setContentSize(width, height)` *after* the page has loaded changed it to
+1080×1080 and made both capture forms exact. The exporter must explicitly set
+the content size after loading before it captures; it must not rely on the
+constructor dimensions alone. Landscape and portrait did not need correction
+in this environment.
+
+PNG therefore matches every requested artboard after that sizing step. The
+PDF MediaBox matches square and landscape exactly. Portrait is nominally
+390.72×844.16 pixels before rounding, reported as 391×844 by the probe's
+nearest-pixel conversion; retain the raw MediaBox for any later precision
+handling rather than assuming a universal constant factor.
+
+`webContents.executeJavaScript('document.readyState')` failed in all three
+offscreen windows when `webPreferences.javascript` was `false` (Electron
+reported that the script failed to execute). Rendering readiness must use a
+non-page-JavaScript lifecycle signal such as `loadURL` completion.
