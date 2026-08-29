@@ -23,7 +23,7 @@
 - **Electron mocking in tests:** `vi.mock('electron', () => ({ app: { getPath: () => root } }))` before a dynamic `await import()`. See `electron/savedImages.test.ts`.
 - **Every filesystem path built from an agent- or renderer-supplied id must go through `studioPath()` (Task 1).** Never `join(documentsRoot(), id)` directly.
 - **Every document write must go through `writeDocumentHtml` (Task 5).** Never `writeFile` a `document.html` directly — writes are atomic and serialized.
-- **Offscreen render windows always disable JavaScript.** The HTML was written by a model; a static design has no reason to execute anything.
+- **Offscreen render windows run page JavaScript inside a sandbox**, with `sandbox: true`, `contextIsolation: true`, and `nodeIntegration: false`. Task 2's spike disproved the first draft's plan of disabling JavaScript outright: with `javascript: false`, `executeJavaScript` itself fails, so the font/image readiness check could not run and exports would silently use fallback faces. A sandboxed, context-isolated, Node-less window is the ordinary browser-tab security model and cannot reach the system.
 - **Artboard element contract**, fixed here so every module agrees:
   ```html
   <div class="fd-artboard" data-fd-id="a1" data-fd-name="Slide 1"
@@ -988,7 +988,15 @@ Expected: 12 tests pass.
 
 **[revised]** This module writes nothing. Splitting rendering from writing is what makes `studio_screenshot` genuinely read-only — the first draft had it call the exporter, so every look wrote a file into Downloads.
 
-Read Task 2's `## Export sizing (measured)` section first. If PNG or the MediaBox came back scaled, divide the window size by the recorded factor here.
+Read Task 2's `## Export sizing (measured)` section first. It already recorded two findings this
+code depends on: the content size must be set **after** `loadURL` or captures are clipped, and
+`javascript: false` breaks `executeJavaScript`, so the readiness check needs page JavaScript
+enabled in a sandbox. Both are applied below.
+
+The spike found no constant scale factor to correct for: PNG matched every requested size once
+the content size was set, and the PDF MediaBox matched square and landscape exactly (portrait
+is 390.72x844.16 before rounding). Do not add a correction factor that the measurement did not
+call for.
 
 - [ ] **Step 1: Write the implementation**
 
@@ -1036,7 +1044,12 @@ async function withOffscreen<T>(
     useContentSize: true,
     webPreferences: {
       offscreen: true,
-      javascript: false,
+      // Task 2's spike: with javascript:false, executeJavaScript itself
+      // fails, so the readiness check below cannot run and a late Google
+      // Font exports as the fallback face. Sandboxed + context-isolated +
+      // no Node is the ordinary browser-tab model; the page cannot reach
+      // the system.
+      javascript: true,
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -1044,8 +1057,11 @@ async function withOffscreen<T>(
   })
   try {
     await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
-    // javascript:false blocks the page's own scripts but not executeJavaScript,
-    // which is how the readiness check still runs.
+    // Task 2's spike: a window CONSTRUCTED at 1080x1080 reported a content
+    // size of 1080x852, and capturePage was clipped to it. Setting the
+    // content size after the load is what makes the captured pixels match
+    // the artboard's declared size.
+    win.setContentSize(Math.max(1, Math.round(width)), Math.max(1, Math.round(height)))
     await win.webContents.executeJavaScript(READY_SCRIPT).catch(() => {})
     return await run(win)
   } finally {
@@ -1084,7 +1100,9 @@ export async function renderArtboardPng(documentId: string, artboardId: string):
     throw new Error(`No artboard "${artboardId}". Real ids: ${boards.map(b => b.id).join(', ') || '(none)'}`)
   }
   const image = await withOffscreen(isolate(documentHtml, board), board.width, board.height,
-    win => win.webContents.capturePage())
+    // An explicit rect, measured exact in the spike, rather than trusting
+    // whatever the window currently believes its content size to be.
+    win => win.webContents.capturePage({ x: 0, y: 0, width: board.width, height: board.height }))
   return image.toPNG()
 }
 

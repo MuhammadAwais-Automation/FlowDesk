@@ -155,9 +155,18 @@ read/write boundary true rather than merely stated.
 
 Rendering happens in an offscreen `BrowserWindow` sized to the artboard, so
 exported pixels match the artboard's declared size rather than whatever zoom
-the visible canvas is at. That window has **JavaScript disabled** and no Node
-integration: the HTML it renders was written by a model, and a static design
-has no reason to execute anything.
+the visible canvas is at. That window runs page JavaScript inside a
+**sandbox** (`sandbox: true`, `contextIsolation: true`, `nodeIntegration:
+false`). Disabling JavaScript outright was the original intent and is not
+possible: the measured spike found that `javascript: false` also breaks
+`executeJavaScript`, so the readiness check below could not run and a late
+web font would export as the fallback face. A sandboxed, context-isolated,
+Node-less window is the ordinary browser-tab model and cannot reach the
+system.
+
+The window's content size is set **after** the page loads. The spike found a
+window constructed at 1080x1080 reporting a content size of 1080x852, which
+clipped the capture — constructor dimensions alone are not enough.
 
 Before capturing, rendering waits on `document.fonts.ready` and on every
 image having decoded, rather than a fixed sleep — a preset's Google Font
@@ -182,8 +191,10 @@ recursive delete, so ids are not trusted input:
   `studio-documents`, so neither `../` nor an absolute path can escape.
 - IPC handlers receive `unknown` and validate rather than trusting a declared
   TypeScript type, which the renderer cannot enforce at runtime.
-- Offscreen render windows run with JavaScript disabled, `nodeIntegration`
-  off, `contextIsolation` on, and `sandbox` on.
+- Offscreen render windows run with `nodeIntegration` off, `contextIsolation`
+  on, and `sandbox` on. Page JavaScript is enabled because the spike showed
+  `javascript: false` also disables `executeJavaScript` and therefore the
+  font-readiness check; the sandbox is what contains the page.
 
 **[revised]** The first draft built paths straight from the supplied id. The
 same validation already exists in `electron/savedImages.ts` for image
