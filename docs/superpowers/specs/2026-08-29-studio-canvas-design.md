@@ -330,14 +330,11 @@ exactly one directory and refuses a non-UUID id.
 Tools: every write tool requests approval, no read tool does, `studio_screenshot`
 writes nothing to disk, unknown ids and presets are refused with real options.
 
-## Open questions
+## Export sizing
 
-Whether `printToPDF` reproduces an artboard's declared pixel size exactly is
-still unverified, and the measurement must include the PDF's own MediaBox
-rather than only its byte length — the first draft's spike measured bytes,
-which would not have answered the question it existed for. The spike runs
-before the exporter is built and covers square, landscape, and portrait
-artboards.
+The sizing question is resolved by the [measured result](#export-sizing-measured)
+below: set the offscreen window's content size after loading before capturing
+PNG, and preserve the PDF's raw MediaBox for precision-sensitive handling.
 
 ## Export sizing (measured)
 
