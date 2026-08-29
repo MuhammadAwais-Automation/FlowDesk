@@ -75,6 +75,20 @@ import { orderBrowserAccounts } from './agent/accountFailover'
 import * as agentSessions from './agentSessionStore'
 import { buildCatchUp } from '../src/lib/agentCatchUp'
 import { runAgentTurn, type AgentStreamEvent } from './agent/leadAgent'
+import { waStatus, waListChats, waListMessages, waSend } from './whatsapp'
+import { runJarvisTurn } from './jarvis/jarvisService'
+import { createLivekitToken } from './jarvis/jarvisToken'
+import {
+  notebooklmStatus, notebooklmDoctor, notebooklmLogin, notebooklmSelectAccount,
+  notebooklmGetActiveProfile, notebooklmDownloadArtifact, normalizeArtifactKind,
+  notebooklmStartChatStream, notebooklmCancelChatStream,
+  type NotebookLMSourceInput, type NotebookLMArtifactRequest,
+} from './notebooklm'
+import { notebooklmServiceState, startNotebookLMService } from './notebooklmService'
+import { getNativeNotebookCapability, openNativeNotebook, closeNativeNotebook } from './notebooklmNative'
+import { notebookCapabilities, type StartResearchInput, type GenerateArtifactInput } from './notebooklmCapabilities'
+import { NotebookJobQueue, type NotebookJob } from './notebooklmJobs'
+import { configureNotebookJobRuntime } from './notebooklmJobRuntime'
 import { recordProviderUsage, type ProviderLimits } from './providerUsage'
 import { alwaysApprove, type RequestApproval } from './agent/approval'
 
@@ -1161,6 +1175,153 @@ ipcMain.handle('project:setActive', (_e, id: unknown) => {
   )
 })
 
+// ─────────────────────────────────────────────────────────────────
+// IPC: NotebookLM — thin wrappers over notebooklm.ts and the job queue.
+//
+// Almost every handler is a direct pass-through: notebookCapabilities
+// already prefers the local REST sidecar and falls back to the CLI worker,
+// so routing decisions belong there rather than being duplicated here.
+// ─────────────────────────────────────────────────────────────────
+
+const notebookJobQueue = new NotebookJobQueue(
+  {
+    get: () => (store.get('notebooklmJobs' as never) as NotebookJob[] | undefined),
+    set: (_key, value) => store.set('notebooklmJobs' as never, value as never),
+  },
+  notebookCapabilities,
+  () => (store.get('notebooklmAccount' as never) as string | null) ?? null,
+)
+configureNotebookJobRuntime(notebookJobQueue)
+
+function flowDeskGoogleAccounts() {
+  return (store.get('gmailSessions') as GmailSession[]).map(({ email, partition }) => ({ email, partition }))
+}
+
+function notebooklmAccountEmail(): string | null {
+  return (store.get('notebooklmAccount' as never) as string | null) ?? null
+}
+
+ipcMain.handle('notebooklm:status', () => notebooklmStatus())
+ipcMain.handle('notebooklm:serviceStatus', () => notebooklmServiceState())
+ipcMain.handle('notebooklm:doctor', () => notebooklmDoctor())
+ipcMain.handle('notebooklm:login', (_e, browser?: 'chromium' | 'chrome' | 'msedge') => notebooklmLogin(browser))
+
+ipcMain.handle('notebooklm:selectAccount', async (_e, email: string | null) => {
+  const next = typeof email === 'string' && email ? email : null
+  store.set('notebooklmAccount' as never, next as never)
+  notebooklmSelectAccount(next)
+  // The sidecar holds a per-profile browser session, so it has to be
+  // restarted against the new profile rather than reused.
+  return startNotebookLMService(notebooklmGetActiveProfile())
+})
+
+ipcMain.handle('notebooklm:nativeStatus', () => getNativeNotebookCapability(notebooklmAccountEmail(), flowDeskGoogleAccounts()))
+ipcMain.handle('notebooklm:openNative', () => openNativeNotebook(notebooklmAccountEmail(), flowDeskGoogleAccounts()))
+ipcMain.handle('notebooklm:closeNative', () => closeNativeNotebook())
+
+ipcMain.handle('notebooklm:listNotebooks', () => notebookCapabilities.listNotebooks())
+ipcMain.handle('notebooklm:createNotebook', (_e, title: string) => notebookCapabilities.createNotebook({ title }))
+ipcMain.handle('notebooklm:addSource', (_e, input: NotebookLMSourceInput) => notebookCapabilities.addSource(input))
+ipcMain.handle('notebooklm:listSources', (_e, notebookId: string) => notebookCapabilities.listSources(notebookId))
+ipcMain.handle('notebooklm:sourceCounts', (_e, notebookIds: string[]) => notebookCapabilities.getSourceCounts(notebookIds))
+ipcMain.handle('notebooklm:startResearch', (_e, notebookId: string, query: string, mode?: 'fast' | 'deep') =>
+  notebookCapabilities.startResearch({ notebookId, query, ...(mode ? { mode } : {}) }))
+ipcMain.handle('notebooklm:researchStatus', (_e, notebookId: string) => notebookCapabilities.researchStatus(notebookId))
+ipcMain.handle('notebooklm:ask', (_e, notebookId: string, question: string) => notebookCapabilities.ask({ notebookId, question }))
+ipcMain.handle('notebooklm:listArtifacts', (_e, notebookId: string) => notebookCapabilities.listArtifacts(notebookId))
+ipcMain.handle('notebooklm:generateArtifact', (_e, request: NotebookLMArtifactRequest) => notebookCapabilities.generateArtifact(request))
+ipcMain.handle('notebooklm:downloadArtifact', (_e, notebookId: string, kind: string, artifactId?: string) =>
+  notebooklmDownloadArtifact(notebookId, normalizeArtifactKind(kind), artifactId))
+ipcMain.handle('notebooklm:manage', (_e, action: string, payload?: { notebookId?: string; args?: string[] }) =>
+  notebookCapabilities.manage(action, payload))
+
+ipcMain.handle('notebooklm:chatStream:start', (_e, notebookId: string, question: string, requestId?: string) =>
+  notebooklmStartChatStream(
+    notebookId,
+    question,
+    event => mainWindow?.webContents.send('notebooklm:chatStream:event', event),
+    requestId,
+  ))
+ipcMain.handle('notebooklm:chatStream:cancel', (_e, streamId: string) => notebooklmCancelChatStream(streamId))
+
+ipcMain.handle('notebooklm:jobs:list', (_e, notebookId?: string) => notebookJobQueue.list(notebookId))
+ipcMain.handle('notebooklm:jobs:research', (_e, input: StartResearchInput) => notebookJobQueue.startResearch(input))
+ipcMain.handle('notebooklm:jobs:artifact', (_e, input: GenerateArtifactInput) => notebookJobQueue.generateArtifact(input))
+ipcMain.handle('notebooklm:jobs:refresh', (_e, id: string) => notebookJobQueue.refresh(id))
+ipcMain.handle('notebooklm:jobs:cancel', (_e, id: string) => notebookJobQueue.cancel(id))
+ipcMain.handle('notebooklm:jobs:retry', (_e, id: string) => notebookJobQueue.retry(id))
+
+// ─────────────────────────────────────────────────────────────────
+// IPC: WhatsApp — thin wrappers. Every one of these refuses cleanly when
+// WhatsApp Web is not open, so no readiness check is needed here.
+// ─────────────────────────────────────────────────────────────────
+
+ipcMain.handle('whatsapp:status', () => waStatus())
+ipcMain.handle('whatsapp:listChats', (_e, limit?: number, onlyUnread?: boolean) => waListChats(limit, onlyUnread))
+ipcMain.handle('whatsapp:listMessages', (_e, chatId: string, limit?: number) => waListMessages(chatId, limit))
+ipcMain.handle('whatsapp:send', (_e, chatId: string, text: string) => waSend(chatId, text))
+
+// ─────────────────────────────────────────────────────────────────
+// IPC: Jarvis — voice turn against Gemini, plus a LiveKit room token.
+// ─────────────────────────────────────────────────────────────────
+
+let currentJarvisAbort: AbortController | null = null
+
+ipcMain.handle('jarvis:generateToken', async (_e, input?: { roomName?: string; participantIdentity?: string; participantName?: string }) => {
+  const jarvis = ((store.get('settings') as Partial<AppSettings>) || {}).jarvisSettings
+  const identity = input?.participantIdentity || `flowdesk-${randomUUID().slice(0, 8)}`
+  const token = await createLivekitToken({
+    apiKey: jarvis?.livekitApiKey ?? '',
+    apiSecret: jarvis?.livekitApiSecret ?? '',
+    roomName: input?.roomName || 'flowdesk-jarvis',
+    participantIdentity: identity,
+    ...(input?.participantName ? { participantName: input.participantName } : {}),
+  })
+  return { token, url: jarvis?.livekitUrl ?? '', identity }
+})
+
+ipcMain.handle('jarvis:sendMessage', async (_e, input: { messages?: unknown; runId?: unknown }) => {
+  const messages = Array.isArray(input?.messages) ? input.messages as Array<{ role: 'user' | 'assistant' | 'system'; content: string }> : []
+  if (messages.length === 0) throw new Error('Jarvis needs at least one message.')
+
+  currentJarvisAbort?.abort()
+  const abortController = new AbortController()
+  currentJarvisAbort = abortController
+
+  const settings = (store.get('settings') as Partial<AppSettings>) || {}
+  const leadAgentProvider: AppSettings['leadAgentProvider'] =
+    settings.leadAgentProvider === 'codex' ? 'codex'
+    : settings.leadAgentProvider === 'antigravity' ? 'antigravity'
+    : 'claude'
+  const { projects, activeProjectId } = projectSnapshot()
+  const activeProject = projects.find(project => project.id === activeProjectId)
+
+  try {
+    return await runJarvisTurn({
+      apiKey: settings.jarvisSettings?.geminiApiKey ?? '',
+      messages,
+      abortController,
+      leadAgentProvider,
+      // The user configures these in Jarvis Settings; ignoring them here
+      // would silently override their choice with the service defaults.
+      ...(settings.jarvisSettings?.model ? { model: settings.jarvisSettings.model } : {}),
+      ...(settings.jarvisSettings?.voiceName ? { voiceName: settings.jarvisSettings.voiceName } : {}),
+      ...(settings.jarvisSettings?.systemPrompt ? { systemPrompt: settings.jarvisSettings.systemPrompt } : {}),
+      ...(activeProject
+        ? { projectRuntime: { rootPath: activeProject.rootPath, confirm: async () => true } }
+        : {}),
+      onProgress: (event: unknown) => mainWindow?.webContents.send('jarvis:event', event),
+    })
+  } finally {
+    if (currentJarvisAbort === abortController) currentJarvisAbort = null
+  }
+})
+
+ipcMain.handle('jarvis:abort', () => {
+  currentJarvisAbort?.abort()
+  currentJarvisAbort = null
+})
+
 ipcMain.handle('agent:getRunState', () => agentRunSnapshot())
 
 ipcMain.handle('agent:approvalResponse', (_e, requestId: unknown, approved: unknown) => {
@@ -1696,6 +1857,10 @@ app.whenReady().then(async () => {
   // A run cannot survive a restart, so one still marked running was
   // interrupted. Agent.tsx looks for exactly this to tell the user their
   // turn died rather than leaving a spinner up forever.
+  // Opt-in REST sidecar for NotebookLM; it supervises itself and the
+  // capability layer falls back to the CLI worker if it never comes up.
+  void startNotebookLMService(notebooklmGetActiveProfile())
+
   const previousRun = agentRunSnapshot()
   if (previousRun.status === 'running') finishAgentRun('interrupted')
 
