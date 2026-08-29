@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, session, shell, Menu, Tray, nativeImage, crashReporter, nativeTheme, protocol, net } from 'electron'
+import { app, BrowserWindow, ipcMain, globalShortcut, session, shell, Menu, Tray, nativeImage, crashReporter, nativeTheme, protocol, net, dialog } from 'electron'
 import { randomUUID } from 'crypto'
 import { deflateSync } from 'zlib'
-import { mkdir, writeFile } from 'fs/promises'
+import { mkdir, writeFile, copyFile } from 'fs/promises'
 import { pathToFileURL } from 'url'
 
 // Initializes Crashpad so Windows dev runs are less likely to log "not connected" (harmless Chromium noise otherwise).
@@ -59,7 +59,7 @@ interface PromptCategory {
   color: string
 }
 
-import { join } from 'path'
+import { join, basename } from 'path'
 import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView } from './sessions'
 import { injectPrompt, getLatestAssistantText, getSelectedText, type AITool } from './injector'
@@ -74,7 +74,8 @@ import { configureBrowserWorkerQueue, notifyCaptureComplete, workerProgress } fr
 import { orderBrowserAccounts } from './agent/accountFailover'
 import * as agentSessions from './agentSessionStore'
 import { buildCatchUp } from '../src/lib/agentCatchUp'
-import { runAgentTurn } from './agent/leadAgent'
+import { runAgentTurn, type AgentStreamEvent } from './agent/leadAgent'
+import { alwaysApprove, type RequestApproval } from './agent/approval'
 
 // @anthropic-ai/claude-agent-sdk (electron/claudeSdkProvider.ts, currently
 // unused pending the multi-agent orchestrator section) auths via the local
@@ -431,6 +432,35 @@ ipcMain.handle('gmail:updateColor', (_e, email: string, color: string) => {
 
 ipcMain.handle('gmail:openInbox', (_e, tabId: string, partition: string) => {
   showView(tabId, partition, 'https://mail.google.com')
+})
+
+/**
+ * Which added Google account the agent's browser-worker tools use.
+ *
+ * Without it browserWorkerQueue always took gmailSessions[0], so once that
+ * first account hit a provider's usage limit every worker call kept failing
+ * against it, with no way to point the agent at a still-usable account short
+ * of removing accounts to change the array order. Null means "use the first",
+ * preserving the old behaviour for anyone who never sets it.
+ */
+ipcMain.handle('gmail:getAgentAccount', () => (store.get('agentBrowserAccountEmail' as never) as string | null) ?? null)
+
+ipcMain.handle('gmail:setAgentAccount', (_e, email: unknown) => {
+  store.set('agentBrowserAccountEmail' as never, (typeof email === 'string' && email ? email : null) as never)
+})
+
+/** Save-As for a flowdesk-image:// URL. Resolves false when the user cancels. */
+ipcMain.handle('image:download', async (_e, url: unknown) => {
+  if (typeof url !== 'string') return false
+  const fileName = decodeURIComponent(new URL(url).hostname || new URL(url).pathname.replace(/^\/+/, ''))
+  const sourcePath = join(generatedImagesDir, fileName)
+  // basename above already collapses any traversal, but the images directory
+  // is the only place this may ever read from, so the check is explicit.
+  if (!sourcePath.startsWith(generatedImagesDir)) return false
+  const result = await dialog.showSaveDialog({ defaultPath: join(app.getPath('downloads'), fileName) })
+  if (result.canceled || !result.filePath) return false
+  await copyFile(sourcePath, result.filePath)
+  return true
 })
 
 ipcMain.handle('gmail:remove', (_e, email: string) => {
@@ -955,22 +985,216 @@ ipcMain.handle('agentSession:delete', (_e, id: string) => agentSessions.deleteSe
 
 let currentAgentAbort: AbortController | null = null
 
+/**
+ * Durable run state for the Agent, and the approval gate that goes with it.
+ *
+ * The renderer does not merely display a live stream: it reconnects to one.
+ * `Agent.tsx` calls agentGetRunState on mount and replays anything it missed
+ * while unmounted, matching on runId/sessionId and a monotonic sequence, so
+ * every event has to be numbered and persisted rather than fired and
+ * forgotten. Approvals need the same durability for a different reason — the
+ * agent is blocked on the answer, so a reload while a dialog is open must
+ * not strand the turn forever.
+ */
+interface AgentRunEventRecord {
+  sequence: number
+  runId: string
+  sessionId: string
+  event: AgentStreamEvent
+  createdAt: string
+}
+
+interface AgentRunStateRecord {
+  runId: string | null
+  sessionId: string | null
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+  startedAt: string | null
+  updatedAt: string | null
+  events: AgentRunEventRecord[]
+}
+
+const IDLE_AGENT_RUN: AgentRunStateRecord = {
+  runId: null, sessionId: null, status: 'idle', startedAt: null, updatedAt: null, events: [],
+}
+
+// Replay only has to cover a reload, not a whole conversation, and the
+// transcript in agentSessionStore is the durable record of what was said.
+const MAX_REPLAY_EVENTS = 400
+
+function agentRunSnapshot(): AgentRunStateRecord {
+  const raw = store.get('agentRunState' as never) as AgentRunStateRecord | undefined
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.events)) return IDLE_AGENT_RUN
+  return raw
+}
+
+function setAgentRunState(next: AgentRunStateRecord): void {
+  store.set('agentRunState' as never, next as never)
+}
+
+function publishAgentEvent(runId: string, sessionId: string, event: AgentStreamEvent): void {
+  const current = agentRunSnapshot()
+  const record: AgentRunEventRecord = {
+    sequence: (current.events.at(-1)?.sequence ?? 0) + 1,
+    runId,
+    sessionId,
+    event,
+    createdAt: new Date().toISOString(),
+  }
+  const events = [...current.events, record].slice(-MAX_REPLAY_EVENTS)
+  setAgentRunState({ ...current, runId, sessionId, updatedAt: record.createdAt, events })
+  mainWindow?.webContents.send('agent:event', record)
+}
+
+function finishAgentRun(status: AgentRunStateRecord['status']): void {
+  const current = agentRunSnapshot()
+  setAgentRunState({ ...current, status, updatedAt: new Date().toISOString() })
+}
+
+const pendingApprovals = new Map<string, (approved: boolean) => void>()
+
+/** Denies everything still waiting. A turn that has ended must never leave a promise unresolved. */
+function denyAllPendingApprovals(): void {
+  for (const resolve of pendingApprovals.values()) resolve(false)
+  pendingApprovals.clear()
+}
+
+function makeRequestApproval(runId: string, sessionId: string, bypassPermissions: boolean): RequestApproval {
+  if (bypassPermissions) return alwaysApprove
+  return (info) => new Promise<boolean>(resolve => {
+    const requestId = randomUUID()
+    pendingApprovals.set(requestId, resolve)
+    publishAgentEvent(runId, sessionId, {
+      type: 'approval_request',
+      requestId,
+      tool: info.tool,
+      title: info.title,
+      ...(info.detail ? { detail: info.detail } : {}),
+      ...(info.input ? { input: info.input } : {}),
+    })
+  })
+}
+
+/**
+ * Projects: the folder the agent is allowed to read and write in.
+ *
+ * Stored rather than derived because the boundary has to outlive a restart —
+ * projectTools.ts refuses any path outside the active project's rootPath, so
+ * losing this would silently widen or remove that boundary.
+ */
+interface ProjectSessionRecord {
+  id: string
+  title: string
+  rootPath: string
+  createdAt: string
+  lastOpenedAt: string
+}
+
+function projectSnapshot(): { projects: ProjectSessionRecord[]; activeProjectId: string | null } {
+  const projects = (store.get('projects' as never) as ProjectSessionRecord[] | undefined) ?? []
+  const activeProjectId = (store.get('activeProjectId' as never) as string | null | undefined) ?? null
+  return { projects, activeProjectId }
+}
+
+function saveProjects(projects: ProjectSessionRecord[], activeProjectId: string | null) {
+  store.set('projects' as never, projects as never)
+  store.set('activeProjectId' as never, activeProjectId as never)
+  return { projects, activeProjectId }
+}
+
+ipcMain.handle('project:list', () => projectSnapshot())
+
+ipcMain.handle('project:chooseFolder', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Choose a project folder',
+  })
+  if (result.canceled || !result.filePaths[0]) return null
+  const rootPath = result.filePaths[0]
+  const { projects } = projectSnapshot()
+  // Re-choosing a folder already tracked reopens it instead of creating a
+  // duplicate entry pointing at the same directory.
+  const existing = projects.find(project => project.rootPath === rootPath)
+  const now = new Date().toISOString()
+  if (existing) {
+    return saveProjects(
+      projects.map(project => project.id === existing.id ? { ...project, lastOpenedAt: now } : project),
+      existing.id,
+    )
+  }
+  const created: ProjectSessionRecord = {
+    id: randomUUID(),
+    title: basename(rootPath) || rootPath,
+    rootPath,
+    createdAt: now,
+    lastOpenedAt: now,
+  }
+  return saveProjects([...projects, created], created.id)
+})
+
+ipcMain.handle('project:create', async (_e, title: unknown) => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Choose a folder for this project',
+  })
+  if (result.canceled || !result.filePaths[0]) return null
+  const rootPath = result.filePaths[0]
+  const now = new Date().toISOString()
+  const created: ProjectSessionRecord = {
+    id: randomUUID(),
+    title: typeof title === 'string' && title.trim() ? title.trim() : basename(rootPath) || rootPath,
+    rootPath,
+    createdAt: now,
+    lastOpenedAt: now,
+  }
+  const { projects } = projectSnapshot()
+  return saveProjects([...projects, created], created.id)
+})
+
+ipcMain.handle('project:setActive', (_e, id: unknown) => {
+  const { projects } = projectSnapshot()
+  if (typeof id !== 'string' || !projects.some(project => project.id === id)) return projectSnapshot()
+  const now = new Date().toISOString()
+  return saveProjects(
+    projects.map(project => project.id === id ? { ...project, lastOpenedAt: now } : project),
+    id,
+  )
+})
+
+ipcMain.handle('agent:getRunState', () => agentRunSnapshot())
+
+ipcMain.handle('agent:approvalResponse', (_e, requestId: unknown, approved: unknown) => {
+  if (typeof requestId !== 'string') return false
+  const resolve = pendingApprovals.get(requestId)
+  if (!resolve) return false
+  pendingApprovals.delete(requestId)
+  resolve(approved === true)
+  return true
+})
+
 ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessionId?: unknown; runId?: unknown } | string) => {
   const prompt = typeof input === 'string' ? input : typeof input?.prompt === 'string' ? input.prompt : ''
   const sessionId = typeof input === 'string' ? 'legacy-agent-session' : typeof input?.sessionId === 'string' ? input.sessionId : 'legacy-agent-session'
+  const runId = typeof input === 'string' || typeof input?.runId !== 'string' ? randomUUID() : input.runId
   if (!prompt.trim() || !sessionId) {
     throw new Error('Agent run needs a prompt and session id.')
   }
   currentAgentAbort?.abort()
+  denyAllPendingApprovals()
   const abortController = new AbortController()
   currentAgentAbort = abortController
+
+  // A fresh run starts an empty event log: replay is for reconnecting to
+  // THIS run, and carrying the previous run's events over would make the
+  // renderer replay a conversation it has already rendered.
+  const startedAt = new Date().toISOString()
+  setAgentRunState({ runId, sessionId, status: 'running', startedAt, updatedAt: startedAt, events: [] })
 
   // browserWorkerQueue's heartbeat (see its own comment) is the only signal
   // the renderer gets while a slow provider is mid-wait — the SDK's own
   // tool_progress never fires for these custom tools. Forward each tick as
   // a tool_progress-shaped agent:event for the duration of this turn only.
   const onWorkerProgress = (data: { tool: string; elapsedSeconds: number }) => {
-    mainWindow?.webContents.send('agent:event', { type: 'tool_progress', toolUseId: data.tool, tool: data.tool, elapsedSeconds: data.elapsedSeconds })
+    publishAgentEvent(runId, sessionId, { type: 'tool_progress', toolUseId: data.tool, tool: data.tool, elapsedSeconds: data.elapsedSeconds })
   }
   workerProgress.on('progress', onWorkerProgress)
 
@@ -1001,13 +1225,28 @@ ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessio
     if (catchUp) promptToSend = `${catchUp}\n\n${prompt}`
   }
 
+  const bypassPermissions = configuredSettings.agentBypassPermissions === true
+  const requestApproval = makeRequestApproval(runId, sessionId, bypassPermissions)
+
+  // Without this the agent's project_* tools have no root to work in, so
+  // every file action refuses. Approval routes through the same in-app
+  // dialog as everything else rather than a native popup.
+  const { projects, activeProjectId } = projectSnapshot()
+  const activeProject = projects.find(project => project.id === activeProjectId)
+  const projectRuntime = activeProject
+    ? {
+        rootPath: activeProject.rootPath,
+        confirm: (title: string, detail: string) => requestApproval({ tool: 'project_action', title, detail }),
+      }
+    : undefined
+
   let providerSessionId: string | null = null
   let finalText = ''
   const pendingToolCalls = new Map<string, agentSessions.AgentToolCallEntry>()
   try {
     for await (const event of runAgentTurn(
-      promptToSend, abortController, undefined, leadAgentProvider,
-      undefined, undefined, { resumeSessionId },
+      promptToSend, abortController, projectRuntime, leadAgentProvider,
+      requestApproval, bypassPermissions, { resumeSessionId },
     )) {
       if (event.type === 'provider_session') providerSessionId = event.id
       if (event.type === 'done') finalText = event.text
@@ -1021,7 +1260,7 @@ ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessio
           existing.isError = event.isError
         }
       }
-      mainWindow?.webContents.send('agent:event', event)
+      publishAgentEvent(runId, sessionId, event)
     }
     await agentSessions.appendTurn(sessionId, {
       role: 'assistant',
@@ -1045,9 +1284,19 @@ ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessio
         })
       }
     }
+    finishAgentRun(abortController.signal.aborted ? 'cancelled' : 'completed')
+  } catch (error) {
+    // Reported through the same numbered channel the renderer replays, so a
+    // failure is visible after a reload rather than looking like a hang.
+    publishAgentEvent(runId, sessionId, {
+      type: 'error',
+      message: error instanceof Error ? error.message : String(error),
+    })
+    finishAgentRun(abortController.signal.aborted ? 'cancelled' : 'failed')
   } finally {
     workerProgress.off('progress', onWorkerProgress)
     if (currentAgentAbort === abortController) currentAgentAbort = null
+    denyAllPendingApprovals()
   }
   return true
 })
@@ -1055,6 +1304,8 @@ ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessio
 ipcMain.handle('agent:abort', async () => {
   currentAgentAbort?.abort()
   currentAgentAbort = null
+  denyAllPendingApprovals()
+  finishAgentRun('cancelled')
 })
 
 // ─────────────────────────────────────────────────────────────────
@@ -1433,6 +1684,12 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  // A run cannot survive a restart, so one still marked running was
+  // interrupted. Agent.tsx looks for exactly this to tell the user their
+  // turn died rather than leaving a spinner up forever.
+  const previousRun = agentRunSnapshot()
+  if (previousRun.status === 'running') finishAgentRun('interrupted')
+
   await migrateLegacyAgentSession().catch(error => console.log('[FlowDesk agent] session migration skipped:', error))
   createWindow()
   // Apply persisted settings on startup (tray, etc.)
