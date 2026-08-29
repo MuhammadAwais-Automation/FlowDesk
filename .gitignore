@@ -49,6 +49,7 @@ supabase/.temp
 
 # Superpowers internal
 .superpowers/
+.worktrees/
 
 # Local Graphify knowledge graph
 graphify-out/
