@@ -1,0 +1,277 @@
+/**
+ * Main-process access to the WhatsApp bridge.
+ *
+ * Shared deliberately: both the IPC handlers (renderer/UI) and the Agent tool
+ * layer need exactly these calls, and having each build its own
+ * executeJavaScript strings would mean two places to fix when the bridge
+ * changes — and one of them silently drifting.
+ *
+ * Everything here evaluates inside the live WhatsApp page. See
+ * whatsappInject.ts for why that is the only place the data is readable at
+ * all: the wire carries Noise-encrypted binary, so the page's own decrypted
+ * store is the interception point.
+ */
+
+import { writeFile, mkdir, readFile, stat } from 'node:fs/promises'
+import { basename, extname, join } from 'node:path'
+import { app } from 'electron'
+import { getWhatsAppView } from './sessions'
+
+export interface WhatsAppResult {
+  ok: boolean
+  error?: string
+  [key: string]: unknown
+}
+
+/**
+ * The one failure every call shares is the view not being open. Reported as a
+ * plain, actionable result rather than a thrown error, because the usual
+ * caller is an agent that has to decide what to do next — and "not open" is a
+ * normal state it can act on, not an exception.
+ */
+async function call(expr: string): Promise<WhatsAppResult> {
+  const view = getWhatsAppView()
+  if (!view) {
+    return { ok: false, error: 'WhatsApp is not open. Open the Social page in FlowDesk and sign in, then retry.' }
+  }
+  try {
+    const res = await view.webContents.executeJavaScript(expr)
+    if (res && typeof res === 'object') return res as WhatsAppResult
+    return { ok: false, error: `bridge returned a non-object: ${String(res)}` }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export function waStatus(): Promise<WhatsAppResult> {
+  return call('window.__fdWaStatus()')
+}
+
+export function waListChats(limit?: number, onlyUnread?: boolean): Promise<WhatsAppResult> {
+  return call(`window.__fdWaListChats(${JSON.stringify({ limit, onlyUnread })})`)
+}
+
+export function waListMessages(chatId: string, limit?: number): Promise<WhatsAppResult> {
+  return call(`window.__fdWaListMessages(${JSON.stringify(chatId)}, ${JSON.stringify(limit ?? 20)})`)
+}
+
+export function waSearchContacts(query: string): Promise<WhatsAppResult> {
+  return call(`window.__fdWaChats(${JSON.stringify(query ?? '')})`)
+}
+
+export function waSend(chatId: string, text: string): Promise<WhatsAppResult> {
+  return call(`window.__fdWaSend(${JSON.stringify(chatId)}, ${JSON.stringify(text)})`)
+}
+
+export function waDeleteMessage(chatId: string, msgId: string, forEveryone: boolean): Promise<WhatsAppResult> {
+  return call(`window.__fdWaDeleteMessage(${JSON.stringify(chatId)}, ${JSON.stringify(msgId)}, ${JSON.stringify(!!forEveryone)})`)
+}
+
+const MIME_EXT: Record<string, string> = {
+  'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/aac': 'aac',
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+  'video/mp4': 'mp4', 'video/webm': 'webm', 'application/pdf': 'pdf',
+}
+
+/**
+ * Download one media message and write it to disk, returning the path.
+ *
+ * The bytes come back from the page as base64 because that is what survives
+ * an executeJavaScript round trip — but base64 is not what a caller wants to
+ * be handed. An agent asked to "listen to that voice note" needs a real file
+ * it can pass to a transcriber, so the encoding stays an implementation
+ * detail and the tool returns a path.
+ */
+/**
+ * Attachments the page can actually take.
+ *
+ * WhatsApp itself accepts far larger files, but every byte here crosses into
+ * the page as base64 inside an evaluated script. This is the point where a
+ * too-large file is refused with a number the user can act on, rather than
+ * becoming a hung renderer or an out-of-memory failure with no explanation.
+ */
+export const MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024
+
+/** Bytes per staged chunk, before base64 expands them by a third. */
+const CHUNK_BYTES = 512 * 1024
+
+/**
+ * Mimetype from the file extension.
+ *
+ * Deliberately a small table rather than a dependency. It only has to cover
+ * what changes WhatsApp's own behaviour: images and video get rendered inline,
+ * audio becomes a playable clip, and everything else is a document either way.
+ * An unknown extension falls back to a generic type and is sent as a document,
+ * which is the outcome that cannot be wrong.
+ */
+const MIME_BY_EXTENSION: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.json': 'application/json',
+  '.zip': 'application/zip',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+}
+
+export function mimetypeFor(filePath: string): string {
+  return MIME_BY_EXTENSION[extname(filePath).toLowerCase()] ?? 'application/octet-stream'
+}
+
+/**
+ * Whether a file should travel as a document rather than as media.
+ *
+ * Anything WhatsApp cannot render inline is a document — that is not a
+ * preference, it is what the outward type means. Callers can force a document
+ * for something renderable (sending a photo as a file so it keeps its original
+ * quality and name), but they cannot force the reverse, because asking
+ * WhatsApp to render a .zip as a photo has no meaning.
+ */
+export function shouldSendAsDocument(mimetype: string, asDocument?: boolean): boolean {
+  if (asDocument) return true
+  return !/^(image|video|audio)\//.test(mimetype)
+}
+
+/**
+ * Sends one file to one chat.
+ *
+ * The route inside the page (createFromData -> prepRawMedia -> waitForPrep ->
+ * sendToChat) was found by probing the live page and verified end to end
+ * against a real chat before this was written: a document arrived with its
+ * filename and byte count intact, and an image arrived as an image.
+ *
+ * Approval happens in the tool layer above this — the only place that can show
+ * the user the recipient, the file and its size, and get a real answer.
+ */
+export async function waSendFile(
+  chatId: string,
+  filePath: string,
+  caption?: string,
+  asDocument?: boolean,
+): Promise<WhatsAppResult> {
+  const view = getWhatsAppView()
+  if (!view) {
+    return { ok: false, error: 'WhatsApp is not open. Open the Social page in FlowDesk and sign in, then retry.' }
+  }
+
+  let bytes: Buffer
+  let size: number
+  try {
+    const info = await stat(filePath)
+    if (!info.isFile()) return { ok: false, error: `${filePath} is not a file` }
+    size = info.size
+    if (size === 0) return { ok: false, error: 'refusing to send an empty file' }
+    if (size > MAX_ATTACHMENT_BYTES) {
+      return {
+        ok: false,
+        error: `${filePath} is ${(size / 1024 / 1024).toFixed(1)}MB; the limit for sending through FlowDesk is ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB`,
+      }
+    }
+    bytes = await readFile(filePath)
+  } catch (e) {
+    return { ok: false, error: `could not read ${filePath}: ${e instanceof Error ? e.message : String(e)}` }
+  }
+
+  const filename = basename(filePath)
+  const mimetype = mimetypeFor(filePath)
+  const token = `fd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+  const webContents = view.webContents
+  try {
+    for (let offset = 0; offset < bytes.length; offset += CHUNK_BYTES) {
+      const chunk = bytes.subarray(offset, offset + CHUNK_BYTES).toString('base64')
+      const staged = await webContents.executeJavaScript(
+        `window.__fdWaStageChunk(${JSON.stringify(token)}, ${JSON.stringify(chunk)}, ${JSON.stringify(mimetype)})`,
+      ) as { ok?: boolean; error?: string }
+      if (!staged?.ok) {
+        return { ok: false, error: `staging the file failed: ${staged?.error ?? 'unknown error'}` }
+      }
+    }
+
+    return await webContents.executeJavaScript(
+      `window.__fdWaSendFile(${JSON.stringify(chatId)}, ${JSON.stringify({
+        token,
+        mimetype,
+        filename,
+        caption: caption || undefined,
+        asDocument: shouldSendAsDocument(mimetype, asDocument),
+        // Checked inside the page before anything is sent. A lost chunk would
+        // otherwise deliver a silently truncated file, which looks like a
+        // successful send from every side.
+        expectedBytes: size,
+      })})`,
+    ) as WhatsAppResult
+  } catch (e) {
+    // Staged bytes are a copy of the user's file sitting in page memory. If
+    // the send never got far enough to clear them itself, clear them here.
+    try { await webContents.executeJavaScript(`window.__fdWaDiscardFile(${JSON.stringify(token)})`) } catch { /* view gone */ }
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export async function waDownloadMedia(chatId: string, msgId: string): Promise<WhatsAppResult> {
+  const res = await call(`window.__fdWaDownloadMedia(${JSON.stringify(chatId)}, ${JSON.stringify(msgId)})`)
+  if (!res.ok) return res
+
+  const base64 = res.base64 as string | undefined
+  if (!base64) return { ok: false, error: 'bridge returned no bytes' }
+
+  const mimetype = (res.mimetype as string | null) ?? ''
+  // Strip codec parameters: WhatsApp reports voice notes as
+  // "audio/ogg; codecs=opus", which is not a lookup key.
+  const baseMime = mimetype.split(';')[0].trim()
+  const ext = MIME_EXT[baseMime] ?? 'bin'
+
+  const dir = join(app.getPath('downloads'), 'FlowDesk WhatsApp')
+  await mkdir(dir, { recursive: true })
+  const path = join(dir, `${msgId}.${ext}`)
+  await writeFile(path, Buffer.from(base64, 'base64'))
+
+  // Deliberately does not return base64: the caller has a path, and echoing
+  // a megabyte of encoded audio back through a tool result helps nobody.
+  return {
+    ok: true,
+    path,
+    type: res.type,
+    mimetype: mimetype || null,
+    bytes: res.bytes,
+    duration: res.duration ?? null,
+    via: res.via,
+  }
+}
+
+/**
+ * Everything the bridge knows about its own state, in one call.
+ *
+ * Until now each probe was reachable only by setting an env var and
+ * restarting the app — which meant every diagnosis cost a restart, a QR-less
+ * relog wait, and a fresh history sync. When a failure is intermittent that
+ * is the difference between finding it and not. Exposing the same probes as
+ * a tool lets whoever hits the failure ask about it straight away, while the
+ * broken state is still there to look at.
+ */
+export async function waDiagnose(): Promise<WhatsAppResult> {
+  const [status, diag, media] = await Promise.all([
+    call('window.__fdWaStatus()'),
+    call('window.__fdWaDiag()'),
+    call('window.__fdWaMediaProbe()'),
+  ])
+  return { ok: true, status, chatAndModules: diag, media }
+}

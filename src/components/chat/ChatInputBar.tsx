@@ -14,6 +14,8 @@ export interface ChatInputBarProps {
   placeholders?: string[]
   autoFocus?: boolean
   leftSlot?: React.ReactNode
+  /** Compact controls rendered immediately before Send (for example dictation). */
+  rightSlot?: React.ReactNode
   onStop?: () => void
   className?: string
   retroStyle?: boolean
@@ -66,6 +68,7 @@ export function ChatInputBar({
   placeholders,
   autoFocus,
   leftSlot,
+  rightSlot,
   onStop,
   className = '',
   retroStyle = true,
@@ -90,6 +93,7 @@ export function ChatInputBar({
         <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#E2DBD0]">
           {leftSlot ? <div className="mr-auto">{leftSlot}</div> : <div />}
           <div className="flex items-center gap-2">
+            {rightSlot}
             {onStop && sending && (
               <button
                 type="button"
@@ -133,6 +137,7 @@ export function ChatInputBar({
       />
       <div className="flex items-center justify-end gap-2">
         {leftSlot && <div className="mr-auto">{leftSlot}</div>}
+        {rightSlot}
         {onStop && sending && (
           <Button variant="danger" size="sm" icon={<Square size={ICON_SIZE.xs} />} onClick={onStop}>
             Stop

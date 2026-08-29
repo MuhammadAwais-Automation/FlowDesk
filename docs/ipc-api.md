@@ -89,7 +89,7 @@ Shows Gmail inbox (mail.google.com) in WebContentsView.
 ### `ytList(): Promise<YouTubeAccount[]>`
 ```typescript
 [
-  { id: "uuid1", email: "ch1@gmail.com", label: "Channel 1", partition: "persist:yt-uuid1", addedAt: "...", lastActiveTab: "dashboard" }
+  { id: "uuid1", email: "ch1@gmail.com", label: "Channel 1", partition: "persist:yt-uuid1", addedAt: "...", lastActiveTab: "overview" }
 ]
 ```
 
@@ -107,7 +107,7 @@ Sets display name.
 
 ### `ytSetLastTab(id: string, tab: string): Promise<void>`
 Saves which YT Studio section was last viewed.
-- `tab` values: `"dashboard"` | `"content"` | `"analytics"`
+- `tab` values: `"overview"` | `"content"` | `"analytics"`
 
 ### `ytOpenLoginWindow(partition: string): Promise<void>`
 Re-authentication popup.
@@ -142,39 +142,6 @@ Saves full reordered array (replaces existing).
 
 ---
 
-## Namespace: `prompts` — Local Prompt Library
-
-### `promptsList(): Promise<Prompt[]>`
-```typescript
-[
-  { id: "uuid1", name: "Greeting", content: "Hello {{name}}!", categoryId: "cat1", createdAt: "..." }
-]
-```
-
-### `promptsSave(id: string | null, name: string, content: string, categoryId: string | null): Promise<Prompt>`
-- `id = null` → Creates new prompt
-- `id = existing` → Updates existing prompt
-- Returns saved prompt with ID
-
-### `promptsDelete(id: string): Promise<void>`
-Removes prompt. Category not affected.
-
-### `promptsCategoriesList(): Promise<PromptCategory[]>`
-```typescript
-[
-  { id: "cat1", name: "Work", color: "#4F6EF7" },
-  { id: "cat2", name: "Personal", color: "#22C55E" }
-]
-```
-
-### `promptsCategoriesSave(id: string | null, name: string, color: string): Promise<PromptCategory | undefined>`
-Create or update category.
-
-### `promptsCategoriesDelete(id: string): Promise<void>`
-Deletes category. Prompts with this `categoryId` become "uncategorized" (categoryId not changed, just orphaned).
-
----
-
 ## Namespace: `view` — WebContentsView Control
 
 ### `switchView(tabId: string, partition: string, url: string): Promise<void>`
@@ -192,20 +159,12 @@ Destroys WebContentsView and removes from cache.
 ### `hideView(): Promise<void>`
 Removes all WebContentsViews from window (they stay in cache). Used before showing React overlays.
 
-### `injectPrompt(text: string, tool: string): Promise<boolean>`
-Injects text into active view.
-- `tool` values: `"chatgpt"` | `"claude"` | `"gemini"` | `"grok"`
-- Returns `true` if injection succeeded
-
-### `injectToTab(tabId: string, text: string, tool: string): Promise<boolean>`
-Injects into specific tab's view (not necessarily active).
-
 ### `getSelectedText(): Promise<string>`
 Gets currently selected text from active WebContentsView. Returns empty string if nothing selected.
 
 ### `pageChanged(page: string): Promise<void>`
 Notifies main process which React page is active.
-- `page` values: `"dashboard"` | `"browser"` | `"prompts"` | `"accounts"` | `"settings"` | `"youtube"` | `"workspace"`
+- `page` values: `"browser"` | `"universalChat"` | `"agent"` | `"notebooklm"` | `"accounts"` | `"settings"` | `"youtube"` | `"workspace"`
 
 ### `setCustomBounds(x: number, y: number, w: number, h: number): Promise<void>`
 Sets active view to exact pixel bounds. Used by:
@@ -253,29 +212,6 @@ Returns current Windows startup setting.
 
 ---
 
-## Events (Main → Renderer)
-
-### `onInjectPanel(callback: () => void)`
-Fires when global hotkey `Ctrl+Shift+P` is pressed.
-```typescript
-useEffect(() => {
-  const cb = () => setShowInjectOverlay(true);
-  window.electronAPI.onInjectPanel(cb);
-  return () => window.electronAPI.offInjectPanel(cb);
-}, []);
-```
-
-### `offInjectPanel(callback: () => void)`
-Removes inject panel listener.
-
-### `onCaptureSelection(callback: () => void)`
-Fires when `Ctrl+Shift+S` pressed. Used to capture selected text from active view.
-
-### `offCaptureSelection(callback: () => void)`
-Removes capture selection listener.
-
----
-
 ## Error Handling Patterns
 
 ```typescript
@@ -294,11 +230,7 @@ if ('error' in result) {
   setAccounts(prev => [...prev, result]);
 }
 
-// Pattern 2: Boolean return
-const success = await window.electronAPI.injectToTab(tabId, text, tool);
-if (!success) showToast('Injection failed', 'error');
-
-// Pattern 3: Null check
+// Pattern 2: Null check
 const email = await window.electronAPI.workspaceGetEmail();
 if (!email) setConnectionState('not-connected');
 ```

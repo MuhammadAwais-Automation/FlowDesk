@@ -75,7 +75,7 @@ theme: {
 | Section headings | DM Sans | 600 | 14px |
 | Body text | DM Sans | 400 | 14px |
 | Small/meta text | DM Sans | 400 | 12px |
-| Code/prompts/vars | JetBrains Mono | 400 | 13px |
+| Code | JetBrains Mono | 400 | 13px |
 | Nav labels | DM Sans | 500 | 13px |
 
 ---
@@ -89,7 +89,6 @@ theme: {
 | Sidebar width (min) | 120px |
 | Sidebar width (max) | 280px |
 | Tab bar height | 44px |
-| Prompt bar height | 42px |
 | YT account bar height | 52px |
 | Border radius (card) | 12px |
 | Border radius (button) | 8px |
@@ -301,11 +300,9 @@ transition: all 150ms ease;
 ┌──────────────┬──────────────────────────────────────────────────┐
 │              │  [Tab 1] [Tab 2] [+] [⚙]          ← 44px        │
 │   LeftNav    ├──────────────────────────────────────────────────┤
-│   172px      │  [Inject Prompt] [← → ↺]          ← 42px        │
-│              ├──────────────────────────────────────────────────┤
 │              │                                                  │
 │              │    WebContentsView (native browser)             │
-│              │    x=172, y=86, w=win.w-172, h=win.h-86        │
+│              │    x=172, y=84, w=win.w-172, h=win.h-84        │
 │              │                                                  │
 └──────────────┴──────────────────────────────────────────────────┘
 ```
@@ -331,9 +328,7 @@ Using **lucide-react** (`^0.344.0`):
 
 ```typescript
 import {
-  LayoutDashboard,  // Dashboard
   Globe,            // AI Browser
-  FileText,         // Prompts
   Users,            // Accounts
   Youtube,          // YT Studio
   Calendar,         // Workspace

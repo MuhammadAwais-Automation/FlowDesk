@@ -6,39 +6,6 @@ export interface Workspace {
   created_at: string
 }
 
-export interface Folder {
-  id: string
-  name: string
-  workspace_id: string
-  parent_id: string | null
-  position: number
-  created_at: string
-}
-
-export interface Prompt {
-  id: string
-  title: string
-  content: string
-  folder_id: string | null
-  workspace_id: string
-  tags: string[]
-  variables: string[]
-  used_count: number
-  last_used_at: string | null
-  is_favorite: boolean
-  version: number
-  created_at: string
-  updated_at: string
-}
-
-export interface PromptVersion {
-  id: string
-  prompt_id: string
-  content: string
-  version: number
-  created_at: string
-}
-
 export type AIToolName = 'chatgpt' | 'claude' | 'gemini' | 'grok'
 
 export const AI_TOOL_URLS: Record<AIToolName, string> = {
@@ -73,9 +40,56 @@ export interface AppSettings {
   launchOnStartup: boolean
   minimizeToTray: boolean
   theme: 'light' | 'dark' | 'system'
-  hotkeys: {
-    injectPanel: string
-    captureSelection: string
-    switchAccount: string
+  leadAgentProvider: 'claude' | 'codex' | 'antigravity'
+  /**
+   * When true, the Agent tab skips the approval dialog for every tool call —
+   * Claude's built-in tools (Bash, Write, Edit, ...) and FlowDesk's own
+   * worker tools alike — and runs them immediately. For Codex specifically,
+   * this is also what enables its own built-in shell/file-editing tools at
+   * all: its SDK has no per-call approval hook to gate them with (see
+   * electron/agent/codexLeadAgent.ts), so those tools stay disabled unless
+   * this is on.
+   */
+  agentBypassPermissions: boolean
+  hotkeys?: {
+    injectPanel?: string
+    captureSelection?: string
+    switchAccount?: string
+  }
+  jarvisSettings?: JarvisSettings
+}
+
+export interface JarvisSettings {
+  geminiApiKey: string
+  livekitUrl: string
+  livekitApiKey: string
+  livekitApiSecret: string
+  model: string
+  voiceName: 'Puck' | 'Charon' | 'Kore' | 'Aoede' | 'Fenrir'
+  systemPrompt: string
+  autoSpeak: boolean
+}
+
+export interface JarvisMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  text: string
+  timestamp: string
+  isStreaming?: boolean
+  toolCall?: {
+    name: string
+    prompt: string
   }
 }
+
+export interface JarvisHeavyTaskState {
+  taskId: string
+  prompt: string
+  status: 'idle' | 'running' | 'completed' | 'failed'
+  startedAt: string
+  finishedAt?: string
+  progressMessage?: string
+  result?: string
+  error?: string
+}
+

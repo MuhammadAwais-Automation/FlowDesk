@@ -30,7 +30,7 @@ FlowDesk is a desktop workstation for creators who work across AI tools, reusabl
 | Desktop app architecture | Electron main/preload/renderer split with typed IPC patterns |
 | Local-first product design | Prompts, workspaces, accounts, and settings stored locally |
 | Session isolation | Separate Electron partitions for AI tools, Gmail, YouTube Studio, and social platforms |
-| Creator workflow design | Prompt templates, AI browser, account switching, social hub, personal workspace |
+| Creator workflow design | AI browser, account switching, personal workspace, and agent workflows |
 | Engineering verification | Vitest tests, TypeScript checks, production build scripts |
 
 ## Product Surface
@@ -38,11 +38,9 @@ FlowDesk is a desktop workstation for creators who work across AI tools, reusabl
 | Module | Purpose |
 |---|---|
 | AI Browser | Open ChatGPT, Claude, Gemini, Grok, or custom AI tools with isolated sessions |
-| Prompt Library | Save reusable prompts with `{{variables}}`, categories, search, metadata, and local history |
-| Workspaces | Organize projects, clients, brands, folders, prompt versions, and account profiles |
+| Workspaces | Organize projects, clients, brands, and account profiles |
 | Accounts | Add and isolate multiple Gmail accounts inside native browser views |
 | YouTube Studio | Switch between isolated YouTube Studio sessions |
-| Social Hub | Open Instagram, Facebook, X/Twitter, LinkedIn, TikTok, Threads, Reddit, YouTube, Telegram, Discord, WhatsApp, and more |
 | Personal Workspace | Use Calendar and Tasks with a local isolated Google session |
 
 ## Stack
@@ -67,7 +65,7 @@ src/
   components/      Reusable UI components
   config/          Social platform definitions
   lib/             Utilities and local continuity logic
-  pages/           Dashboard, browser, prompts, accounts, social, settings
+  pages/           agent, browser, research, accounts, settings
   store/           Local-first Zustand stores
   types/           Shared TypeScript types
 docs/              Project documentation

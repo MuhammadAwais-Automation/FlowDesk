@@ -2,6 +2,12 @@ import { EventEmitter } from 'events'
 import { ensureBackgroundView, getViewById } from '../sessions'
 import { injectPrompt, type AITool } from '../injector'
 import { PROVIDER_URLS } from '../providerUrls'
+import {
+  classifyAccountFailure,
+  maskAccountEmail,
+  type AccountFailure,
+  type BrowserAccount,
+} from './accountFailover'
 
 /**
  * Heartbeat for long-running worker calls. The Claude Agent SDK's own
@@ -19,6 +25,10 @@ import { PROVIDER_URLS } from '../providerUrls'
  */
 export const workerProgress = new EventEmitter()
 const HEARTBEAT_INTERVAL_MS = 7_000
+
+export type WorkerProgress =
+  | { type: 'heartbeat'; tool: string; elapsedSeconds: number }
+  | { type: 'account_retry'; tool: string; elapsedSeconds: number; reason: AccountFailure; accountEmailMasked: string }
 
 /**
  * FlowDesk's capture pipeline (electron/main.ts's `capture:chunk` handler)
@@ -41,7 +51,28 @@ const HEARTBEAT_INTERVAL_MS = 7_000
  * the whole capture pipeline, which is real work out of scope for MVP.
  */
 
-const TOOL_TIMEOUT_MS = 60_000
+// A fixed 60s timeout used to kill image-generation turns outright: real
+// captures (probes/out/_chatgpt-image-compare-debug.log) confirmed the
+// image event's SSE stream is still alive and correctly shaped well past
+// 60s for these — the provider just takes longer to render an image than to
+// answer a text prompt. Rather than raise one fixed number (which would
+// make an actually-stuck provider take 4x longer to report failure), the
+// timeout is now two-tier: IDLE_TIMEOUT_MS is reset on every live chunk (see
+// notifyCaptureActivity, called from main.ts's emitCaptureLive on every
+// capture:live tick), so a stream that is still producing SOMETHING keeps
+// its waiter alive; HARD_CEILING_MS is an absolute cap that never resets,
+// so a provider that streams forever without ever truly finishing still
+// gets cut off.
+// Real captured evidence (probes/out/_chatgpt-image-compare-debug.log) shows
+// ChatGPT's own server can go 130-220s between genuinely finished image
+// events on the SAME conversation, with nothing but SSE keep-alive pings in
+// between — a direct-probe test at IDLE_TIMEOUT_MS=60_000 still failed with
+// "went idle for 60s, 131s after the prompt was sent" even with the
+// activity-reset mechanism working correctly. 60s of true silence is simply
+// within ChatGPT's normal range for image generation, not a sign of a stuck
+// provider — both numbers below are raised accordingly.
+const IDLE_TIMEOUT_MS = 120_000
+const HARD_CEILING_MS = 360_000
 
 // Even with each provider now in its own independent hidden BrowserWindow
 // (fixing the sibling-focus-stealing bug), firing all 5 CDP dispatches at
@@ -71,14 +102,68 @@ function claimDispatchSlot(): number {
 interface PendingWaiter {
   resolve: (text: string) => void
   reject: (err: Error) => void
-  timer: ReturnType<typeof setTimeout>
+  idleTimer: ReturnType<typeof setTimeout>
+  hardTimer: ReturnType<typeof setTimeout>
   heartbeat: ReturnType<typeof setInterval>
+  startedAt: number
+  /**
+   * Latest textSoFar seen for this tool, fed by notifyCaptureActivity.
+   *
+   * Exists because ChatGPT's image-generation stream is confirmed (via real
+   * captures + saved files on disk) to deliver a complete, successfully
+   * downloaded image and then simply go quiet — no `done`, no error, so
+   * emitCaptureComplete never fires for that turn at all. Without keeping
+   * the partial here, the idle timeout rejected and threw away an image
+   * that had already been fetched and written to disk.
+   */
+  partialText: string
 }
 
 function clearWaiter(tool: string, waiter: PendingWaiter) {
   pendingWaiters.delete(tool)
-  clearTimeout(waiter.timer)
+  clearTimeout(waiter.idleTimer)
+  clearTimeout(waiter.hardTimer)
   clearInterval(waiter.heartbeat)
+}
+
+/**
+ * Called from main.ts's emitCaptureLive on every capture:live tick (i.e.
+ * every SSE chunk received for ANY provider) — proof the stream is still
+ * alive, not stuck. Resets this tool's idle timer so a slow-but-working
+ * image generation isn't killed at a fixed 60s just because that's longer
+ * than a typical text reply takes. A no-op if there's no pending waiter for
+ * this tool (the common case — most chunks arrive outside any awaited call).
+ */
+export function notifyCaptureActivity(tool: string, textSoFar?: string) {
+  const waiter = pendingWaiters.get(tool)
+  if (!waiter) return
+  if (textSoFar && textSoFar.trim()) waiter.partialText = textSoFar
+  clearTimeout(waiter.idleTimer)
+  waiter.idleTimer = setTimeout(() => settleIdle(tool), IDLE_TIMEOUT_MS)
+}
+
+/**
+ * An idle stream that already produced content is a SUCCESS, not a failure.
+ *
+ * Confirmed against real runs: an image-generation turn detected the image,
+ * fetched its bytes through /backend-api/files/download (bearer token
+ * required — cookies alone return 401) and wrote a 2.2MB PNG to disk, all
+ * well before this fired — yet the turn was still reported to the agent as
+ * "did not respond", purely because ChatGPT never closed the stream.
+ */
+function settleIdle(tool: string) {
+  const waiter = pendingWaiters.get(tool)
+  if (!waiter) return
+  clearWaiter(tool, waiter)
+  const elapsed = Math.round((Date.now() - waiter.startedAt) / 1000)
+  if (waiter.partialText.trim()) {
+    waiter.resolve(waiter.partialText)
+    return
+  }
+  waiter.reject(new Error(
+    `${tool} went idle for ${IDLE_TIMEOUT_MS / 1000}s mid-reply (no content at all), ` +
+    `${elapsed}s after the prompt was sent`
+  ))
 }
 
 const pendingWaiters = new Map<string, PendingWaiter>()
@@ -95,11 +180,11 @@ const pendingWaiters = new Map<string, PendingWaiter>()
 // notifyCaptureComplete below.)
 const queues = new Map<string, Promise<unknown>>()
 
-let getPartitionImpl: () => string | null = () => null
+let getAccountsImpl: () => BrowserAccount[] = () => []
 
 /** Called once from main.ts after `store` exists, to avoid a circular import. */
-export function configureBrowserWorkerQueue(opts: { getPartition: () => string | null }) {
-  getPartitionImpl = opts.getPartition
+export function configureBrowserWorkerQueue(opts: { getAccounts: () => BrowserAccount[] }) {
+  getAccountsImpl = opts.getAccounts
 }
 
 /**
@@ -125,35 +210,42 @@ export function notifyCaptureComplete(tool: string, text: string, error?: string
   else waiter.resolve(text)
 }
 
-async function runOne(tool: AITool, prompt: string): Promise<string> {
+async function runOne(tool: AITool, prompt: string, account: BrowserAccount): Promise<string> {
   const staggerWait = claimDispatchSlot()
   if (staggerWait > 0) await sleep(staggerWait)
 
   const url = PROVIDER_URLS[tool]
   if (!url) throw new Error(`Unknown provider: ${tool}`)
 
-  const partition = getPartitionImpl()
-  if (!partition) throw new Error('No Google account configured — add one on the Accounts page first.')
+  const partition = account.partition
 
-  const tabId = `universalchat-${tool}`
+  // A provider window belongs to one authenticated Electron partition. Keep
+  // the partition in its identity so selecting a different AI Agent account
+  // cannot reuse a hidden window that is still logged into the old account.
+  const tabId = `agent-${partition}-${tool}`
   await ensureBackgroundView(tabId, partition, url)
   const view = getViewById(tabId)
   if (!view) throw new Error(`Could not open a browser session for ${tool}`)
 
   return new Promise<string>((resolve, reject) => {
     const startedAt = Date.now()
-    const timer = setTimeout(() => {
-      const w = pendingWaiters.get(tool)
-      if (w) clearWaiter(tool, w)
-      reject(new Error(`${tool} did not respond within ${TOOL_TIMEOUT_MS / 1000}s`))
-    }, TOOL_TIMEOUT_MS)
+    const idleTimer = setTimeout(() => settleIdle(tool), IDLE_TIMEOUT_MS)
+    // The hard ceiling settles the same way: a turn that streamed real
+    // content for minutes without ever closing still has that content, and
+    // discarding it would repeat exactly the bug settleIdle exists to fix.
+    const hardTimer = setTimeout(() => settleIdle(tool), HARD_CEILING_MS)
     // See workerProgress above — the SDK's own tool_progress never fires
     // for these custom tools, so this heartbeat is the only signal the
     // renderer gets that a slow provider is still being waited on, not stuck.
     const heartbeat = setInterval(() => {
-      workerProgress.emit('progress', { tool, elapsedSeconds: Math.round((Date.now() - startedAt) / 1000) })
+      const progress: WorkerProgress = {
+        type: 'heartbeat',
+        tool,
+        elapsedSeconds: Math.round((Date.now() - startedAt) / 1000),
+      }
+      workerProgress.emit('progress', progress)
     }, HEARTBEAT_INTERVAL_MS)
-    pendingWaiters.set(tool, { resolve, reject, timer, heartbeat })
+    pendingWaiters.set(tool, { resolve, reject, idleTimer, hardTimer, heartbeat, startedAt, partialText: '' })
 
     injectPrompt(view.webContents, prompt, tool, true).then(ok => {
       if (!ok) {
@@ -184,7 +276,39 @@ async function runOne(tool: AITool, prompt: string): Promise<string> {
  */
 export function askBrowserProvider(tool: AITool, prompt: string): Promise<string> {
   const prev = queues.get(tool) ?? Promise.resolve()
-  const next = prev.catch(() => {}).then(() => runOne(tool, prompt))
+  const next = prev.catch(() => {}).then(async () => {
+    const accounts = getAccountsImpl()
+    const candidates = accounts.length > 0 ? accounts : [{ email: 'default', partition: 'default' }]
+    const failures: { account: BrowserAccount; reason: AccountFailure }[] = []
+
+    for (const [index, account] of candidates.entries()) {
+      try {
+        return await runOne(tool, prompt, account)
+      } catch (error) {
+        const reason = classifyAccountFailure(error)
+        if (!reason) throw error
+        failures.push({ account, reason })
+        const nextAccount = candidates[index + 1]
+        if (!nextAccount) {
+          throw new Error(
+            `${tool} is unavailable on every connected account: ${failures
+              .map(failure => `${maskAccountEmail(failure.account.email)} (${failure.reason === 'quota_exhausted' ? 'limit reached' : 'login required'})`)
+              .join(', ')}`
+          )
+        }
+        const progress: WorkerProgress = {
+          type: 'account_retry',
+          tool,
+          elapsedSeconds: 0,
+          reason,
+          accountEmailMasked: maskAccountEmail(nextAccount.email),
+        }
+        workerProgress.emit('progress', progress)
+      }
+    }
+
+    throw new Error(`No connected account is available for ${tool}`)
+  })
   queues.set(tool, next.catch(() => {}))
   return next
 }

@@ -1,5 +1,5 @@
 /**
- * YTStudio.tsx — YouTube Multi-Account Dashboard
+ * YTStudio.tsx — YouTube Multi-Account Workspace
  *
  * Simplified layout:
  *   [Account Bar] ← account switcher + action buttons (52px)

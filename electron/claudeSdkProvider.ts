@@ -33,6 +33,8 @@ called Universal Chat. Reply directly and conversationally to the user's
 message below. You have no tools and cannot access files, the shell, or the
 internet — text in, text out only.`
 
+import { getClaudeExecutablePath } from './claudeExecutable'
+
 /**
  * Sends one plain-text turn to Claude via the local `claude` CLI's own
  * subscription login — never ANTHROPIC_API_KEY. Fresh, ephemeral call every
@@ -47,6 +49,7 @@ internet — text in, text out only.`
 export async function askClaudeSdk(prompt: string): Promise<string> {
   const query = await getQuery()
   let finalText = ''
+  const binaryPath = getClaudeExecutablePath()
 
   for await (const message of query({
     prompt: singleUserMessage(prompt),
@@ -54,7 +57,8 @@ export async function askClaudeSdk(prompt: string): Promise<string> {
       systemPrompt: { type: 'preset', preset: 'claude_code', append: UNIVERSAL_CHAT_SYSTEM_PROMPT },
       tools: [],
       maxTurns: 1,
-      persistSession: false
+      persistSession: false,
+      ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {})
     }
   })) {
     if (message.type === 'result' && message.subtype === 'success') {

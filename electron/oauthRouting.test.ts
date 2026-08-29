@@ -36,6 +36,14 @@ describe('isOAuthPopup', () => {
     expect(isOAuthPopup('https://github.com/login/oauth/authorize?client_id=abc')).toBe(true)
   })
 
+  it('returns true for auth.openai.com, confirmed via a real capture of chatgpt.com "Continue with Google"', () => {
+    // A real login attempt navigated here FIRST — via will-navigate, not
+    // window.open — before ever reaching accounts.google.com. Without this,
+    // the different registrable domain (openai.com vs chatgpt.com) sent it
+    // to the OS browser, where the app never sees the resulting cookie.
+    expect(isOAuthPopup('https://auth.openai.com/api/accounts/authorize?client_id=app_X8zY6vW2pQ9tR3dE7nK1jL5gH&connection=google-oauth2')).toBe(true)
+  })
+
   it('returns false for chatgpt.com root', () => {
     expect(isOAuthPopup('https://chatgpt.com/')).toBe(false)
   })

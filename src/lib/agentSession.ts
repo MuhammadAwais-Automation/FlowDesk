@@ -9,6 +9,7 @@ export interface AgentToolCallEntry {
 
 export interface AgentTurnEntry {
   id: string
+  runId?: string
   role: 'user' | 'assistant'
   content: string
   toolCalls: AgentToolCallEntry[]
@@ -36,7 +37,7 @@ export function createAgentSession(): AgentSession {
 
 export function appendAgentTurn(
   session: AgentSession,
-  entry: { role: 'user' | 'assistant'; content: string; toolCalls?: AgentToolCallEntry[] },
+  entry: { role: 'user' | 'assistant'; content: string; toolCalls?: AgentToolCallEntry[]; runId?: string },
 ): AgentSession {
   const timestamp = nowIso()
   return {
@@ -45,6 +46,7 @@ export function appendAgentTurn(
       ...session.entries,
       {
         id: makeContinuityId(),
+        ...(entry.runId ? { runId: entry.runId } : {}),
         role: entry.role,
         content: entry.content,
         toolCalls: entry.toolCalls ?? [],

@@ -28,22 +28,16 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
     e.stopPropagation()
     setDownloading(true)
     try {
-      // Fetch + blob rather than a bare <a download href={src}> — more
-      // reliable across custom URL schemes (flowdesk-image://) than
-      // relying on the browser's native download-attribute handling.
-      const res = await fetch(src)
-      const blob = await res.blob()
-      const blobUrl = URL.createObjectURL(blob)
-      const ext = blob.type.split('/')[1] || 'png'
-      const a = document.createElement('a')
-      a.href = blobUrl
-      a.download = `flowdesk-image-${Date.now()}.${ext}`
-      a.click()
-      URL.revokeObjectURL(blobUrl)
+      // IPC to the main process (image:download → dialog.showSaveDialog +
+      // copyFile), not a renderer-side fetch(src)+blob — a fetch() to a
+      // different-scheme URL (flowdesk-image://) from the page's own
+      // http/file origin is cross-origin, and our protocol handler's
+      // response carries no CORS headers, so that approach silently fails.
+      // Copying the file directly in the main process sidesteps CORS
+      // entirely and gives a native Save-As dialog as a bonus.
+      await window.electronAPI.imageDownload(src)
     } catch {
-      // Best-effort — no error UI for a save-image failure, matches the
-      // rest of this file's quiet-failure style (downloadAndSaveGeneratedImage
-      // in main.ts also fails silently on fetch errors).
+      // Best-effort — no error UI for a save-image failure.
     } finally {
       setDownloading(false)
     }

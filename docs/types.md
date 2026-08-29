@@ -8,9 +8,6 @@ These are app data models. The name is historical; the current implementation
 stores these records locally.
 
 - `Workspace`
-- `Folder`
-- `Prompt`
-- `PromptVersion`
 - `AIAccount`
 - `AppSettings`
 
@@ -27,7 +24,6 @@ Main groups:
 - YouTube account management
 - custom AI tool management
 - personal workspace management
-- prompt library management
 - main-process events
 
 ## `src/types/browser.ts`

@@ -30,6 +30,18 @@ export function isOAuthPopup(url: string): boolean {
     // GitHub OAuth (used by Anthropic / Claude in some flows)
     if (host === 'github.com' && u.pathname.startsWith('/login/oauth')) return true
 
+    // OpenAI's own identity provider (Auth0-based) — confirmed via a real
+    // capture: clicking "Continue with Google" on chatgpt.com/auth/login
+    // navigates (via will-navigate, not window.open) to
+    // auth.openai.com/api/accounts/authorize?...&connection=google-oauth2
+    // FIRST, before ever reaching accounts.google.com. That first hop is a
+    // different registrable domain (openai.com, not chatgpt.com), so without
+    // this it was classified 'external' and sent to the OS browser — where
+    // the resulting cookie lands in a session the app never sees, and the
+    // login never completes back in the app. auth.openai.com itself then
+    // redirects on to accounts.google.com, already covered above.
+    if (host === 'auth.openai.com') return true
+
     return false
   } catch {
     return false

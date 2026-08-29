@@ -50,6 +50,22 @@ supabase/.temp
 # Superpowers internal
 .superpowers/
 
+# Local Graphify knowledge graph
+graphify-out/
+
 # Promo renders (large files)
 flowdesk-promo/renders/
 flowdesk-promo/.hyperframes/
+
+# Discovery probe results — captured from live logged-in sessions, so they
+# can contain real message text, contact names, and session identifiers.
+# The probe .js files themselves are source and stay tracked.
+probes/out/
+
+# Generated bridge probes (scripts/emit-linkedin-probes.mjs). Regenerable, and
+# they embed real conversation urns when one is passed in.
+probes/li-b*.js
+
+# Python bytecode from the discovery skill scripts
+__pycache__/
+*.pyc

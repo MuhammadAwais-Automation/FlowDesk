@@ -175,7 +175,7 @@ ipcMain.handle('yt:detectChannelId', async (_, partition: string) => {
 
 ---
 
-## Prompt Injection (`injector.ts`)
+## Provider Message Delivery (`injector.ts`)
 
 ### How injection works
 
@@ -440,9 +440,6 @@ const store = new Store({
     workspaceEmail: null,
     activeWorkspaceId: null,
     workspaces: [],
-    folders: [],
-    workspacePrompts: [],
-    promptVersions: [],
     aiAccounts: [],
   }
 });

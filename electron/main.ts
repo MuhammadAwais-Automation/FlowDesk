@@ -62,7 +62,6 @@ interface PromptCategory {
 import { join } from 'path'
 import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView } from './sessions'
-import { setSocialMainWindow, showSocialView, hideAllSocialViews, destroySocialView, setSocialNavWidth, socialGoBack, socialGoForward, socialReload } from './socialHub'
 import { injectPrompt, getLatestAssistantText, getSelectedText, type AITool } from './injector'
 import { extractTextFromSSEEvent, extractUsageFromSSEEvent, extractModelInfoFromSSEEvent, extractIdsFromSSEEvent } from './chatgptParser'
 import { extractTextFromClaudeSSEEvent, extractModelInfoFromSSEEvent as extractClaudeModelInfoFromSSEEvent, extractUsageFromSSEEvent as extractClaudeUsageFromSSEEvent } from './claudeParser'
@@ -72,6 +71,9 @@ import { extractPerplexitySSEEvent } from './perplexityParser'
 import type { AppSettings } from '../src/types/database'
 import { PROVIDER_URLS } from './providerUrls'
 import { configureBrowserWorkerQueue, notifyCaptureComplete, workerProgress } from './agent/browserWorkerQueue'
+import { orderBrowserAccounts } from './agent/accountFailover'
+import * as agentSessions from './agentSessionStore'
+import { buildCatchUp } from '../src/lib/agentCatchUp'
 import { runAgentTurn } from './agent/leadAgent'
 
 // @anthropic-ai/claude-agent-sdk (electron/claudeSdkProvider.ts, currently
@@ -130,9 +132,12 @@ const store = new Store<{
   }
 })
 
-// Agent orchestrator's worker tools reuse the same persistent Google-account
-// partition Universal Chat's background tabs already use.
-configureBrowserWorkerQueue({ getPartition: () => store.get('gmailSessions')[0]?.partition ?? null })
+configureBrowserWorkerQueue({
+  getAccounts: () => orderBrowserAccounts(
+    store.get('agentBrowserAccountEmail' as never) as string | null,
+    (store.get('gmailSessions') as GmailSession[]).map(({ email, partition }) => ({ email, partition })),
+  ),
+})
 
 // Backstop only — electron/agent/browserWorkerQueue.ts's own 60s
 // handler-level timeout is authoritative and fires first; this just guards
@@ -236,7 +241,6 @@ function createWindow() {
   })
 
   setMainWindow(mainWindow)
-  setSocialMainWindow(mainWindow)
 
   // System-theme changes push to the renderer live so "System" theme setting
   // tracks OS dark/light switches without a restart.
@@ -465,7 +469,7 @@ ipcMain.handle('page:changed', (_e, page: string) => {
 })
 
 // IPC: update sidebar nav width & dock width so bounds calculations stay correct
-ipcMain.handle('view:setNavWidth', (_e, w: number) => { setNavWidth(w); setSocialNavWidth(w) })
+ipcMain.handle('view:setNavWidth', (_e, w: number) => { setNavWidth(w) })
 ipcMain.handle('view:setDockWidth', (_e, w: number) => setToolDockWidth(w))
 
 // IPC: switch to tab's view (persistent — only loads URL on first open)
@@ -501,14 +505,6 @@ ipcMain.handle('session:clearPartition', async (_e, partition: string) => {
     return false
   }
 })
-
-// IPC: Social Hub
-ipcMain.handle('social:show',      (_e, id: string, partition: string, url: string) => showSocialView(id, partition, url))
-ipcMain.handle('social:hide',      () => hideAllSocialViews())
-ipcMain.handle('social:destroy',   (_e, id: string) => destroySocialView(id))
-ipcMain.handle('social:goBack',    () => socialGoBack())
-ipcMain.handle('social:goForward', () => socialGoForward())
-ipcMain.handle('social:reload',    () => socialReload())
 
 // IPC: Google Login — opens a real BrowserWindow with account's session
 ipcMain.handle('auth:openLoginWindow', async (_e, partition: string, url: string) => {
@@ -911,6 +907,46 @@ ipcMain.handle('universalChat:send', async (_e, tabId: string, text: string, too
   return ok
 })
 
+/**
+ * One-time import of the pre-sessions conversation.
+ *
+ * The Agent page used to persist to a single electron-store key, so the
+ * user has at most one conversation there. It is imported with no provider
+ * ids, which means its next turn seeds whichever provider is active — the
+ * same path a brand-new session takes.
+ */
+async function migrateLegacyAgentSession(): Promise<void> {
+  const legacy = store.get('agentSession' as never) as
+    | { title?: string; entries?: { role?: string; content?: string; toolCalls?: unknown }[] }
+    | undefined
+  if (!legacy || !Array.isArray(legacy.entries) || legacy.entries.length === 0) {
+    store.delete('agentSession' as never)
+    return
+  }
+  const created = await agentSessions.createSession(legacy.title || 'Imported Session')
+  for (const entry of legacy.entries) {
+    if (entry.role !== 'user' && entry.role !== 'assistant') continue
+    await agentSessions.appendTurn(created.id, {
+      role: entry.role,
+      content: typeof entry.content === 'string' ? entry.content : '',
+      toolCalls: Array.isArray(entry.toolCalls) ? (entry.toolCalls as agentSessions.AgentToolCallEntry[]) : [],
+    })
+  }
+  store.delete('agentSession' as never)
+}
+
+ipcMain.handle('agentSession:list', () => agentSessions.listSessions())
+
+ipcMain.handle('agentSession:create', (_e, title?: string) =>
+  agentSessions.createSession(typeof title === 'string' && title.trim() ? title.trim() : undefined))
+
+ipcMain.handle('agentSession:turns', (_e, id: string) => agentSessions.readTurns(id))
+
+ipcMain.handle('agentSession:rename', (_e, id: string, title: string) =>
+  agentSessions.renameSession(id, title))
+
+ipcMain.handle('agentSession:delete', (_e, id: string) => agentSessions.deleteSession(id))
+
 // ─────────────────────────────────────────────────────────────────
 // IPC: Agent orchestrator — a lead Claude (Agent SDK, subscription-auth'd)
 // that can call the 5 browser-driven worker tools mid-conversation. Single-
@@ -919,7 +955,12 @@ ipcMain.handle('universalChat:send', async (_e, tabId: string, text: string, too
 
 let currentAgentAbort: AbortController | null = null
 
-ipcMain.handle('agent:sendMessage', async (_e, prompt: string) => {
+ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessionId?: unknown; runId?: unknown } | string) => {
+  const prompt = typeof input === 'string' ? input : typeof input?.prompt === 'string' ? input.prompt : ''
+  const sessionId = typeof input === 'string' ? 'legacy-agent-session' : typeof input?.sessionId === 'string' ? input.sessionId : 'legacy-agent-session'
+  if (!prompt.trim() || !sessionId) {
+    throw new Error('Agent run needs a prompt and session id.')
+  }
   currentAgentAbort?.abort()
   const abortController = new AbortController()
   currentAgentAbort = abortController
@@ -933,9 +974,76 @@ ipcMain.handle('agent:sendMessage', async (_e, prompt: string) => {
   }
   workerProgress.on('progress', onWorkerProgress)
 
+  const configuredSettings = (store.get('settings') as Partial<AppSettings>) || {}
+  const leadAgentProvider: AppSettings['leadAgentProvider'] =
+    configuredSettings.leadAgentProvider === 'codex'
+      ? 'codex'
+      : configuredSettings.leadAgentProvider === 'antigravity'
+      ? 'antigravity'
+      : 'claude'
+
+  // The renderer records nothing itself; the transcript is written here so
+  // a turn is captured even if the window is closed mid-run.
+  await agentSessions.appendTurn(sessionId, { role: 'user', content: prompt, toolCalls: [] })
+
+  const providerKey: 'claude' | 'codex' | null =
+    leadAgentProvider === 'claude' ? 'claude' : leadAgentProvider === 'codex' ? 'codex' : null
+
+  let resumeSessionId: string | undefined
+  let promptToSend = prompt
+  if (providerKey) {
+    const meta = await agentSessions.readMeta(sessionId)
+    const link = meta?.providers[providerKey]
+    resumeSessionId = link?.id
+    const turns = await agentSessions.readTurns(sessionId)
+    // The turn just appended is the one being sent, so it is not a gap.
+    const catchUp = buildCatchUp(turns.slice(0, -1), link?.syncedThroughTurn ?? 0)
+    if (catchUp) promptToSend = `${catchUp}\n\n${prompt}`
+  }
+
+  let providerSessionId: string | null = null
+  let finalText = ''
+  const pendingToolCalls = new Map<string, agentSessions.AgentToolCallEntry>()
   try {
-    for await (const event of runAgentTurn(prompt, abortController)) {
+    for await (const event of runAgentTurn(
+      promptToSend, abortController, undefined, leadAgentProvider,
+      undefined, undefined, { resumeSessionId },
+    )) {
+      if (event.type === 'provider_session') providerSessionId = event.id
+      if (event.type === 'done') finalText = event.text
+      if (event.type === 'tool_call') {
+        pendingToolCalls.set(event.toolUseId, { tool: event.tool, prompt: event.prompt, result: '', isError: false })
+      }
+      if (event.type === 'tool_result') {
+        const existing = pendingToolCalls.get(event.toolUseId)
+        if (existing) {
+          existing.result = event.text
+          existing.isError = event.isError
+        }
+      }
       mainWindow?.webContents.send('agent:event', event)
+    }
+    await agentSessions.appendTurn(sessionId, {
+      role: 'assistant',
+      content: finalText,
+      // Recorded so a reopened session shows what the agent actually did,
+      // not just its final sentence — the data model promises these.
+      toolCalls: [...pendingToolCalls.values()],
+      ...(providerKey ? { provider: providerKey } : {}),
+    })
+    // Advanced only after the turn completed: an aborted run must not mark
+    // a provider as caught up on turns it never actually received.
+    if (providerKey && providerSessionId) {
+      const meta = await agentSessions.readMeta(sessionId)
+      if (meta) {
+        await agentSessions.writeMeta({
+          ...meta,
+          providers: {
+            ...meta.providers,
+            [providerKey]: { id: providerSessionId, syncedThroughTurn: meta.turnCount },
+          },
+        })
+      }
     }
   } finally {
     workerProgress.off('progress', onWorkerProgress)
@@ -1323,8 +1431,9 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
   }
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  await migrateLegacyAgentSession().catch(error => console.log('[FlowDesk agent] session migration skipped:', error))
   createWindow()
   // Apply persisted settings on startup (tray, etc.)
   const savedSettings = store.get('settings') as Partial<AppSettings>

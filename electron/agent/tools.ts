@@ -2,6 +2,14 @@ import { z } from 'zod'
 import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import { askBrowserProvider } from './browserWorkerQueue'
 import type { AITool } from '../injector'
+import { NOTEBOOKLM_TOOLS, NOTEBOOKLM_TOOL_NAMES } from './notebooklmTools'
+import { createWhatsAppTools, WHATSAPP_TOOL_NAMES } from './whatsappTools'
+import { createLinkedInTools, LINKEDIN_TOOL_NAMES } from './linkedinTools'
+import { createFacebookTools, FACEBOOK_TOOL_NAMES } from './facebookTools'
+import { createFlowTools, FLOW_TOOL_NAMES } from './flowTools'
+import { createImageTools, IMAGE_TOOL_NAMES } from './imageTools'
+import { createProjectTools, PROJECT_TOOL_NAMES, type ProjectToolRuntime } from './projectTools'
+import { alwaysApprove, type RequestApproval } from './approval'
 
 interface WorkerToolSpec {
   name: string
@@ -50,9 +58,30 @@ function buildWorkerTool(spec: WorkerToolSpec) {
   )
 }
 
-export const AGENT_MCP_SERVER = createSdkMcpServer({
-  name: 'workers',
-  tools: WORKER_TOOLS.map(buildWorkerTool),
-})
+const BASE_AGENT_TOOL_NAMES = [
+  ...WORKER_TOOLS.map(spec => `mcp__workers__${spec.name}`),
+  ...NOTEBOOKLM_TOOL_NAMES,
+  ...WHATSAPP_TOOL_NAMES,
+  ...LINKEDIN_TOOL_NAMES,
+  ...FACEBOOK_TOOL_NAMES,
+  ...FLOW_TOOL_NAMES,
+  ...IMAGE_TOOL_NAMES,
+]
 
-export const AGENT_TOOL_NAMES = WORKER_TOOLS.map(spec => `mcp__workers__${spec.name}`)
+export type { ProjectToolRuntime } from './projectTools'
+
+export function createAgentToolSet(projectRuntime?: ProjectToolRuntime, requestApproval: RequestApproval = alwaysApprove) {
+  const projectTools = projectRuntime ? createProjectTools(projectRuntime) : []
+  const whatsappTools = createWhatsAppTools(requestApproval)
+  const linkedinTools = createLinkedInTools(requestApproval)
+  const facebookTools = createFacebookTools(requestApproval)
+  const flowTools = createFlowTools(requestApproval)
+  const imageTools = createImageTools()
+  return {
+    server: createSdkMcpServer({
+      name: 'workers',
+      tools: [...WORKER_TOOLS.map(buildWorkerTool), ...NOTEBOOKLM_TOOLS, ...whatsappTools, ...linkedinTools, ...facebookTools, ...flowTools, ...imageTools, ...projectTools],
+    }),
+    names: projectRuntime ? [...BASE_AGENT_TOOL_NAMES, ...PROJECT_TOOL_NAMES] : BASE_AGENT_TOOL_NAMES,
+  }
+}

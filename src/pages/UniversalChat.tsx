@@ -3,11 +3,14 @@ import { Plus, Terminal } from 'lucide-react'
 import {
   createContinuityThread,
   appendContinuityEntry,
+  appendUniqueContinuityEntry,
   type ContinuityThread,
 } from '@/lib/conversationContinuity'
 import { ChatBubble } from '@/components/chat/ChatBubble'
 import { ChatInputBar } from '@/components/chat/ChatInputBar'
+import { InlineDictationControl } from '@/components/voice/InlineDictationControl'
 import { TypewriterDropdown } from '@/components/ui/TypewriterDropdown'
+import type { UniversalChatRun } from '@/types/electron'
 
 const UNIVERSAL_CHAT_STORE_KEY = 'universalChatSession'
 
@@ -53,18 +56,11 @@ export default function UniversalChat() {
   const [error, setError] = useState<string | null>(null)
 
   const sendingRef = useRef(false)
-  const providerRef = useRef<ProviderId>('chatgpt')
+  const sessionRef = useRef<ContinuityThread | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handledRunsRef = useRef(new Set<string>())
 
-  function clearWatchdog() {
-    if (watchdogRef.current) {
-      clearTimeout(watchdogRef.current)
-      watchdogRef.current = null
-    }
-  }
-
-  useEffect(() => { providerRef.current = provider }, [provider])
+  useEffect(() => { sessionRef.current = session }, [session])
 
   // Load or create Universal Chat session
   useEffect(() => {
@@ -83,7 +79,7 @@ export default function UniversalChat() {
     return () => { cancelled = true }
   }, [])
 
-  // Live capture listeners
+  /* old capture listeners intentionally replaced by the durable request journal.
   useEffect(() => {
     function onLive(_e: unknown, data: { tool: string; textSoFar: string }) {
       if (!sendingRef.current || data.tool !== providerRef.current) return
@@ -94,7 +90,6 @@ export default function UniversalChat() {
 
       if (!data.text.trim() && !data.error) return
 
-      clearWatchdog()
       sendingRef.current = false
       setSending(false)
       setLiveText('')
@@ -121,7 +116,42 @@ export default function UniversalChat() {
       api.offCaptureLive(onLive)
       api.offCaptureComplete(onComplete)
     }
+  }, []) */
+
+  function applyRun(run: UniversalChatRun) {
+    if (run.sessionId !== sessionRef.current?.id) return
+    setProvider(run.provider as ProviderId)
+    if (run.status === 'running') {
+      sendingRef.current = true
+      setSending(true)
+      setLiveText(run.liveText)
+      setError(null)
+      return
+    }
+    sendingRef.current = false
+    setSending(false)
+    setLiveText('')
+    if (run.status === 'completed' && run.text && !handledRunsRef.current.has(run.requestId)) {
+      handledRunsRef.current.add(run.requestId)
+      setSession(prev => {
+        if (!prev) return prev
+        const result = appendUniqueContinuityEntry(prev, { role: 'assistant', content: run.text!, provider: run.provider })
+        if (result.added) api.storeSet(UNIVERSAL_CHAT_STORE_KEY, result.thread).catch(() => {})
+        return result.thread
+      })
+    } else if (run.status !== 'completed') setError(run.error || `${providerLabel(run.provider)} response did not complete.`)
+  }
+
+  useEffect(() => {
+    const onEvent = (_e: unknown, data: { run: UniversalChatRun }) => applyRun(data.run)
+    api.onUniversalChatEvent(onEvent)
+    return () => api.offUniversalChatEvent(onEvent)
   }, [])
+
+  useEffect(() => {
+    if (!session) return
+    api.universalChatGetRunState(session.id).then(snapshot => snapshot.runs.forEach(applyRun)).catch(() => {})
+  }, [session?.id])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -134,7 +164,6 @@ export default function UniversalChat() {
 
   async function handleNewSession() {
     if (sendingRef.current) return
-    clearWatchdog()
     const created = createContinuityThread({ title: 'Universal Chat' })
     await persist(created)
     setError(null)
@@ -153,20 +182,19 @@ export default function UniversalChat() {
     const withUser = appendContinuityEntry(session, { role: 'user', content: text, provider })
     await persist(withUser)
 
-    const viewResult = await api.universalChatEnsureView(provider)
+    const viewResult = await api.universalChatStart({ sessionId: session.id, provider, text })
     if ('error' in viewResult) {
-      clearWatchdog()
       sendingRef.current = false
       setSending(false)
       setError(
-        viewResult.error === 'no_google_account'
-          ? 'Add a Google account on the Accounts page first — Universal Chat reuses that session.'
+        viewResult.error === 'provider_busy'
+          ? `${providerLabel(provider)} already has a response in progress. Please wait for it to finish.`
           : `${providerLabel(provider)} isn't supported yet.`
       )
       return
     }
 
-    const ok = await api.universalChatSend(viewResult.tabId, text, provider)
+    /* const ok = await api.universalChatSend(viewResult.tabId, text, provider)
     if (!ok) {
       clearWatchdog()
       sendingRef.current = false
@@ -182,7 +210,7 @@ export default function UniversalChat() {
       setSending(false)
       setLiveText('')
       setError(`No response from ${providerLabel(provider)} — try again.`)
-    }, 45000)
+    }, 45000) */
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -300,6 +328,16 @@ export default function UniversalChat() {
                     className="w-40 sm:w-48"
                   />
                 }
+                rightSlot={
+                  <InlineDictationControl
+                    surface="universal"
+                    surfaceSessionId={session.id}
+                    provider={provider === 'gemini' ? 'gemini' : 'chatgpt'}
+                    onProviderChange={(nextProvider) => setProvider(nextProvider)}
+                    disabled={sending}
+                    onTranscript={(transcript) => setInput(transcript)}
+                  />
+                }
               />
             </div>
 
@@ -348,6 +386,16 @@ export default function UniversalChat() {
                     className="w-40 sm:w-48"
                   />
                 }
+                rightSlot={
+                  <InlineDictationControl
+                    surface="universal"
+                    surfaceSessionId={session.id}
+                    provider={provider === 'gemini' ? 'gemini' : 'chatgpt'}
+                    onProviderChange={(nextProvider) => setProvider(nextProvider)}
+                    disabled={sending}
+                    onTranscript={(transcript) => setInput(transcript)}
+                  />
+                }
               />
             </div>
           </div>
@@ -355,8 +403,16 @@ export default function UniversalChat() {
       )}
 
       {error && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 font-retro-mono text-xs font-bold px-4 py-2.5 rounded-xl bg-[#FEE2E2] border-2 border-[#281E14] text-[#DC2626] shadow-[3px_3px_0px_0px_rgba(40,30,20,0.25)] max-w-md text-center animate-in fade-in duration-200">
-          {error}
+        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 font-retro-mono text-xs font-bold px-4 py-3 rounded-xl bg-[#FEE2E2] border-2 border-[#281E14] text-[#DC2626] shadow-[4px_4px_0px_0px_rgba(40,30,20,0.3)] max-w-xl w-[90%] text-center animate-in fade-in slide-in-from-bottom-2 duration-200 flex items-center justify-between gap-3">
+          <span className="flex-1 text-left break-words">{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="shrink-0 p-1 hover:bg-[#FCA5A5] rounded-md text-[#991B1B] transition-colors cursor-pointer"
+            title="Dismiss error"
+          >
+            ✕
+          </button>
         </div>
       )}
     </div>

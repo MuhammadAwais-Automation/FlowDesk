@@ -246,8 +246,19 @@ export function buildURLSnifferSrc(tool: string): string {
       } catch (e) {}
       ws.addEventListener('message', function (ev) {
         try {
-          var data = typeof ev.data === 'string' ? ev.data : '[binary]'
-          window.postMessage({ __flowdeskSniff: { tool: TOOL, transport: 'ws-message', method: 'WS', url: String(url), size: data.length, preview: data.slice(0, 800) } }, '*')
+          // Binary frames need their real byte length reported, not the
+          // length of a '[binary]' placeholder: on a target whose frames are
+          // all binary (WhatsApp Web's are Noise-encrypted), frame size is
+          // the only signal left for telling a real content frame apart from
+          // a heartbeat, and collapsing every frame to a constant 8 would
+          // throw away the one thing discovery is looking for.
+          if (typeof ev.data === 'string') {
+            window.postMessage({ __flowdeskSniff: { tool: TOOL, transport: 'ws-message', method: 'WS', url: String(url), size: ev.data.length, preview: ev.data.slice(0, 800) } }, '*')
+            return
+          }
+          var kind = ev.data instanceof Blob ? 'blob' : (ev.data instanceof ArrayBuffer ? 'arraybuffer' : 'binary')
+          var bytes = ev.data instanceof Blob ? ev.data.size : (ev.data instanceof ArrayBuffer ? ev.data.byteLength : -1)
+          window.postMessage({ __flowdeskSniff: { tool: TOOL, transport: 'ws-message', method: 'WS', url: String(url), size: bytes, preview: '[' + kind + ']' } }, '*')
         } catch (e) {}
       })
       return ws
@@ -295,3 +306,257 @@ export const QWEN_SNIFFER_SRC = buildURLSnifferSrc('qwen')
 export const QWEN_MATCH_SRC = '/api/v2/chat/completions'
 export const QWEN_CAPTURE_SRC = buildCaptureInjectSrc(QWEN_MATCH_SRC, 'qwen')
 export const PERPLEXITY_CAPTURE_SRC = buildCaptureInjectSrc(PERPLEXITY_MATCH_SRC, 'perplexity')
+
+// Discovery-only, no capture rule yet: WhatsApp Web is expected to differ
+// fundamentally from every provider above. Its transport is a WebSocket to
+// web.whatsapp.com carrying Noise-protocol-encrypted binary frames, so
+// unlike Grok's clean per-event JSON there is likely nothing readable to
+// tee at the network layer at all — buildWSCaptureInjectSrc bails on
+// non-string ev.data by design. Run this sniffer against a real session
+// first and read the actual frames before writing any capture rule: if the
+// ws-message entries come back as [blob]/[arraybuffer], the interception
+// point has to move up a layer to WhatsApp Web's own already-decrypted
+// internal modules rather than staying on the wire.
+export const WHATSAPP_SNIFFER_SRC = buildURLSnifferSrc('whatsapp')
+
+/**
+ * Step 2 of WhatsApp discovery. The sniffer above already answered step 1,
+ * and the answer was conclusive: on a real logged-in session every single
+ * content frame on wss://web.whatsapp.com:5222/ws/chat came back as
+ * [arraybuffer] — not one string frame in the whole run — with real payloads
+ * up to 482KB riding alongside 39-58 byte heartbeats. So the wire carries
+ * exactly the Noise-encrypted binary it was expected to, and there is
+ * nothing tee-able there at any size. Network-layer capture is ruled out.
+ *
+ * That moves the interception point up to where the page has already
+ * decrypted everything for its own rendering: WhatsApp Web's module
+ * registry. But which registry is itself an open question — the old
+ * moduleRaid/`webpackChunkwhatsapp_web_client` trick that every WhatsApp
+ * automation library was built on assumes plain webpack, and the sniffer log
+ * shows this build is NOT plain webpack: it boots through Meta's Comet
+ * loader (`/ajax/bootloader-endpoint/?nb_modules=WAWebCollections,...`),
+ * which is a different module system entirely.
+ *
+ * So probe before building: report which loader globals actually exist on
+ * the live page and whether a known WA module can be pulled out of them,
+ * rather than picking an injection library on the strength of its README and
+ * finding out later. Re-runs on a delay because the registry populates as
+ * the app boots — a single probe at dom-ready is too early to be meaningful.
+ */
+/**
+ * Step 3 of WhatsApp discovery, and the last one before a real capture rule.
+ *
+ * Step 2 answered the access question outright, and more cheaply than
+ * expected. Probed against a live session, the page exposes Meta's Comet
+ * loader directly — require/__d/requireLazy/importNamespace are all
+ * functions — and `require('WAWebCollections')` returns the live, decrypted
+ * store synchronously: Chat, Msg, MsgInfo, Contact, GroupMetadata, Presence,
+ * Reactions and ~40 more. (`webpackChunkwhatsapp_web_client` does also still
+ * exist, contrary to what the Comet bootloader URLs suggested — but it is
+ * moot, since nothing here needs moduleRaid-style chunk injection or any
+ * third-party injection library to reach the same objects.)
+ *
+ * What is still unknown is the SHAPE of what those collections hold, and
+ * that is the one thing a parser cannot be written against from a module
+ * listing. So this pass does not extract anything for real use — it reports
+ * the key list of one genuine message model plus a heavily truncated body,
+ * enough to write extraction against observed structure rather than an
+ * assumed one, and no more than that (this is the user's own live inbox).
+ *
+ * It also enumerates the module registry for send-capable modules instead of
+ * guessing a name like WAWebSendMsgChatAction and hoping: the name is
+ * discoverable, so it should be discovered.
+ */
+export const WHATSAPP_STORE_PROBE_SRC = `
+(function () {
+  if (window.__fdWaStore) return true
+  window.__fdWaStore = true
+
+  var seen = {}
+  var liveCount = 0
+
+  // Static facts dedupe; live message arrivals deliberately do not. The
+  // previous pass deduped everything by key, which silenced the hook after
+  // its very first event — and that first event happened to be a newsletter
+  // image, so the actual text message sent seconds later never appeared and
+  // the run looked like it had captured the wrong thing. Cap rather than
+  // dedupe: enough events to see both directions of a real exchange, not so
+  // many that a history sync floods the log.
+  function report(what, detail, always) {
+    if (!always) {
+      if (seen[what]) return
+      seen[what] = true
+    }
+    try {
+      window.postMessage({ __flowdeskSniff: {
+        tool: 'whatsapp', transport: 'store-probe', method: what,
+        url: '', preview: String(detail).slice(0, 1200)
+      } }, '*')
+    } catch (e) {}
+  }
+
+  function sample(m) {
+    var body = typeof m.body === 'string' ? m.body : ''
+    return JSON.stringify({
+      type: m.type,
+      fromMe: m.id && m.id.fromMe,
+      chat: m.id && String(m.id.remote),
+      hasCaption: !!m.caption,
+      // Media bodies are base64 payloads, not text: reporting 60 chars of a
+      // JPEG tells us nothing and buries the text case, so label instead.
+      body: m.type === 'chat' ? body.slice(0, 80) : '[' + m.type + ' payload ' + body.length + 'b]'
+    })
+  }
+
+  function findSendModule() {
+    // require.__debug.modules is not exposed on this build (confirmed), so
+    // the registry cannot simply be listed. Two fallbacks, both verified by
+    // what actually resolves rather than by picking a name from a README.
+    var candidates = [
+      'WAWebSendTextMsgChatAction', 'WAWebSendMsgChatAction', 'WAWebSendTextMsg',
+      'WAWebChatSendMessages', 'WAWebSendMsg', 'WAWebMsgSendUtils',
+      'WAWebComposeBoxActions', 'WAWebSendMessageAction'
+    ]
+    var hits = []
+    for (var i = 0; i < candidates.length; i++) {
+      try {
+        var mod = window.require(candidates[i])
+        if (mod) hits.push(candidates[i] + '{' + Object.keys(mod).slice(0, 12).join('|') + '}')
+      } catch (e) {}
+    }
+    report('send/directRequire', hits.length ? hits.join('  ||  ') : 'none of the candidate names resolved')
+
+    // webpackChunkwhatsapp_web_client does exist on this build (confirmed in
+    // the previous pass), so its factory sources can be scanned for the real
+    // export name even though Comet's own registry is closed.
+    try {
+      var chunk = window.webpackChunkwhatsapp_web_client
+      if (chunk && chunk.push) {
+        var ids = []
+        chunk.push([['__fdProbe'], {}, function (req) {
+          try { ids = Object.keys(req.m || req.c || {}) } catch (e) {}
+        }])
+        report('send/webpackModuleCount', String(ids.length))
+      } else {
+        report('send/webpack', 'chunk global present but not pushable')
+      }
+    } catch (e) { report('send/webpack-error', e && e.message) }
+  }
+
+  function attach() {
+    var Store
+    try { Store = window.require('WAWebCollections') } catch (e) { return false }
+    if (!Store || !Store.Msg) return false
+
+    // Report counts on a delay too: at dom-ready the collections exist but
+    // are empty, and a single early reading (chats:0, msgs:0) reads as a
+    // failure when it is really just history sync not having landed yet.
+    function counts(tag) {
+      report('counts/' + tag, JSON.stringify({
+        chats: Store.Chat && Store.Chat.length,
+        msgs: Store.Msg && Store.Msg.length,
+        contacts: Store.Contact && Store.Contact.length
+      }))
+    }
+    counts('t0')
+    setTimeout(function () { counts('t15s') }, 15000)
+    setTimeout(function () {
+      counts('t40s')
+      try {
+        var models = Store.Msg.models || []
+        var chats = models.filter(function (m) { return m.type === 'chat' })
+        var m = chats[chats.length - 1]
+        if (m) {
+          report('msg/attrKeys', Object.keys(m).filter(function (k) { return k.indexOf('__x_') === 0 }).slice(0, 80).join(','))
+          report('msg/sample', sample(m))
+        } else {
+          report('msg/sample', 'no type=chat message loaded yet')
+        }
+      } catch (e) { report('msg/shape-error', e && e.message) }
+      findSendModule()
+    }, 40000)
+
+    try {
+      Store.Msg.on('add', function (m) {
+        if (liveCount >= 8) return
+        liveCount++
+        try { report('LIVE#' + liveCount, sample(m), true) } catch (e) {}
+      })
+      report('hook/msg-add', 'attached')
+    } catch (e) { report('hook/msg-add-error', e && e.message) }
+
+    return true
+  }
+
+  var tries = 0
+  var timer = setInterval(function () {
+    tries++
+    if (attach() || tries > 30) clearInterval(timer)
+  }, 2000)
+  if (attach()) clearInterval(timer)
+  return true
+})()
+`
+
+export const WHATSAPP_MODULE_PROBE_SRC = `
+(function () {
+  if (window.__fdWaProbe) return true
+  window.__fdWaProbe = true
+
+  function report(what, detail) {
+    try {
+      window.postMessage({ __flowdeskSniff: {
+        tool: 'whatsapp', transport: 'module-probe', method: what,
+        url: '', preview: String(detail).slice(0, 900)
+      } }, '*')
+    } catch (e) {}
+  }
+
+  function keysOf(mod) {
+    if (!mod) return 'null'
+    try { return Object.keys(mod).slice(0, 60).join(',') } catch (e) { return 'unlistable:' + e.message }
+  }
+
+  function run(pass) {
+    try {
+      var chunkGlobals = []
+      for (var k in window) { if (k.indexOf('webpackChunk') === 0 || k.indexOf('webpackJsonp') === 0) chunkGlobals.push(k) }
+      report('pass' + pass + '/globals', JSON.stringify({
+        require: typeof window.require,
+        __d: typeof window.__d,
+        requireLazy: typeof window.requireLazy,
+        importNamespace: typeof window.importNamespace,
+        WPP: typeof window.WPP,
+        webpackGlobals: chunkGlobals
+      }))
+    } catch (e) { report('pass' + pass + '/globals-error', e && e.message) }
+
+    // Comet's synchronous require: works only for modules already loaded.
+    try {
+      if (typeof window.require === 'function') {
+        report('pass' + pass + '/require(WAWebCollections)', keysOf(window.require('WAWebCollections')))
+      }
+    } catch (e) { report('pass' + pass + '/require-error', e && e.message) }
+
+    // Comet's async loader: pulls the module in if it is not resident yet.
+    try {
+      if (typeof window.requireLazy === 'function') {
+        window.requireLazy(['WAWebCollections'], function (mod) {
+          report('pass' + pass + '/requireLazy(WAWebCollections)', keysOf(mod))
+        })
+        window.requireLazy(['WAWebChatCollection'], function (mod) {
+          report('pass' + pass + '/requireLazy(WAWebChatCollection)', keysOf(mod))
+        })
+      }
+    } catch (e) { report('pass' + pass + '/requireLazy-error', e && e.message) }
+  }
+
+  // Boot is asynchronous and the registry fills in progressively: the useful
+  // signal is not any single pass but which of these three first succeeds.
+  run(1)
+  setTimeout(function () { run(2) }, 8000)
+  setTimeout(function () { run(3) }, 20000)
+  return true
+})()
+`
+

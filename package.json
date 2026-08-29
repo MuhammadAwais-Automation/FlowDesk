@@ -9,6 +9,7 @@
   "scripts": {
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
+    "dev:debug": "set ELECTRON_ENABLE_LOGGING=1&& set ELECTRON_ENABLE_STACK_DUMPING=1&& set FLOWDESK_VOICE_DEBUG=1&& set FLOWDESK_AGENT_DEBUG=1&& set DEBUG=electron-vite:*&& electron-vite dev",
     "build": "electron-vite build",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
@@ -25,7 +26,23 @@
     },
     "files": [
       "out/**/*",
-      "!out/**/*.map"
+      "!out/**/*.map",
+      "node_modules/@anthropic-ai/**/*",
+      "node_modules/@modelcontextprotocol/**/*",
+      "node_modules/@openai/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**",
+      "node_modules/@openai/codex-win32-x64/**"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/@openai/codex-win32-x64/vendor",
+        "to": "codex/vendor",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "extraMetadata": {
       "main": "./out/main/main.js"
@@ -47,8 +64,13 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "FlowDesk",
+      "shortcutName": "FlowDesk Retro Workstation",
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
       "installerHeaderIcon": "resources/icon.ico",
+      "installerSidebar": "resources/installerSidebar.bmp",
+      "installerHeader": "resources/installerHeader.bmp",
+      "include": "resources/installer.nsh",
       "deleteAppDataOnUninstall": false
     },
     "publish": null
@@ -58,10 +80,17 @@
     "@fontsource-variable/dm-sans": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/outfit": "^5.3.0",
+    "@google/genai": "^2.18.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@openai/codex-sdk": "^0.148.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "electron-store": "^8.2.0",
+    "livekit-client": "^2.22.0",
+    "livekit-server-sdk": "^2.18.0",
     "lucide-react": "^0.344.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^2.6.1",
     "zod": "^4.4.3",
     "zustand": "^4.5.7"

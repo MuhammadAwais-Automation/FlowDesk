@@ -245,3 +245,231 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .animate-pulse-glow {
   animation: pulseGlow 2.5s ease-in-out infinite;
 }
+
+/* Command Center's signature is a live orbital core. It is intentionally
+   driven by actual run state rather than being a decorative looping graphic. */
+.command-deck {
+  position: relative;
+  background-image:
+    linear-gradient(rgba(103, 232, 249, .035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 232, 249, .035) 1px, transparent 1px),
+    radial-gradient(circle at 50% 48%, rgba(34, 211, 238, .12), transparent 30rem);
+  background-size: 32px 32px, 32px 32px, auto;
+}
+
+.command-deck__top {
+  background: linear-gradient(90deg, rgba(34, 211, 238, .06), transparent 45%, rgba(139, 92, 246, .08));
+}
+
+.command-deck__core {
+  background: radial-gradient(circle, rgba(6, 182, 212, .1), transparent 66%);
+}
+
+.neural-core {
+  position: relative;
+  width: 126px;
+  height: 126px;
+  display: grid;
+  place-items: center;
+}
+
+.neural-core::before,
+.neural-core::after,
+.neural-core__orbit {
+  position: absolute;
+  content: '';
+  border-radius: 999px;
+  border: 1px solid rgba(103, 232, 249, .42);
+}
+
+.neural-core::before { inset: 14px; box-shadow: 0 0 30px rgba(34, 211, 238, .2), inset 0 0 18px rgba(34, 211, 238, .16); }
+.neural-core::after { inset: 0; border-style: dashed; opacity: .55; animation: coreRotate 15s linear infinite; }
+.neural-core__orbit--one { width: 144px; height: 52px; transform: rotate(-28deg); animation: coreRotate 7s linear infinite; }
+.neural-core__orbit--two { width: 50px; height: 144px; transform: rotate(32deg); opacity: .68; animation: coreRotateReverse 10s linear infinite; }
+.neural-core__lens {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  color: #d9faff;
+  background: radial-gradient(circle at 35% 28%, #38dff7, #0f4f78 58%, #091521 73%);
+  box-shadow: 0 0 0 7px rgba(34, 211, 238, .08), 0 0 30px rgba(34, 211, 238, .5);
+}
+.neural-core--working .neural-core__lens { animation: corePulse .9s ease-in-out infinite; background: radial-gradient(circle at 35% 28%, #fde68a, #b45309 58%, #21110a 73%); }
+.neural-core--complete .neural-core__lens { background: radial-gradient(circle at 35% 28%, #bbf7d0, #047857 58%, #061b17 73%); }
+
+@keyframes coreRotate { to { transform: rotate(360deg); } }
+@keyframes coreRotateReverse { to { transform: rotate(-360deg); } }
+@keyframes corePulse { 50% { transform: scale(1.12); box-shadow: 0 0 0 13px rgba(251, 191, 36, .08), 0 0 38px rgba(251, 191, 36, .7); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .neural-core::after,
+  .neural-core__orbit,
+  .neural-core--working .neural-core__lens { animation: none; }
+}
+
+/* Keep the markdown list chevron encoding-independent. */
+.retro-md__list > li::before {
+  content: '\203A';
+}
+
+/* NotebookLM Research Studio: a tactile "research console" skin.  It is
+   intentionally scoped so the existing FlowDesk areas keep their own UI. */
+.notebook-studio {
+  background:
+    radial-gradient(circle at 86% -12%, var(--accent-muted), transparent 26rem),
+    linear-gradient(90deg, transparent 0 94%, var(--border-soft) 94% 94.15%, transparent 94.15%),
+    var(--bg);
+}
+
+.notebook-studio__header {
+  position: relative;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 1px 0 var(--border-soft), 0 8px 26px rgba(0, 0, 0, 0.05);
+}
+
+.notebook-studio__header::after {
+  content: 'RESEARCH CONSOLE / LIVE';
+  position: absolute;
+  right: 11rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font: 600 9px/1 var(--font-retro-mono);
+  letter-spacing: .14em;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.notebook-studio__rail {
+  background:
+    linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface) 84%, var(--accent-muted)));
+  box-shadow: inset -1px 0 var(--border-soft);
+}
+
+.notebook-studio__rail > div:nth-of-type(2) button {
+  position: relative;
+  border: 1px solid transparent;
+}
+
+.notebook-studio__rail > div:nth-of-type(2) button:hover {
+  border-color: var(--accent-border);
+}
+
+.notebook-studio__rail > div:nth-of-type(2) button.bg-accent-soft {
+  border-color: var(--accent-border);
+  box-shadow: inset 3px 0 0 var(--accent), 0 4px 12px var(--accent-muted);
+}
+
+.notebook-studio__canvas {
+  background-image: radial-gradient(var(--border-soft) .65px, transparent .8px);
+  background-size: 14px 14px;
+}
+
+.notebook-studio__grid {
+  padding-bottom: 2rem;
+}
+
+.notebook-studio .notebook-studio__grid section {
+  position: relative;
+  overflow: hidden;
+  border-color: var(--border);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--surface) 96%, var(--accent-muted)), var(--surface) 44%),
+    var(--surface);
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--transition-base), border-color var(--transition-base), box-shadow var(--transition-base);
+}
+
+.notebook-studio .notebook-studio__grid section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  background: linear-gradient(var(--accent), transparent 80%);
+  opacity: .7;
+}
+
+.notebook-studio .notebook-studio__grid section:hover {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-sm), 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.notebook-studio h1,
+.notebook-studio h2,
+.notebook-connect h1 {
+  font-family: var(--font-retro-tech);
+  letter-spacing: -.025em;
+}
+
+.notebook-studio h2 {
+  letter-spacing: .01em;
+}
+
+.notebook-studio input,
+.notebook-studio textarea,
+.notebook-studio select,
+.notebook-connect input,
+.notebook-connect select {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg) 68%, var(--surface));
+  font-family: var(--font-retro-sans);
+}
+
+.notebook-studio textarea:focus,
+.notebook-studio input:focus,
+.notebook-studio select:focus,
+.notebook-connect input:focus,
+.notebook-connect select:focus {
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+
+.notebook-studio button.bg-accent,
+.notebook-connect button.bg-accent {
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--accent) 42%, var(--text));
+}
+
+.notebook-studio button.bg-accent:hover:not(:disabled),
+.notebook-connect button.bg-accent:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 color-mix(in srgb, var(--accent) 42%, var(--text));
+}
+
+.notebook-studio__empty > div {
+  padding: 2rem 2.5rem;
+  border: 1px dashed var(--accent-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  font-family: var(--font-retro-mono);
+}
+
+.notebook-connect {
+  background:
+    radial-gradient(circle at 18% 13%, var(--accent-muted), transparent 20rem),
+    radial-gradient(var(--border-soft) .7px, transparent .9px), var(--bg);
+  background-size: auto, 13px 13px, auto;
+}
+
+.notebook-connect__card {
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg), 0 0 0 7px color-mix(in srgb, var(--surface) 60%, transparent);
+}
+
+.notebook-connect__card::after {
+  content: 'FD / NOTEBOOKLM';
+  position: absolute;
+  top: 1rem;
+  right: 1.25rem;
+  font: 600 9px/1 var(--font-retro-mono);
+  letter-spacing: .13em;
+  color: var(--text-3);
+}
+
+@media (max-width: 900px) {
+  .notebook-studio__header::after { display: none; }
+}

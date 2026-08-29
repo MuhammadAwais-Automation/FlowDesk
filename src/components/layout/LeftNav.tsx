@@ -1,8 +1,8 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import {
-  LayoutDashboard, Globe, FileText, Users,
-  Settings, Zap, Youtube, Calendar, Smartphone,
-  ChevronLeft, ChevronRight, MessagesSquare, Bot,
+  Globe, Users,
+  Settings, Zap, Youtube, Calendar,
+  ChevronLeft, ChevronRight, MessagesSquare, Bot, BookOpen, Share2, Sparkles, Clapperboard,
 } from 'lucide-react'
 import type { Page } from '@/types/pages'
 
@@ -18,15 +18,16 @@ interface NavItem {
 }
 
 const items: NavItem[] = [
-  { icon: LayoutDashboard, page: 'dashboard', label: 'Dashboard' },
+  { icon: Sparkles,        page: 'jarvis',    label: 'Jarvis Voice' },
   { icon: Globe,           page: 'browser',   label: 'AI Browser' },
   { icon: MessagesSquare,  page: 'universalChat', label: 'Universal Chat' },
   { icon: Bot,             page: 'agent',     label: 'Agent'       },
-  { icon: FileText,        page: 'prompts',   label: 'Prompts'    },
+  { icon: BookOpen,        page: 'notebooklm', label: 'NotebookLM' },
   { icon: Users,           page: 'accounts',  label: 'Accounts'   },
   { icon: Youtube,         page: 'youtube',   label: 'YT Studio'  },
   { icon: Calendar,        page: 'workspace', label: 'Workspace'  },
-  { icon: Smartphone,      page: 'social',    label: 'Social Hub' },
+  { icon: Share2,          page: 'social',    label: 'Social'     },
+  { icon: Clapperboard,    page: 'studio',    label: 'Studio'     },
 ]
 
 interface Props {

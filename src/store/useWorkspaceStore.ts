@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AIAccount, Folder, Prompt, PromptVersion, Workspace } from '@/types/database'
+import type { AIAccount, Workspace } from '@/types/database'
 import { createLocalWorkspace, LOCAL_KEYS, resolveLocalWorkspaces } from './localData'
 
 interface WorkspaceStore {
@@ -89,17 +89,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
   remove: async (id) => {
     try {
-      const [workspaces, folders, prompts, promptVersions, accounts] = await Promise.all([
+      const [workspaces, accounts] = await Promise.all([
         readWorkspaces(),
-        window.electronAPI.storeGet(LOCAL_KEYS.folders) as Promise<Folder[] | null>,
-        window.electronAPI.storeGet(LOCAL_KEYS.prompts) as Promise<Prompt[] | null>,
-        window.electronAPI.storeGet(LOCAL_KEYS.promptVersions) as Promise<PromptVersion[] | null>,
         window.electronAPI.storeGet(LOCAL_KEYS.aiAccounts) as Promise<AIAccount[] | null>,
       ])
       const next = workspaces.filter(workspace => workspace.id !== id)
-      const removedPromptIds = new Set((prompts ?? [])
-        .filter(prompt => prompt.workspace_id === id)
-        .map(prompt => prompt.id))
       const activeWorkspaceId = get().activeWorkspaceId === id
         ? next[0]?.id ?? null
         : get().activeWorkspaceId
@@ -107,18 +101,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       await Promise.all([
         writeWorkspaces(next),
         writeActiveWorkspaceId(activeWorkspaceId),
-        window.electronAPI.storeSet(
-          LOCAL_KEYS.folders,
-          (folders ?? []).filter(folder => folder.workspace_id !== id),
-        ),
-        window.electronAPI.storeSet(
-          LOCAL_KEYS.prompts,
-          (prompts ?? []).filter(prompt => prompt.workspace_id !== id),
-        ),
-        window.electronAPI.storeSet(
-          LOCAL_KEYS.promptVersions,
-          (promptVersions ?? []).filter(version => !removedPromptIds.has(version.prompt_id)),
-        ),
         window.electronAPI.storeSet(
           LOCAL_KEYS.aiAccounts,
           (accounts ?? []).filter(account => account.workspace_id !== id),

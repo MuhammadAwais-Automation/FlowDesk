@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import {
   UserPlus, RefreshCw, Trash2, Mail, User,
   ChevronLeft, ChevronRight, RotateCw, Loader2,
-  Pencil, CheckCircle2, AlertCircle, X
+  Pencil, CheckCircle2, AlertCircle, X, Bot
 } from 'lucide-react'
 import type { GmailSession } from '@/types/electron'
 
@@ -42,6 +42,7 @@ function relativeDate(iso: string): string {
 
 export default function Accounts() {
   const [sessions, setSessions] = useState<GmailSession[]>([])
+  const [agentEmail, setAgentEmail] = useState<string | null>(null)
   const [selectedEmail, setSelectedEmail] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'info' | 'gmail'>('info')
   const [adding, setAdding] = useState(false)
@@ -59,6 +60,7 @@ export default function Accounts() {
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const selected = sessions.find(s => s.email === selectedEmail) ?? null
+  const effectiveAgentEmail = agentEmail ?? sessions[0]?.email ?? null
 
   useEffect(() => { loadSessions() }, [])
 
@@ -95,8 +97,18 @@ export default function Accounts() {
   }, [activeTab, selectedEmail])
 
   async function loadSessions() {
-    const list = await window.electronAPI.gmailList()
+    const [list, agent] = await Promise.all([
+      window.electronAPI.gmailList(),
+      window.electronAPI.gmailGetAgentAccount(),
+    ])
     setSessions(list)
+    setAgentEmail(agent)
+  }
+
+  async function handleSetAgentAccount(email: string) {
+    await window.electronAPI.gmailSetAgentAccount(email)
+    setAgentEmail(email)
+    showToast('AI Agent ab is account ka use karega!')
   }
 
   function showToast(msg: string, type: 'success' | 'error' = 'success') {
@@ -369,10 +381,13 @@ export default function Accounts() {
 
                   {/* Name + email */}
                   <div className="min-w-0 flex-1">
-                    <p className={`font-retro-sans text-xs font-bold truncate ${
+                    <p className={`font-retro-sans text-xs font-bold truncate flex items-center gap-1.5 ${
                       isSelected ? 'text-[#92400E]' : 'text-stone-900'
                     }`}>
                       {displayName}
+                      {s.email === effectiveAgentEmail && (
+                        <Bot size={11} className="text-[#7C3AED] flex-shrink-0" />
+                      )}
                     </p>
                     <p className="font-retro-mono text-[10px] text-stone-500 truncate mt-0.5">
                       {s.email}
@@ -401,6 +416,7 @@ export default function Accounts() {
           gmailLoading={gmailLoading}
           gmailPanelRef={gmailPanelRef}
           nameInputRef={nameInputRef}
+          isAgentAccount={selected.email === effectiveAgentEmail}
           onTabChange={handleTabChange}
           onStartEditName={() => {
             setEditingName(true)
@@ -412,6 +428,7 @@ export default function Accounts() {
           onCancelEdit={() => setEditingName(false)}
           onLogin={() => handleLogin(selected.email, selected.partition)}
           onRemove={() => handleRemove(selected.email)}
+          onUseForAgent={() => handleSetAgentAccount(selected.email)}
         />
       ) : (
         <EmptyDetail onAdd={handleAdd} adding={adding} />
@@ -431,6 +448,7 @@ interface DetailPanelProps {
   gmailLoading: boolean
   gmailPanelRef: React.RefObject<HTMLDivElement>
   nameInputRef: React.RefObject<HTMLInputElement>
+  isAgentAccount: boolean
   onTabChange: (tab: 'info' | 'gmail') => void
   onStartEditName: () => void
   onNameInput: (v: string) => void
@@ -438,12 +456,13 @@ interface DetailPanelProps {
   onCancelEdit: () => void
   onLogin: () => void
   onRemove: () => void
+  onUseForAgent: () => void
 }
 
 function DetailPanel({
   session, activeTab, editingName, nameInput, loggingIn, gmailLoading,
-  gmailPanelRef, nameInputRef,
-  onTabChange, onStartEditName, onNameInput, onSaveName, onCancelEdit, onLogin, onRemove,
+  gmailPanelRef, nameInputRef, isAgentAccount,
+  onTabChange, onStartEditName, onNameInput, onSaveName, onCancelEdit, onLogin, onRemove, onUseForAgent,
 }: DetailPanelProps) {
   const hue = emailToHue(session.email)
   const displayName = getDisplayName(session)
@@ -533,8 +552,10 @@ function DetailPanel({
         <InfoTab
           session={session}
           loggingIn={loggingIn}
+          isAgentAccount={isAgentAccount}
           onLogin={onLogin}
           onRemove={onRemove}
+          onUseForAgent={onUseForAgent}
         />
       ) : (
         <GmailTab
@@ -550,15 +571,46 @@ function DetailPanel({
 interface InfoTabProps {
   session: GmailSession
   loggingIn: string | null
+  isAgentAccount: boolean
   onLogin: () => void
   onRemove: () => void
+  onUseForAgent: () => void
 }
 
-function InfoTab({ session, loggingIn, onLogin, onRemove }: InfoTabProps) {
+function InfoTab({ session, loggingIn, isAgentAccount, onLogin, onRemove, onUseForAgent }: InfoTabProps) {
   const isLoggingIn = loggingIn === session.email
 
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-gradient-to-b from-[#FAF7F0] to-[#F5F1E6]/40">
+
+      {/* AI Agent account */}
+      <section className="bg-white border border-[#E2DBD0] rounded-2xl p-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="font-retro-sans text-sm font-bold text-stone-900 flex items-center gap-2">
+              <Bot size={16} className="text-[#7C3AED]" />
+              AI Agent Account
+            </h3>
+            <p className="font-retro-mono text-xs text-stone-500 mt-1">
+              Yeh account AI agent ke browser-worker tools (ChatGPT, Gemini, wagera) use karenge.
+            </p>
+          </div>
+          {isAgentAccount ? (
+            <span className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#EDE9FE] border border-[#C4B5FD] text-[#6D28D9] font-retro-mono text-xs font-bold flex-shrink-0">
+              <CheckCircle2 size={13} />
+              Currently Active
+            </span>
+          ) : (
+            <button
+              onClick={onUseForAgent}
+              className="retro-btn flex items-center gap-2 px-4 py-2 rounded-xl bg-[#EDE9FE] border border-[#C4B5FD]/70 text-[#6D28D9] hover:bg-[#DDD6FE] font-retro-mono text-xs font-bold shadow-xs transition-all flex-shrink-0"
+            >
+              <Bot size={13} />
+              Use for AI Agent
+            </button>
+          )}
+        </div>
+      </section>
 
       {/* Re-authenticate */}
       <section className="bg-white border border-[#E2DBD0] rounded-2xl p-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)]">

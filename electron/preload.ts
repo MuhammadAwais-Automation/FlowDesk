@@ -5,6 +5,53 @@ contextBridge.exposeInMainWorld('electronAPI', {
   storeGet: (key: string) => ipcRenderer.invoke('store:get', key),
   storeSet: (key: string, value: unknown) => ipcRenderer.invoke('store:set', key, value),
 
+  // NotebookLM Research Studio. The renderer receives results only; the local
+  // notebooklm-py profile and Google session remain in the main process.
+  notebooklmStatus: () => ipcRenderer.invoke('notebooklm:status'),
+  notebooklmServiceStatus: () => ipcRenderer.invoke('notebooklm:serviceStatus'),
+  notebooklmSelectAccount: (email: string | null) => ipcRenderer.invoke('notebooklm:selectAccount', email),
+  notebooklmNativeStatus: () => ipcRenderer.invoke('notebooklm:nativeStatus'),
+  notebooklmOpenNative: () => ipcRenderer.invoke('notebooklm:openNative'),
+  notebooklmCloseNative: () => ipcRenderer.invoke('notebooklm:closeNative'),
+  notebooklmDoctor: () => ipcRenderer.invoke('notebooklm:doctor'),
+  notebooklmLogin: (browser?: 'chromium' | 'chrome' | 'msedge') => ipcRenderer.invoke('notebooklm:login', browser),
+  notebooklmListNotebooks: () => ipcRenderer.invoke('notebooklm:listNotebooks'),
+  notebooklmCreateNotebook: (title: string) => ipcRenderer.invoke('notebooklm:createNotebook', title),
+  notebooklmAddSource: (input: unknown) => ipcRenderer.invoke('notebooklm:addSource', input),
+  notebooklmStartResearch: (notebookId: string, query: string, mode?: 'fast' | 'deep') => ipcRenderer.invoke('notebooklm:startResearch', notebookId, query, mode),
+  notebooklmResearchStatus: (notebookId: string) => ipcRenderer.invoke('notebooklm:researchStatus', notebookId),
+  notebooklmAsk: (notebookId: string, question: string) => ipcRenderer.invoke('notebooklm:ask', notebookId, question),
+  notebooklmStartChatStream: (notebookId: string, question: string, requestId?: string) => ipcRenderer.invoke('notebooklm:chatStream:start', notebookId, question, requestId),
+  notebooklmCancelChatStream: (streamId: string) => ipcRenderer.invoke('notebooklm:chatStream:cancel', streamId),
+  onNotebooklmChatStream: (callback: (event: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload)
+    ipcRenderer.on('notebooklm:chatStream:event', listener)
+    return () => ipcRenderer.removeListener('notebooklm:chatStream:event', listener)
+  },
+  notebooklmListArtifacts: (notebookId: string) => ipcRenderer.invoke('notebooklm:listArtifacts', notebookId),
+  notebooklmGenerateArtifact: (request: unknown) => ipcRenderer.invoke('notebooklm:generateArtifact', request),
+  notebooklmDownloadArtifact: (notebookId: string, kind: string, artifactId?: string, format?: string) => ipcRenderer.invoke('notebooklm:downloadArtifact', notebookId, kind, artifactId, format),
+  notebooklmManage: (action: string, payload?: unknown) => ipcRenderer.invoke('notebooklm:manage', action, payload),
+  // Short Studio aliases used by the page layer.
+  notebooksList: () => ipcRenderer.invoke('notebooklm:listNotebooks'),
+  notebooksCreate: (input: { title: string }) => ipcRenderer.invoke('notebooklm:createNotebook', input.title),
+  sourcesAdd: (input: { notebookId: string; type: 'url' | 'text'; value: string; title?: string }) =>
+    ipcRenderer.invoke('notebooklm:addSource', { notebookId: input.notebookId, type: input.type, content: input.value, title: input.title }),
+  sourcesList: (notebookId: string) => ipcRenderer.invoke('notebooklm:listSources', notebookId),
+  sourceCounts: (notebookIds: string[]) => ipcRenderer.invoke('notebooklm:sourceCounts', notebookIds),
+  researchStart: (input: { notebookId: string; query: string; mode?: 'fast' | 'deep' }) => ipcRenderer.invoke('notebooklm:startResearch', input.notebookId, input.query, input.mode),
+  researchStatus: (input: { notebookId: string; jobId?: string }) => ipcRenderer.invoke('notebooklm:researchStatus', input.notebookId),
+  chatAsk: (input: { notebookId: string; question: string }) => ipcRenderer.invoke('notebooklm:ask', input.notebookId, input.question),
+  artifactsList: (input: { notebookId: string }) => ipcRenderer.invoke('notebooklm:listArtifacts', input.notebookId),
+  artifactGenerate: (input: { notebookId: string; type: string; prompt?: string }) => ipcRenderer.invoke('notebooklm:generateArtifact', { notebookId: input.notebookId, kind: input.type, instructions: input.prompt }),
+  artifactDownload: (input: { notebookId: string; kind: string; artifactId?: string; format?: string }) => ipcRenderer.invoke('notebooklm:downloadArtifact', input.notebookId, input.kind, input.artifactId, input.format),
+  notebooklmJobsList: (notebookId?: string) => ipcRenderer.invoke('notebooklm:jobs:list', notebookId),
+  notebooklmJobsStartResearch: (input: { notebookId: string; query: string; mode?: 'fast' | 'deep' }) => ipcRenderer.invoke('notebooklm:jobs:research', input),
+  notebooklmJobsGenerateArtifact: (input: unknown) => ipcRenderer.invoke('notebooklm:jobs:artifact', input),
+  notebooklmJobsRefresh: (id: string) => ipcRenderer.invoke('notebooklm:jobs:refresh', id),
+  notebooklmJobsCancel: (id: string) => ipcRenderer.invoke('notebooklm:jobs:cancel', id),
+  notebooklmJobsRetry: (id: string) => ipcRenderer.invoke('notebooklm:jobs:retry', id),
+
   // Browser view controls
   switchView: (tabId: string, partition: string, url: string) =>
     ipcRenderer.invoke('view:switch', tabId, partition, url),
@@ -26,14 +73,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearPartitionStorage: (partition: string) =>
     ipcRenderer.invoke('session:clearPartition', partition),
 
-  // Social Hub
-  socialShow:      (id: string, partition: string, url: string) => ipcRenderer.invoke('social:show', id, partition, url),
-  socialHide:      () => ipcRenderer.invoke('social:hide'),
-  socialDestroy:   (id: string) => ipcRenderer.invoke('social:destroy', id),
-  socialGoBack:    () => ipcRenderer.invoke('social:goBack'),
-  socialGoForward: () => ipcRenderer.invoke('social:goForward'),
-  socialReload:    () => ipcRenderer.invoke('social:reload'),
-
   // Gmail session management
   gmailList: () => ipcRenderer.invoke('gmail:list'),
   gmailAdd: () => ipcRenderer.invoke('gmail:add'),
@@ -48,6 +87,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('gmail:updateColor', email, color),
   gmailOpenInbox: (tabId: string, partition: string) =>
     ipcRenderer.invoke('gmail:openInbox', tabId, partition),
+  gmailGetAgentAccount: () => ipcRenderer.invoke('gmail:getAgentAccount'),
+  gmailSetAgentAccount: (email: string | null) =>
+    ipcRenderer.invoke('gmail:setAgentAccount', email),
+
+  // Dev-only debug hook — see main.ts's 'debug:askBrowserProviderDirect'.
+  debugAskBrowserProviderDirect: (tool: string, prompt: string, resetFirst?: boolean) =>
+    ipcRenderer.invoke('debug:askBrowserProviderDirect', tool, prompt, resetFirst),
+  debugInspectChatGptDom: () => ipcRenderer.invoke('debug:inspectChatGptDom'),
 
   // YouTube Multi-Account
   ytList: () => ipcRenderer.invoke('yt:list'),
@@ -73,24 +120,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   workspaceOpenLogin: () => ipcRenderer.invoke('workspace:openLogin'),
   workspaceLogout: () => ipcRenderer.invoke('workspace:logout'),
 
-  // Prompt Library
-  promptsList: () => ipcRenderer.invoke('prompts:list'),
-  promptsSave: (id: string | null, name: string, content: string, categoryId: string | null) =>
-    ipcRenderer.invoke('prompts:save', id, name, content, categoryId),
-  promptsDelete: (id: string) => ipcRenderer.invoke('prompts:delete', id),
-  promptsCategoriesList: () => ipcRenderer.invoke('prompts:categories:list'),
-  promptsCategoriesSave: (id: string | null, name: string, color: string) =>
-    ipcRenderer.invoke('prompts:categories:save', id, name, color),
-  promptsCategoriesDelete: (id: string) => ipcRenderer.invoke('prompts:categories:delete', id),
-
   // App system
   getLoginItemSettings: () => ipcRenderer.invoke('app:getLoginItemSettings'),
-
-  // Events: main → renderer
-  onInjectPanel: (cb: () => void) => ipcRenderer.on('open-inject-panel', cb),
-  onCaptureSelection: (cb: () => void) => ipcRenderer.on('capture-selection', cb),
-  offInjectPanel: (cb: () => void) => ipcRenderer.removeListener('open-inject-panel', cb),
-  offCaptureSelection: (cb: () => void) => ipcRenderer.removeListener('capture-selection', cb),
 
   // PoC: live capture of streamed AI responses (ChatGPT only, for now)
   onCaptureLive: (cb: (e: unknown, data: { id: string; tool: string; textSoFar: string }) => void) =>
@@ -122,15 +153,64 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Universal Chat: one background worker tab per provider
   universalChatEnsureView: (provider: string) => ipcRenderer.invoke('universalChat:ensureView', provider),
   universalChatSend: (tabId: string, text: string, tool: string) => ipcRenderer.invoke('universalChat:send', tabId, text, tool),
+  universalChatStart: (input: { sessionId: string; provider: string; text: string }) => ipcRenderer.invoke('universalChat:start', input),
+  universalChatGetRunState: (sessionId?: string) => ipcRenderer.invoke('universalChat:getRunState', sessionId),
+  onUniversalChatEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.on('universalChat:event', cb),
+  offUniversalChatEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('universalChat:event', cb),
 
-  // Agent: lead Claude (SDK) that can call the 5 browser-driven worker tools
-  agentSendMessage: (prompt: string) => ipcRenderer.invoke('agent:sendMessage', prompt),
+  inlineDictationStart: (input: unknown) => ipcRenderer.invoke('inlineDictation:start', input),
+  inlineDictationStop: (runId: string) => ipcRenderer.invoke('inlineDictation:stop', runId),
+  inlineDictationGetRunState: (surface?: 'agent' | 'universal', surfaceSessionId?: string) =>
+    ipcRenderer.invoke('inlineDictation:getRunState', surface, surfaceSessionId),
+  onInlineDictationEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.on('inlineDictation:event', cb),
+  offInlineDictationEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('inlineDictation:event', cb),
+
+  // Agent: selected lead SDK provider that can call the browser-driven worker tools
+  agentSendMessage: (input: { prompt: string; sessionId: string; runId: string }) => ipcRenderer.invoke('agent:sendMessage', input),
+  agentGetRunState: () => ipcRenderer.invoke('agent:getRunState'),
+  agentSessionList: () => ipcRenderer.invoke('agentSession:list'),
+  agentSessionCreate: (title?: string) => ipcRenderer.invoke('agentSession:create', title),
+  agentSessionTurns: (id: string) => ipcRenderer.invoke('agentSession:turns', id),
+  agentSessionRename: (id: string, title: string) => ipcRenderer.invoke('agentSession:rename', id, title),
+  agentSessionDelete: (id: string) => ipcRenderer.invoke('agentSession:delete', id),
   agentAbort: () => ipcRenderer.invoke('agent:abort'),
+  agentApprovalResponse: (requestId: string, approved: boolean) => ipcRenderer.invoke('agent:approvalResponse', requestId, approved),
   onAgentEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.on('agent:event', cb),
   offAgentEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('agent:event', cb),
+
+  // Project Command Center: directory selection and project-boundary persistence.
+  projectList: () => ipcRenderer.invoke('project:list'),
+  projectChooseFolder: () => ipcRenderer.invoke('project:chooseFolder'),
+  projectCreate: (title: string) => ipcRenderer.invoke('project:create', title),
+  projectSetActive: (id: string) => ipcRenderer.invoke('project:setActive', id),
+
+  // Generated images: Save-As dialog for a flowdesk-image:// URL
+  imageDownload: (url: string) => ipcRenderer.invoke('image:download', url),
+
+  // Jarvis: Real-time Voice & Two-Tier AI Orchestrator
+  jarvisGenerateToken: (input?: { roomName?: string; participantIdentity?: string; participantName?: string }) =>
+    ipcRenderer.invoke('jarvis:generateToken', input),
+  jarvisSendMessage: (input: { messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>; runId?: string }) =>
+    ipcRenderer.invoke('jarvis:sendMessage', input),
+  jarvisAbort: () => ipcRenderer.invoke('jarvis:abort'),
+  onJarvisEvent: (cb: (data: any) => void) => {
+    const handler = (_e: unknown, data: any) => cb(data)
+    ipcRenderer.on('jarvis:event', handler)
+    return () => {
+      ipcRenderer.removeListener('jarvis:event', handler)
+    }
+  },
 
   // Dark mode: OS theme readout + live change notifications
   themeGetSystem: () => ipcRenderer.invoke('theme:getSystem'),
   onSystemThemeChanged: (cb: (e: unknown, data: { shouldUseDarkColors: boolean }) => void) => ipcRenderer.on('theme:systemChanged', cb),
   offSystemThemeChanged: (cb: (e: unknown, data: { shouldUseDarkColors: boolean }) => void) => ipcRenderer.removeListener('theme:systemChanged', cb),
+
+  // WhatsApp bridge
+  whatsappStatus: () => ipcRenderer.invoke('whatsapp:status'),
+  whatsappListChats: (limit?: number, onlyUnread?: boolean) => ipcRenderer.invoke('whatsapp:listChats', limit, onlyUnread),
+  whatsappListMessages: (chatId: string, limit?: number) => ipcRenderer.invoke('whatsapp:listMessages', chatId, limit),
+  whatsappSend: (chatId: string, text: string) => ipcRenderer.invoke('whatsapp:send', chatId, text),
+
 })
+

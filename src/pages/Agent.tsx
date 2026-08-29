@@ -1,93 +1,70 @@
-import { useEffect, useRef, useState } from 'react'
-import { Plus, Bot, AlertTriangle, Wrench, ChevronUp, ChevronDown, Cpu, Workflow, Globe } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Plus, Bot, Cpu, Workflow, Globe, ShieldOff, Wrench } from 'lucide-react'
 import {
   createAgentSession,
   appendAgentTurn,
-  buildAgentHandoffPrompt,
   type AgentSession,
   type AgentToolCallEntry,
 } from '@/lib/agentSession'
-import type { AgentStreamEvent } from '@/types/electron'
+import { makeContinuityId } from '@/lib/conversationContinuity'
+import type { AgentRunEvent, AgentStreamEvent, AgentSessionMeta } from '@/types/electron'
+import type { AppSettings } from '@/types/database'
+import SessionList from '@/components/agent/SessionList'
 import ProviderStatusStrip, { type ProviderStatus } from '@/components/agent/ProviderStatusStrip'
+import { WorkerToolCardList } from '@/components/agent/WorkerToolCard'
 import { ChatBubble } from '@/components/chat/ChatBubble'
 import { ChatInputBar } from '@/components/chat/ChatInputBar'
-
-const AGENT_STORE_KEY = 'agentSession'
-
-const PROVIDER_LABELS: Record<string, string> = {
-  chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini', grok: 'Grok', perplexity: 'Perplexity',
-}
-function providerLabel(id: string): string {
-  return PROVIDER_LABELS[id] ?? id
-}
-
-function isAgentSession(value: unknown): value is AgentSession {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<AgentSession>
-  return (
-    typeof candidate.id === 'string' &&
-    typeof candidate.title === 'string' &&
-    Array.isArray(candidate.entries) &&
-    typeof candidate.created_at === 'string' &&
-    typeof candidate.updated_at === 'string'
-  )
-}
+import { InlineDictationControl } from '@/components/voice/InlineDictationControl'
+import { ProjectCommandDeck } from '@/components/agent/ProjectCommandDeck'
+import ToolApprovalDialog, { type PendingApproval } from '@/components/agent/ToolApprovalDialog'
+import AgentToolsPanel from '@/components/agent/AgentToolsPanel'
 
 const AGENT_CAPABILITIES = [
-  {
-    id: 'orchestration',
-    title: 'Multi-Model Orchestration',
-    subtitle: '5 Frontier AIs Coordinated',
-    icon: Cpu,
-    color: 'text-[#D97706]',
-    bgColor: 'bg-[#FEF3C7]',
-    borderColor: 'border-[#F59E0B]/40',
-    prompt: 'Claude, analyze this request and coordinate multiple AI models to give a comprehensive, multi-perspective answer:',
-  },
-  {
-    id: 'dispatch',
-    title: 'Autonomous Task Dispatch',
-    subtitle: 'Auto Task Breakdown & Queue',
-    icon: Workflow,
-    color: 'text-[#059669]',
-    bgColor: 'bg-[#ECFDF5]',
-    borderColor: 'border-[#10B981]/40',
-    prompt: 'Claude, break down this task into sub-tasks and dispatch specialized AI workers to execute it step-by-step:',
-  },
-  {
-    id: 'web',
-    title: 'Live Web Execution',
-    subtitle: 'Real-Time Capture & Extraction',
-    icon: Globe,
-    color: 'text-[#0284C7]',
-    bgColor: 'bg-[#E0F2FE]',
-    borderColor: 'border-[#0284C7]/40',
-    prompt: 'Claude, perform live web execution to gather current information and synthesize a detailed update:',
-  },
+  { id: 'orchestration', title: 'Multi-Model Orchestration', subtitle: '5 Frontier AIs Coordinated', icon: Cpu, color: 'text-[#D97706]', bgColor: 'bg-[#FEF3C7]', borderColor: 'border-[#F59E0B]/40', prompt: 'Analyze this request and coordinate multiple AI models to give a comprehensive, multi-perspective answer:' },
+  { id: 'dispatch', title: 'Autonomous Task Dispatch', subtitle: 'Auto Task Breakdown & Queue', icon: Workflow, color: 'text-[#059669]', bgColor: 'bg-[#ECFDF5]', borderColor: 'border-[#10B981]/40', prompt: 'Break down this task into sub-tasks and dispatch specialized AI workers to execute it step-by-step:' },
+  { id: 'web', title: 'Live Web Execution', subtitle: 'Real-Time Capture & Extraction', icon: Globe, color: 'text-[#0284C7]', bgColor: 'bg-[#E0F2FE]', borderColor: 'border-[#0284C7]/40', prompt: 'Perform live web execution to gather current information and synthesize a detailed update:' },
 ] as const
 
 const AGENT_PLACEHOLDERS = [
-  'Ask anything — Claude decides which AI worker to dispatch...',
-  'Decompose complex research tasks across ChatGPT, Gemini & Grok...',
-  'Perform live web execution and synthesize structured updates...',
-  'Audit code architecture and cross-verify with specialized AI models...',
+  'Describe what you want to build in the active project...',
+  'Ask the Agent to research, plan, or coordinate a task...',
+  'Give a precise directive - approvals appear before risky work...',
 ]
 
 export default function Agent() {
   const api = window.electronAPI
+  const [sessions, setSessions] = useState<AgentSessionMeta[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [session, setSession] = useState<AgentSession | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [liveText, setLiveText] = useState('')
+  const [liveToolCalls, setLiveToolCalls] = useState<AgentToolCallEntry[]>([])
   const [toolStatus, setToolStatus] = useState<Record<string, ProviderStatus>>({})
   const [error, setError] = useState<string | null>(null)
-  const [hoveredCapId, setHoveredCapId] = useState<string | null>(null)
-  const [flashCapId, setFlashCapId] = useState<string | null>(null)
+  const [leadAgentProvider, setLeadAgentProvider] = useState<AppSettings['leadAgentProvider']>('claude')
+  const [bypassPermissions, setBypassPermissions] = useState(false)
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([])
+  const [showToolsPanel, setShowToolsPanel] = useState(false)
+  const [hasActiveProject, setHasActiveProject] = useState(false)
 
   const sendingRef = useRef(false)
+  const sessionRef = useRef<AgentSession | null>(null)
+  const activeRunIdRef = useRef<string | null>(null)
+  const liveTextRef = useRef('')
+  const appliedSequenceRef = useRef(0)
+  const bufferedEventsRef = useRef<AgentRunEvent[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
+  const initialScrollRef = useRef(true)
+  // Map keyed by toolUseId — mutated for correlation; mirrored into liveToolCalls
+  // state so React re-renders. Snapshot this into the session on `done` BEFORE
+  // clearing (clearing first caused worker cards to vanish with the pending bubble).
   const toolCallsRef = useRef<Map<string, AgentToolCallEntry>>(new Map())
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function syncLiveToolCalls() {
+    setLiveToolCalls(Array.from(toolCallsRef.current.values()).map(c => ({ ...c })))
+  }
 
   function clearWatchdog() {
     if (watchdogRef.current) {
@@ -100,40 +77,197 @@ export default function Agent() {
     clearWatchdog()
     watchdogRef.current = setTimeout(() => {
       if (!sendingRef.current) return
-      sendingRef.current = false
-      setSending(false)
-      setLiveText('')
       setError('Agent turn timed out — try again.')
+      setError('This task is still running in the background. You can wait for updates or press Stop to cancel it.')
+      return
     }, 150000)
   }
 
-  // Load or create Agent session
+  function persistPartialRun(runEvent: AgentRunEvent, reason: string) {
+    const partialText = liveTextRef.current.trim()
+    const persistedCalls = Array.from(toolCallsRef.current.values()).map(call => ({ ...call }))
+    toolCallsRef.current.clear()
+    setLiveText('')
+    liveTextRef.current = ''
+    setLiveToolCalls([])
+    setSession(previous => {
+      if (!previous || previous.entries.some(entry => entry.role === 'assistant' && entry.runId === runEvent.runId)) return previous
+      const content = partialText
+        ? `${partialText}\n\n[Run stopped: ${reason}]`
+        : `[Run stopped: ${reason}]`
+      const next = appendAgentTurn(previous, { role: 'assistant', content, toolCalls: persistedCalls, runId: runEvent.runId })
+      sessionRef.current = next
+      return next
+    })
+  }
+
+  function applyRunEvent(runEvent: AgentRunEvent) {
+    const activeSession = sessionRef.current
+    if (!activeSession) {
+      bufferedEventsRef.current.push(runEvent)
+      return
+    }
+    if (runEvent.sessionId !== activeSession.id || runEvent.runId !== activeRunIdRef.current || runEvent.sequence <= appliedSequenceRef.current) {
+      if (localStorage.getItem('flowdesk:agent-debug') === '1') {
+        console.debug('[FlowDesk Agent UI] ignored event', { runId: runEvent.runId, sequence: runEvent.sequence, activeRunId: activeRunIdRef.current, appliedSequence: appliedSequenceRef.current })
+      }
+      return
+    }
+    if (localStorage.getItem('flowdesk:agent-debug') === '1') {
+      console.debug('[FlowDesk Agent UI] applying event', { runId: runEvent.runId, sequence: runEvent.sequence, type: runEvent.event.type })
+    }
+    appliedSequenceRef.current = runEvent.sequence
+    const event: AgentStreamEvent = runEvent.event
+    if (event.type !== 'done' && event.type !== 'error') {
+      sendingRef.current = true
+      setSending(true)
+      resetWatchdog()
+    }
+
+    if (event.type === 'text') {
+      setLiveText(prev => {
+        const next = prev + event.text
+        liveTextRef.current = next
+        return next
+      })
+    } else if (event.type === 'tool_call') {
+      toolCallsRef.current.set(event.toolUseId, { tool: event.tool, prompt: event.prompt, result: '', isError: false })
+      syncLiveToolCalls()
+      setToolStatus(prev => ({ ...prev, [event.tool]: 'thinking' }))
+    } else if (event.type === 'tool_result') {
+      const entry = toolCallsRef.current.get(event.toolUseId)
+      if (entry) {
+        entry.result = event.text
+        entry.isError = event.isError
+        syncLiveToolCalls()
+      }
+      setToolStatus(prev => ({ ...prev, [event.tool]: event.isError ? 'error' : 'done' }))
+    } else if (event.type === 'approval_request') {
+      // The run is genuinely paused server-side awaiting this — the SDK's
+      // canUseTool promise, or a worker tool's own await, is blocked until
+      // agentApprovalResponse is sent back. Queue rather than replace: the
+      // SDK can dispatch several tool calls concurrently in one turn (see
+      // buildWorkerTool's readOnlyHint comment), so more than one approval
+      // can be outstanding at once.
+      setPendingApprovals(prev =>
+        prev.some(a => a.requestId === event.requestId) ? prev : [...prev, event],
+      )
+    } else if (event.type === 'done') {
+      const persistedCalls = Array.from(toolCallsRef.current.values()).map(c => ({ ...c }))
+      // SDK success results are occasionally an empty summary even though
+      // streamed assistant text was already received. Never discard that
+      // visible work at the terminal event.
+      const content = event.text.trim() || liveTextRef.current.trim() || 'Agent completed without a text response.'
+      toolCallsRef.current.clear()
+      clearWatchdog()
+      sendingRef.current = false
+      setSending(false)
+      setLiveText('')
+      liveTextRef.current = ''
+      setLiveToolCalls([])
+      // Any approval still queued belongs to a run that just ended — the
+      // main process already resolved it as denied (see denyAllPendingApprovals
+      // in main.ts's finally block), so clear the dialog rather than leave it
+      // showing a request that answering would silently do nothing for.
+      setPendingApprovals([])
+      setSession(prev => {
+        if (!prev || prev.entries.some(entry => entry.role === 'assistant' && entry.runId === runEvent.runId)) return prev
+        const next = appendAgentTurn(prev, { role: 'assistant', content, toolCalls: persistedCalls, runId: runEvent.runId })
+        sessionRef.current = next
+        return next
+      })
+      api.agentSessionList().then(setSessions).catch(() => {})
+    } else if (event.type === 'error') {
+      clearWatchdog()
+      sendingRef.current = false
+      setSending(false)
+      setPendingApprovals([])
+      persistPartialRun(runEvent, event.message)
+      setError(/maximum number of turns|reached max.*turn/i.test(event.message)
+        ? 'Agent safety limit reached after 16 steps. Your completed tool work is saved; send “continue from the completed work” to resume safely.'
+        : event.message)
+    }
+  }
+
+  // Load Agent sessions
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const stored = await api.storeGet(AGENT_STORE_KEY)
+      const [list, runState, rawSettings] = await Promise.all([
+        api.agentSessionList(),
+        api.agentGetRunState(),
+        api.storeGet('settings'),
+      ])
       if (cancelled) return
-      if (isAgentSession(stored)) {
-        setSession(stored)
-      } else {
-        const created = createAgentSession()
-        await api.storeSet(AGENT_STORE_KEY, created)
-        if (!cancelled) setSession(created)
+      const settingsPartial = rawSettings as Partial<AppSettings> | null
+      const configuredProvider = settingsPartial?.leadAgentProvider
+      setLeadAgentProvider(configuredProvider === 'codex' ? 'codex' : configuredProvider === 'antigravity' ? 'antigravity' : 'claude')
+      setBypassPermissions(settingsPartial?.agentBypassPermissions === true)
+      // Whether project tools exist at all depends on an active project, and
+      // the tools panel should say so accurately before the first message —
+      // not only after a send has happened to look it up.
+      api.projectList()
+        .then(scope => { if (!cancelled) setHasActiveProject(Boolean(scope.activeProjectId)) })
+        .catch(() => {})
+      if (list.length === 0) {
+        const created = await api.agentSessionCreate()
+        if (cancelled) return
+        setSessions([created])
+        setActiveSessionId(created.id)
+        return
       }
+      setSessions(list)
+      setActiveSessionId(list[0].id)
+      activeRunIdRef.current = runState.sessionId === list[0]?.id ? runState.runId : null
+      if (runState.status === 'running' && runState.sessionId === list[0]?.id) {
+        sendingRef.current = true
+        setSending(true)
+        resetWatchdog()
+      }
+      const replay = [...runState.events, ...bufferedEventsRef.current]
+        .sort((a, b) => a.sequence - b.sequence)
+      bufferedEventsRef.current = []
+      replay.forEach(applyRunEvent)
     })()
     return () => { cancelled = true }
   }, [])
 
+  // Load turns for the active session
+  useEffect(() => {
+    if (!activeSessionId) return
+    let cancelled = false
+    ;(async () => {
+      const turns = await api.agentSessionTurns(activeSessionId)
+      if (cancelled) return
+      const loaded = createAgentSession()
+      loaded.id = activeSessionId
+      loaded.entries = turns.map(turn => ({
+        id: turn.id,
+        role: turn.role,
+        content: turn.content,
+        toolCalls: turn.toolCalls,
+        created_at: turn.createdAt,
+      }))
+      setSession(loaded)
+      sessionRef.current = loaded
+    })()
+    return () => { cancelled = true }
+  }, [activeSessionId])
+
   // Agent event stream listener
   useEffect(() => {
-    function onEvent(_e: unknown, event: AgentStreamEvent) {
-      if (!sendingRef.current) return
+    function onEvent(_e: unknown, payload: AgentRunEvent) {
+      applyRunEvent(payload)
+      return
+      /* Legacy renderer-only handler retained temporarily for source-history
+         context; run replay above is now the authoritative path.
       resetWatchdog()
 
       if (event.type === 'text') {
         setLiveText(prev => prev + event.text)
       } else if (event.type === 'tool_call') {
         toolCallsRef.current.set(event.toolUseId, { tool: event.tool, prompt: event.prompt, result: '', isError: false })
+        syncLiveToolCalls()
         setToolStatus(prev => ({ ...prev, [event.tool]: 'thinking' }))
       } else if (event.type === 'tool_progress') {
         // Heartbeat signal
@@ -142,52 +276,88 @@ export default function Agent() {
         if (entry) {
           entry.result = event.text
           entry.isError = event.isError
+          syncLiveToolCalls()
         }
         setToolStatus(prev => ({ ...prev, [event.tool]: event.isError ? 'error' : 'done' }))
       } else if (event.type === 'done') {
+        // Snapshot worker cards first — must survive past the pending-bubble unmount.
+        const persistedCalls = Array.from(toolCallsRef.current.values()).map(c => ({ ...c }))
+        toolCallsRef.current.clear()
         clearWatchdog()
         sendingRef.current = false
         setSending(false)
         setLiveText('')
+        setLiveToolCalls([])
         setSession(prev => {
           if (!prev) return prev
           const next = appendAgentTurn(prev, {
             role: 'assistant',
             content: event.text,
-            toolCalls: Array.from(toolCallsRef.current.values()),
+            toolCalls: persistedCalls,
           })
           api.storeSet(AGENT_STORE_KEY, next).catch(() => {})
           return next
         })
-        toolCallsRef.current.clear()
       } else if (event.type === 'error') {
         clearWatchdog()
         sendingRef.current = false
         setSending(false)
         setLiveText('')
+        setLiveToolCalls([])
         setError(event.message)
       }
+      */
     }
     api.onAgentEvent(onEvent)
     return () => { api.offAgentEvent(onEvent) }
   }, [])
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [session?.entries.length, liveText])
-
-  async function persist(next: AgentSession) {
-    setSession(next)
-    await api.storeSet(AGENT_STORE_KEY, next)
-  }
+  // On a route remount, jump straight to the active/latest work. A smooth
+  // animation from the first message makes a busy session look frozen.
+  useLayoutEffect(() => {
+    const container = scrollRef.current
+    if (!container) return
+    const behavior: ScrollBehavior = initialScrollRef.current ? 'auto' : 'smooth'
+    container.scrollTo({ top: container.scrollHeight, behavior })
+    initialScrollRef.current = false
+  }, [session?.entries.length, liveText, sending])
 
   async function handleNewSession() {
     if (sendingRef.current) return
     clearWatchdog()
-    const created = createAgentSession()
-    await persist(created)
+    const created = await api.agentSessionCreate()
+    setSessions(await api.agentSessionList())
+    setActiveSessionId(created.id)
     setError(null)
+    setLiveToolCalls([])
     setToolStatus({})
+  }
+
+  function handleSelectSession(id: string) {
+    if (sendingRef.current) return
+    setActiveSessionId(id)
+    setLiveToolCalls([])
+    setToolStatus({})
+  }
+
+  async function handleRenameSession(id: string, title: string) {
+    await api.agentSessionRename(id, title)
+    setSessions(await api.agentSessionList())
+  }
+
+  async function handleDeleteSession(id: string) {
+    if (!confirm('Delete this session? The conversation cannot be recovered.')) return
+    await api.agentSessionDelete(id)
+    const remaining = await api.agentSessionList()
+    setSessions(remaining)
+    if (activeSessionId === id) {
+      setActiveSessionId(remaining[0]?.id ?? null)
+      if (remaining.length === 0) {
+        const created = await api.agentSessionCreate()
+        setSessions([created])
+        setActiveSessionId(created.id)
+      }
+    }
   }
 
   async function handleSend() {
@@ -199,18 +369,44 @@ export default function Agent() {
     setError(null)
     setInput('')
     setLiveText('')
+    liveTextRef.current = ''
+    setLiveToolCalls([])
     setToolStatus({})
     toolCallsRef.current.clear()
+    appliedSequenceRef.current = 0
 
-    const composed = session.entries.length > 0 ? buildAgentHandoffPrompt(session, text) : text
+    // The provider's own session now carries the history, and main.ts adds
+    // catch-up text only when the conversation moved between providers.
+    // Prepending a recap here would duplicate what the provider already has.
+    const handoff = text
+    const projectScope = await api.projectList().catch(() => null)
+    const activeProject = projectScope?.projects.find(project => project.id === projectScope.activeProjectId)
+    setHasActiveProject(Boolean(activeProject))
+    const composed = activeProject
+      ? `[Active FlowDesk project]\nName: ${activeProject.title}\nRoot folder: ${activeProject.rootPath}\n\n${handoff}\n\nDo not claim any file was changed unless a project-runtime tool reports that change. Ask for confirmation before a destructive command.`
+      : handoff
+    const runId = makeContinuityId()
+    activeRunIdRef.current = runId
 
-    const withUser = appendAgentTurn(session, { role: 'user', content: text })
-    await persist(withUser)
+    const withUser = appendAgentTurn(session, { role: 'user', content: text, runId })
+    sessionRef.current = withUser
+    setSession(withUser)
 
     resetWatchdog()
 
     try {
-      await api.agentSendMessage(composed)
+      await api.agentSendMessage({ prompt: composed, sessionId: session.id, runId })
+      // IPC events are live delivery, not the source of truth. The invoke
+      // resolves only after the main-process run finishes, so replay its
+      // journal here as a final acknowledgement in case a renderer event was
+      // dropped during a Vite reload, route remount, or listener transition.
+      const terminalState = await api.agentGetRunState()
+      if (terminalState.sessionId === session.id && terminalState.runId === runId) {
+        terminalState.events
+          .filter(event => event.sequence > appliedSequenceRef.current)
+          .sort((a, b) => a.sequence - b.sequence)
+          .forEach(applyRunEvent)
+      }
     } catch {
       if (sendingRef.current) {
         clearWatchdog()
@@ -222,11 +418,30 @@ export default function Agent() {
   }
 
   async function handleStop() {
-    await api.agentAbort().catch(() => {})
-    clearWatchdog()
-    sendingRef.current = false
-    setSending(false)
-    setLiveText('')
+    setError('Cancelling the Agent run…')
+    await api.agentAbort().catch(() => setError('Could not cancel the Agent run. It may still be working.'))
+  }
+
+  function handleApprovalResponse(requestId: string, approved: boolean) {
+    // Drop it from the queue immediately rather than waiting on the IPC
+    // round trip: the run is blocked on this answer, so any delay here is
+    // felt directly as the dialog sitting there after a click.
+    setPendingApprovals(prev => prev.filter(a => a.requestId !== requestId))
+    api.agentApprovalResponse(requestId, approved).catch(() => {
+      setError('Could not deliver that approval decision. The Agent run may be stuck — stop it and retry.')
+    })
+  }
+
+  async function handleToggleBypass() {
+    const next = !bypassPermissions
+    setBypassPermissions(next)
+    // Persisted, not per-run: the user turns this on to stop being asked,
+    // and having it silently reset on the next turn would defeat that.
+    const raw = (await api.storeGet('settings').catch(() => null)) as Partial<AppSettings> | null
+    await api.storeSet('settings', { ...(raw ?? {}), agentBypassPermissions: next }).catch(() => {
+      setBypassPermissions(!next)
+      setError('Could not save the permission setting.')
+    })
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -239,9 +454,19 @@ export default function Agent() {
   if (!session) return null
 
   const hasMessages = session.entries.length > 0
+  const leadAgentLabel = leadAgentProvider === 'codex' ? 'CODEX' : leadAgentProvider === 'antigravity' ? 'ANTIGRAVITY' : 'CLAUDE'
 
   return (
-    <div className="flex flex-col h-full bg-[#FAF7F0] bg-dot-matrix bg-scanline relative overflow-hidden select-none">
+    <div className="flex h-full w-full overflow-hidden">
+      <SessionList
+        sessions={sessions}
+        activeId={activeSessionId}
+        onSelect={handleSelectSession}
+        onCreate={handleNewSession}
+        onRename={handleRenameSession}
+        onDelete={handleDeleteSession}
+      />
+      <div className="flex-1 min-w-0 flex flex-col h-full bg-[#FAF7F0] bg-dot-matrix bg-scanline relative overflow-hidden select-none">
       {/* Neo-Brutalist Header */}
       <div className="flex items-center justify-between shrink-0 h-14 px-6 border-b-2 border-[#281E14] bg-[#EBE5D5]">
         <div className="flex items-center gap-3">
@@ -255,12 +480,53 @@ export default function Agent() {
           </div>
           <span className="font-retro-mono text-[11px] font-bold px-2.5 py-1 rounded-md bg-[#FAF7F0] border-2 border-[#281E14] shadow-[1.5px_1.5px_0px_0px_rgba(40,30,20,0.22)] text-[#B45309] flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-pulse" />
-            CLAUDE ORCHESTRATOR
+            {leadAgentLabel} ORCHESTRATOR
           </span>
         </div>
 
         <div className="flex items-center gap-3">
           <ProviderStatusStrip status={toolStatus} />
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowToolsPanel(v => !v)}
+              title={`Show which tools ${leadAgentLabel} can use`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border-2 border-[#281E14] shadow-[2px_2px_0px_0px_rgba(40,30,20,0.22)] active:translate-x-[1px] active:translate-y-[1px] font-retro-mono text-xs font-bold uppercase tracking-wider transition-all cursor-pointer outline-none focus:outline-none ${
+                showToolsPanel ? 'bg-[#FEF3C7] text-[#B45309]' : 'bg-white hover:bg-[#FAF7F0] text-stone-700'
+              }`}
+            >
+              <Wrench size={13} />
+              <span>Tools</span>
+            </button>
+            {showToolsPanel && (
+              <AgentToolsPanel
+                provider={leadAgentProvider}
+                bypassPermissions={bypassPermissions}
+                hasActiveProject={hasActiveProject}
+                onClose={() => setShowToolsPanel(false)}
+              />
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={handleToggleBypass}
+            title={
+              bypassPermissions
+                ? 'Bypass is ON — every tool runs without asking. Click to require approval again.'
+                : 'Approval required before risky tools. Click to bypass and stop being asked.'
+            }
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border-2 border-[#281E14] shadow-[2px_2px_0px_0px_rgba(40,30,20,0.22)] active:translate-x-[1px] active:translate-y-[1px] font-retro-mono text-xs font-bold uppercase tracking-wider transition-all cursor-pointer outline-none focus:outline-none ${
+              bypassPermissions
+                ? 'bg-[#FEE2E2] text-[#DC2626]'
+                : 'bg-white hover:bg-[#FAF7F0] text-stone-700'
+            }`}
+          >
+            <ShieldOff size={13} />
+            <span>{bypassPermissions ? 'Bypass ON' : 'Bypass OFF'}</span>
+          </button>
+
           <button
             type="button"
             onClick={handleNewSession}
@@ -276,7 +542,11 @@ export default function Agent() {
       {!hasMessages ? (
         /* Empty State — Ultra-Modern Retro Cyber Workstation Hero */
         <div className="flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden">
-          <div className="relative z-10 flex flex-col items-center text-center max-w-3xl w-full animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <ProjectCommandDeck
+            agentState={sending ? 'working' : session.entries.length > 0 ? 'complete' : 'idle'}
+            onDirective={setInput}
+          />
+          <div className="hidden relative z-10 flex flex-col items-center text-center max-w-3xl w-full animate-in fade-in slide-in-from-bottom-4 duration-300">
             
             {/* Live Status Badge */}
             <div className="mb-4 inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white border-2 border-[#281E14] shadow-[2px_2px_0px_0px_rgba(40,30,20,0.2)] animate-float-slow">
@@ -291,110 +561,46 @@ export default function Agent() {
               AUTONOMOUS AI AGENT
             </h1>
             <h2 className="font-retro-serif text-xl sm:text-2xl text-[#B45309] italic mb-3 font-normal">
-              Claude Multi-Model Orchestration Deck
+              {leadAgentLabel === 'CODEX' ? 'Codex' : 'Claude'} Multi-Model Orchestration Deck
             </h2>
 
             {/* Powerful Copy */}
             <p className="font-retro-mono text-xs sm:text-sm text-stone-700 mb-6 max-w-lg leading-relaxed">
-              Claude leads your workflow — automatically analyzing your prompts, delegating sub-tasks across <span className="font-bold text-[#281E14] bg-[#FEF3C7] px-1.5 py-0.5 rounded border border-[#F59E0B]/30">ChatGPT, Gemini, Grok & Perplexity</span>, and synthesizing unified results.
+              {leadAgentLabel === 'CODEX' ? 'Codex' : 'Claude'} leads your workflow — automatically analyzing your prompts, delegating sub-tasks across <span className="font-bold text-[#281E14] bg-[#FEF3C7] px-1.5 py-0.5 rounded border border-[#F59E0B]/30">ChatGPT, Gemini, Grok & Perplexity</span>, and synthesizing unified results.
             </p>
 
-            {/* Retro Cyberdeck Directive Switchboard (Replaces Cards) */}
-            <div className="w-full max-w-2xl mb-7 bg-[#EBE5D5] border-2 border-[#281E14] rounded-xl shadow-[4px_4px_0px_0px_rgba(40,30,20,0.25)] overflow-hidden">
-              {/* Panel Console Header */}
-              <div className="flex items-center justify-between px-3.5 py-2 bg-[#DDD6C1] border-b-2 border-[#281E14]">
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 font-retro-mono text-[11px] font-extrabold text-[#281E14]">
-                    <span className="text-[#D97706] font-black">+</span>
-                    <span>SYS_DIRECTIVES.BUS</span>
+            {/* Interactive Capability Workstation Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-2xl mb-7">
+              {AGENT_CAPABILITIES.map(cap => {
+                const IconComp = cap.icon
+                return (
+                  <div
+                    key={cap.id}
+                    onClick={() => setInput(cap.prompt)}
+                    className="group relative flex flex-col items-start text-left p-3.5 rounded-xl bg-white border-2 border-[#281E14] shadow-[2px_2px_0px_0px_rgba(40,30,20,0.2)] hover:shadow-[3.5px_3.5px_0px_0px_rgba(40,30,20,0.28)] hover:-translate-y-1 transition-all duration-200 cursor-pointer overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between w-full mb-2">
+                      <div className={`p-2 rounded-lg border ${cap.bgColor} ${cap.borderColor} ${cap.color} group-hover:scale-110 transition-transform`}>
+                        <IconComp size={16} />
+                      </div>
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-pulse opacity-80" />
+                    </div>
+
+                    <div className="font-retro-tech text-xs font-bold text-[#281E14] uppercase mb-0.5 group-hover:text-[#D97706] transition-colors leading-snug">
+                      {cap.title}
+                    </div>
+
+                    <div className="font-retro-mono text-[10px] text-stone-500 font-medium">
+                      {cap.subtitle}
+                    </div>
+
+                    {/* Subtle hover indicator arrow */}
+                    <div className="absolute right-3 bottom-2.5 text-[11px] font-retro-mono text-[#D97706] opacity-0 group-hover:opacity-100 transition-opacity font-bold">
+                      ›
+                    </div>
                   </div>
-                  <span className="font-retro-terminal text-[9px] px-2 py-0.5 rounded bg-[#281E14] text-[#FDE68A] font-bold tracking-widest uppercase shadow-[1px_1px_0px_0px_rgba(40,30,20,0.15)]">
-                    CLICK TO INJECT
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-[#D97706] animate-pulse" />
-                    <span className="w-2 h-2 rounded-full bg-[#10B981]" />
-                    <span className="w-2 h-2 rounded-full bg-[#0284C7]" />
-                  </div>
-                  <span className="font-retro-terminal text-[10px] font-bold text-stone-600 uppercase tracking-widest hidden sm:inline">
-                    MODES [01-03]
-                  </span>
-                </div>
-              </div>
-
-              {/* Directive Channels - Unified Hardware Switchboard */}
-              <div className="p-2 sm:p-2.5 grid grid-cols-1 sm:grid-cols-3 gap-2 bg-[#FAF7F0]">
-                {AGENT_CAPABILITIES.map((cap, idx) => {
-                  const IconComp = cap.icon
-                  const keyLegend = `F${idx + 1}`
-
-                  return (
-                    <button
-                      key={cap.id}
-                      type="button"
-                      onMouseEnter={() => setHoveredCapId(cap.id)}
-                      onMouseLeave={() => setHoveredCapId(null)}
-                      onClick={() => {
-                        setInput(cap.prompt)
-                        setFlashCapId(cap.id)
-                        setTimeout(() => setFlashCapId(null), 350)
-                      }}
-                      className={`group relative flex flex-col justify-between text-left p-3 rounded-lg border-2 border-[#281E14] transition-all duration-150 cursor-pointer outline-none ${
-                        flashCapId === cap.id
-                          ? 'bg-[#FEF3C7] shadow-none translate-x-[2px] translate-y-[2px]'
-                          : 'bg-white hover:bg-[#FEFCE8] shadow-[2.5px_2.5px_0px_0px_rgba(40,30,20,0.2)] hover:shadow-[3.5px_3.5px_0px_0px_rgba(40,30,20,0.28)] hover:-translate-y-0.5 active:translate-x-[1.5px] active:translate-y-[1.5px] active:shadow-none'
-                      }`}
-                    >
-                      {/* Top Row: Key Badge & Icon Container */}
-                      <div className="flex items-center justify-between w-full mb-2">
-                        <span className="font-retro-terminal text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-[#281E14] text-[#FDE68A] border border-[#281E14] shadow-[1px_1px_0px_0px_rgba(40,30,20,0.15)]">
-                          [{keyLegend}]
-                        </span>
-                        <div className={`p-1.5 rounded-md border-2 border-[#281E14] ${cap.bgColor} ${cap.color} group-hover:scale-105 transition-transform`}>
-                          <IconComp size={15} />
-                        </div>
-                      </div>
-
-                      {/* Title & Subtitle */}
-                      <div className="mb-2">
-                        <div className="font-retro-tech text-xs font-bold text-[#281E14] uppercase leading-tight group-hover:text-[#D97706] transition-colors">
-                          {cap.title}
-                        </div>
-                        <div className="font-retro-mono text-[10px] text-stone-500 font-semibold mt-0.5">
-                          {cap.subtitle}
-                        </div>
-                      </div>
-
-                      {/* Bottom Action Strip */}
-                      <div className="pt-1.5 border-t border-[#281E14]/15 flex items-center justify-between w-full font-retro-terminal text-[10px] text-stone-600 font-bold group-hover:text-[#281E14]">
-                        <span className="flex items-center gap-1 text-[#D97706]">
-                          <span className="font-black">&gt;</span>
-                          <span className="group-hover:underline uppercase">INJECT</span>
-                        </span>
-                        <span className="text-[11px] font-mono group-hover:translate-x-0.5 transition-transform">↵</span>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-
-              {/* Live Telemetry Prompt Stream Footer */}
-              <div className="px-3.5 py-1.5 bg-[#DDD6C1] border-t-2 border-[#281E14] flex items-center justify-between text-[10px] font-retro-mono text-[#281E14]">
-                <div className="flex items-center gap-2 truncate max-w-[85%]">
-                  <span className="font-bold text-[#D97706] shrink-0 uppercase tracking-wide">&gt; TELEMETRY:</span>
-                  <span className="truncate text-stone-700 font-medium">
-                    {hoveredCapId
-                      ? AGENT_CAPABILITIES.find(c => c.id === hoveredCapId)?.prompt
-                      : 'Hover over or click a directive channel above to auto-inject payload prompt.'}
-                  </span>
-                </div>
-                <span className="font-retro-terminal font-bold text-stone-600 shrink-0 ml-2 uppercase tracking-widest hidden sm:inline">
-                  [READY_BUS]
-                </span>
-              </div>
+                )
+              })}
             </div>
 
             {/* Retro Command Lead-In */}
@@ -415,9 +621,40 @@ export default function Agent() {
                 onStop={handleStop}
                 autoFocus
                 placeholders={AGENT_PLACEHOLDERS}
+                rightSlot={
+                  <InlineDictationControl
+                    surface="agent"
+                    surfaceSessionId={session.id}
+                    provider="chatgpt"
+                    disabled={sending}
+                    onTranscript={(transcript) => setInput(transcript)}
+                  />
+                }
               />
             </div>
 
+          </div>
+          <div className="mt-5 w-full max-w-3xl">
+            <p className="mb-2 text-center font-retro-mono text-[10px] font-bold tracking-[0.18em] text-slate-500">SEND A DIRECTIVE TO THE ACTIVE AGENT</p>
+            <ChatInputBar
+              input={input}
+              onInputChange={setInput}
+              onSend={handleSend}
+              onKeyDown={handleKeyDown}
+              sending={sending}
+              onStop={handleStop}
+              autoFocus
+              placeholders={AGENT_PLACEHOLDERS}
+              rightSlot={
+                <InlineDictationControl
+                  surface="agent"
+                  surfaceSessionId={session.id}
+                  provider="chatgpt"
+                  disabled={sending}
+                  onTranscript={(transcript) => setInput(transcript)}
+                />
+              }
+            />
           </div>
         </div>
       ) : (
@@ -431,7 +668,7 @@ export default function Agent() {
                   role={entry.role}
                   content={entry.content}
                   label={entry.role === 'assistant' ? 'Agent' : undefined}
-                  toolCalls={entry.toolCalls.length > 0 ? <ToolCallList calls={entry.toolCalls} /> : undefined}
+                  toolCalls={entry.toolCalls.length > 0 ? <WorkerToolCardList calls={entry.toolCalls} /> : undefined}
                 />
               ))}
               {sending && (
@@ -440,7 +677,7 @@ export default function Agent() {
                   content={liveText}
                   label="Agent"
                   pending
-                  toolCalls={toolCallsRef.current.size > 0 ? <ToolCallList calls={Array.from(toolCallsRef.current.values())} /> : undefined}
+                  toolCalls={liveToolCalls.length > 0 ? <WorkerToolCardList calls={liveToolCalls} /> : undefined}
                 />
               )}
             </div>
@@ -457,6 +694,15 @@ export default function Agent() {
                 sending={sending}
                 onStop={handleStop}
                 placeholders={AGENT_PLACEHOLDERS}
+                rightSlot={
+                  <InlineDictationControl
+                    surface="agent"
+                    surfaceSessionId={session.id}
+                    provider="chatgpt"
+                    disabled={sending}
+                    onTranscript={(transcript) => setInput(transcript)}
+                  />
+                }
               />
             </div>
           </div>
@@ -464,100 +710,26 @@ export default function Agent() {
       )}
 
       {error && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 font-retro-mono text-xs font-bold px-4 py-2.5 rounded-xl bg-[#FEE2E2] border-2 border-[#281E14] text-[#DC2626] shadow-[3px_3px_0px_0px_rgba(40,30,20,0.25)] max-w-md text-center animate-in fade-in duration-200">
-          {error}
+        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-50 font-retro-mono text-xs font-bold px-4 py-3 rounded-xl bg-[#FEE2E2] border-2 border-[#281E14] text-[#DC2626] shadow-[4px_4px_0px_0px_rgba(40,30,20,0.3)] max-w-xl w-[90%] text-center animate-in fade-in slide-in-from-bottom-2 duration-200 flex items-center justify-between gap-3">
+          <span className="flex-1 text-left break-words">{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="shrink-0 p-1 hover:bg-[#FCA5A5] rounded-md text-[#991B1B] transition-colors cursor-pointer"
+            title="Dismiss error"
+          >
+            &times;
+          </button>
         </div>
       )}
-    </div>
-  )
-}
 
-function ToolCallList({ calls }: { calls: AgentToolCallEntry[] }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 w-full my-2">
-      {calls.map((call, i) => (
-        <ToolCallCard key={i} call={call} />
-      ))}
-    </div>
-  )
-}
-
-function ToolCallCard({ call }: { call: AgentToolCallEntry }) {
-  const [expanded, setExpanded] = useState(true)
-  const isPending = !call.result && !call.isError
-  const provider = providerLabel(call.tool)
-
-  return (
-    <div className="rounded-xl border-2 border-[#281E14] bg-white overflow-hidden shadow-[2px_2px_0px_0px_rgba(40,30,20,0.2)] hover:shadow-[3px_3px_0px_0px_rgba(40,30,20,0.28)] transition-all animate-in fade-in slide-in-from-bottom-2 duration-200">
-      {/* Mini Retro Workstation Window Header */}
-      <div
-        onClick={() => setExpanded(e => !e)}
-        className="flex items-center justify-between px-3 py-2 bg-[#EBE5D5] border-b-2 border-[#281E14] cursor-pointer select-none"
-      >
-        <div className="flex items-center gap-2">
-          {/* Traffic light window controls */}
-          <div className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-[#FF5F56] border border-[#281E14]/50" />
-            <span className="w-2 h-2 rounded-full bg-[#FFBD2E] border border-[#281E14]/50" />
-            <span className="w-2 h-2 rounded-full bg-[#27C93F] border border-[#281E14]/50" />
-          </div>
-
-          <div className="h-3 w-[1.5px] bg-[#281E14]/30 mx-1" />
-
-          {call.isError ? (
-            <AlertTriangle size={13} className="text-[#DC2626]" />
-          ) : (
-            <Wrench size={13} className="text-[#D97706]" />
-          )}
-
-          <span className="font-retro-tech text-xs font-bold text-[#281E14]">
-            Dispatched {provider}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {isPending ? (
-            <span className="font-retro-mono text-[9px] font-bold uppercase px-2 py-0.5 rounded-md bg-[#FEF3C7] border border-[#281E14] text-[#B45309] flex items-center gap-1 shadow-[1px_1px_0px_0px_rgba(40,30,20,0.2)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#D97706] animate-ping" />
-              Executing…
-            </span>
-          ) : call.isError ? (
-            <span className="font-retro-mono text-[9px] font-bold uppercase px-2 py-0.5 rounded-md bg-[#FEE2E2] border border-[#281E14] text-[#DC2626] shadow-[1px_1px_0px_0px_rgba(40,30,20,0.2)]">
-              Failed
-            </span>
-          ) : (
-            <span className="font-retro-mono text-[9px] font-bold uppercase px-2 py-0.5 rounded-md bg-[#ECFDF5] border border-[#281E14] text-[#047857] shadow-[1px_1px_0px_0px_rgba(40,30,20,0.2)]">
-              Done
-            </span>
-          )}
-
-          <span className="text-[#281E14] hover:text-[#D97706] transition-colors">
-            {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-          </span>
-        </div>
-      </div>
-
-      {/* Expandable Window Body */}
-      <div className="p-3 space-y-2 font-retro-mono">
-        <div className="text-xs text-stone-800 bg-[#FAF7F0] p-2.5 rounded-lg border border-[#281E14]/30">
-          <div className="text-[#D97706] font-bold text-[10px] uppercase mb-1">
-            &gt; Dispatch Prompt
-          </div>
-          <p className="text-stone-900 leading-relaxed whitespace-pre-wrap">{call.prompt}</p>
-        </div>
-
-        {expanded && (
-          <div className="text-xs text-stone-900 bg-white p-3 rounded-lg border border-[#281E14]/30 whitespace-pre-wrap leading-relaxed animate-in fade-in duration-150">
-            <div className="font-bold text-[10px] text-stone-600 uppercase mb-1">
-              Worker Payload Output
-            </div>
-            {call.result ? (
-              call.result
-            ) : (
-              <span className="text-stone-400 italic">Waiting for AI worker response...</span>
-            )}
-          </div>
-        )}
+      {pendingApprovals.length > 0 && (
+        <ToolApprovalDialog
+          approval={pendingApprovals[0]}
+          queueLength={pendingApprovals.length}
+          onRespond={handleApprovalResponse}
+        />
+      )}
       </div>
     </div>
   )

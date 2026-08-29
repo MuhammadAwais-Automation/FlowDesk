@@ -3,7 +3,6 @@ import { Mail, Plus, X, ChevronLeft, ChevronRight, RotateCcw, Trash2, Loader2 } 
 import { getCompactTabTitle, getFaviconUrl, getInjectTool, getTabColor, isToolTab } from '@/types/browser'
 import type { BrowserTab, CustomTool } from '@/types/browser'
 import type { GmailSession } from '@/types/electron'
-import PromptBar from '@/components/browser/PromptBar'
 import ToolDock from '@/components/browser/ToolDock'
 import AccountContextMenu from '@/components/browser/AccountContextMenu'
 import NewSessionDialog from '@/components/browser/NewSessionDialog'
@@ -378,8 +377,6 @@ export default function AIBrowser({ isActive }: AIBrowserProps) {
             )}
           </div>
         </div>
-
-        <PromptBar activeTab={activeTab} isActive={isActive} />
 
         {/* Start Screen Launchpad */}
         {!activeTab ? (

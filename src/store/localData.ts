@@ -1,14 +1,10 @@
-import { extractVariables } from '../lib/variables'
-import type { AIAccount, Folder, Prompt, PromptVersion, Workspace } from '../types/database'
+import type { AIAccount, Workspace } from '../types/database'
 
 type IdFactory = () => string
 type NowFactory = () => string
 
 export const LOCAL_KEYS = {
   workspaces: 'workspaces',
-  folders: 'folders',
-  prompts: 'workspacePrompts',
-  promptVersions: 'promptVersions',
   aiAccounts: 'aiAccounts',
 } as const
 
@@ -57,85 +53,6 @@ export function resolveLocalWorkspaces(
     workspaces,
     activeWorkspaceId: activeStillExists ? activeWorkspaceId : workspaces[0].id,
     changed: false,
-  }
-}
-
-export function createLocalFolder(
-  name: string,
-  workspaceId: string,
-  parentId: string | null,
-  position: number,
-  idFactory: IdFactory = makeId,
-  nowFactory: NowFactory = nowIso,
-): Folder {
-  return {
-    id: idFactory(),
-    name,
-    workspace_id: workspaceId,
-    parent_id: parentId,
-    position,
-    created_at: nowFactory(),
-  }
-}
-
-export function createLocalPrompt(
-  data: {
-    title: string
-    content: string
-    folder_id: string | null
-    workspace_id: string
-    tags: string[]
-  },
-  idFactory: IdFactory = makeId,
-  nowFactory: NowFactory = nowIso,
-): Prompt {
-  const timestamp = nowFactory()
-  return {
-    id: idFactory(),
-    title: data.title,
-    content: data.content,
-    folder_id: data.folder_id,
-    workspace_id: data.workspace_id,
-    tags: data.tags,
-    variables: extractVariables(data.content),
-    used_count: 0,
-    last_used_at: null,
-    is_favorite: false,
-    version: 1,
-    created_at: timestamp,
-    updated_at: timestamp,
-  }
-}
-
-export function updateLocalPrompt(
-  current: Prompt,
-  patch: Partial<Prompt>,
-  idFactory: IdFactory = makeId,
-  nowFactory: NowFactory = nowIso,
-): { prompt: Prompt; version?: PromptVersion } {
-  const timestamp = nowFactory()
-  const contentChanged = typeof patch.content === 'string' && patch.content !== current.content
-  const version = contentChanged
-    ? {
-        id: idFactory(),
-        prompt_id: current.id,
-        content: current.content,
-        version: current.version,
-        created_at: timestamp,
-      }
-    : undefined
-
-  const nextContent = patch.content ?? current.content
-  return {
-    prompt: {
-      ...current,
-      ...patch,
-      content: nextContent,
-      variables: contentChanged ? extractVariables(nextContent) : (patch.variables ?? current.variables),
-      version: contentChanged ? current.version + 1 : current.version,
-      updated_at: timestamp,
-    },
-    version,
   }
 }
 

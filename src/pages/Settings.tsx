@@ -1,30 +1,25 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useWorkspaceStore } from '@/store/useWorkspaceStore'
 import { useThemeStore } from '@/store/useThemeStore'
 import {
-  Monitor, Keyboard, Layers, Info, Plus, Trash2,
+  Monitor, Layers, Info, Plus, Trash2, Bot,
   Check, Zap
 } from 'lucide-react'
 import type { AppSettings } from '@/types/database'
-
-const DEFAULT_HOTKEYS: AppSettings['hotkeys'] = {
-  injectPanel: 'CommandOrControl+Shift+P',
-  captureSelection: 'CommandOrControl+Shift+S',
-  switchAccount: 'CommandOrControl+Tab',
-}
 
 const DEFAULT_SETTINGS: AppSettings = {
   launchOnStartup: false,
   minimizeToTray: false,
   theme: 'system',
-  hotkeys: DEFAULT_HOTKEYS,
+  leadAgentProvider: 'claude',
+  agentBypassPermissions: false,
 }
 
-type Section = 'general' | 'shortcuts' | 'workspaces' | 'about'
+type Section = 'general' | 'agent' | 'workspaces' | 'about'
 
 const NAV: { id: Section; icon: React.ElementType; label: string }[] = [
   { id: 'general',    icon: Monitor,  label: 'General'    },
-  { id: 'shortcuts',  icon: Keyboard, label: 'Shortcuts'  },
+  { id: 'agent',      icon: Bot,      label: 'Agent'      },
   { id: 'workspaces', icon: Layers,   label: 'Workspaces' },
   { id: 'about',      icon: Info,     label: 'About'      },
 ]
@@ -119,96 +114,6 @@ function Card({ title, children }: { title?: string; children: React.ReactNode }
   )
 }
 
-/* ── Hotkey Recorder ───────────────────────────────────────────── */
-function HotkeyInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [recording, setRecording] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  function startRecord() {
-    setRecording(true)
-    ref.current?.focus()
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (!recording) return
-    e.preventDefault()
-    const mod: string[] = []
-    if (e.ctrlKey || e.metaKey) mod.push('CommandOrControl')
-    if (e.shiftKey) mod.push('Shift')
-    if (e.altKey) mod.push('Alt')
-    const key = e.key
-    if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) return
-    mod.push(key.length === 1 ? key.toUpperCase() : key)
-    onChange(mod.join('+'))
-    setRecording(false)
-  }
-
-  const parts = value.split('+')
-  const mainKey = parts[parts.length - 1]
-  const mods = parts.slice(0, -1)
-
-  return (
-    <div
-      ref={ref}
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-      onBlur={() => setRecording(false)}
-      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-    >
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 4,
-        padding: '4px 10px',
-        borderRadius: 8,
-        border: `1.5px solid ${recording ? 'var(--accent)' : 'var(--border)'}`,
-        background: recording ? 'var(--accent-muted)' : 'var(--surface-2)',
-        fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 11,
-        color: recording ? 'var(--accent)' : 'var(--text)',
-        cursor: 'pointer',
-        userSelect: 'none',
-        minWidth: 180,
-        justifyContent: 'center',
-        transition: 'all 0.15s',
-      }} onClick={startRecord}>
-        {recording ? (
-          <span style={{ color: 'var(--accent)', animation: 'pulse 1s infinite' }}>
-            Press shortcut...
-          </span>
-        ) : (
-          <>
-            {mods.map(m => (
-              <kbd key={m} style={{
-                padding: '1px 6px',
-                borderRadius: 4,
-                background: 'var(--surface-3)',
-                border: '1px solid var(--border)',
-                fontSize: 10,
-                fontFamily: 'inherit',
-              }}>
-                {m === 'CommandOrControl' ? 'Ctrl' : m}
-              </kbd>
-            ))}
-            {mods.length > 0 && <span style={{ color: 'var(--text-3)' }}>+</span>}
-            <kbd style={{
-              padding: '1px 6px',
-              borderRadius: 4,
-              background: 'var(--accent)',
-              color: '#fff',
-              fontSize: 10,
-              fontFamily: 'inherit',
-              border: 'none',
-            }}>
-              {mainKey}
-            </kbd>
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
 /* ── Select ────────────────────────────────────────────────────── */
 const selectStyle: React.CSSProperties = {
   background: 'var(--surface-2)',
@@ -266,37 +171,6 @@ function GeneralSection({ settings, set }: {
         </Row>
       </Card>
     </>
-  )
-}
-
-function ShortcutsSection({ settings, set }: {
-  settings: AppSettings
-  set: (patch: Partial<AppSettings>) => void
-}) {
-  function updateHotkey(key: keyof AppSettings['hotkeys'], value: string) {
-    set({ hotkeys: { ...settings.hotkeys, [key]: value } })
-  }
-
-  const shortcuts: { key: keyof AppSettings['hotkeys']; label: string; desc: string }[] = [
-    { key: 'injectPanel',     label: 'Open inject panel',    desc: 'Open the prompt injection panel' },
-    { key: 'captureSelection',label: 'Capture selection',    desc: 'Capture highlighted text from active view' },
-    { key: 'switchAccount',   label: 'Switch account',       desc: 'Cycle through AI accounts' },
-  ]
-
-  return (
-    <Card title="Global Shortcuts">
-      <div style={{ padding: '8px 0 4px', fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
-        Click any shortcut badge to record a new key combination. Shortcuts work globally, even when the window is not focused.
-      </div>
-      {shortcuts.map(s => (
-        <Row key={s.key} label={s.label} desc={s.desc}>
-          <HotkeyInput
-            value={settings.hotkeys[s.key]}
-            onChange={v => updateHotkey(s.key, v)}
-          />
-        </Row>
-      ))}
-    </Card>
   )
 }
 
@@ -427,6 +301,35 @@ function WorkspacesSection() {
   )
 }
 
+function AgentSection({ settings, set }: {
+  settings: AppSettings
+  set: (patch: Partial<AppSettings>) => void
+}) {
+  return (
+    <Card title="Lead agent">
+      <Row
+        label="Orchestrator provider"
+        desc="Choose which local agent SDK plans work, calls worker tools, and produces the final response"
+      >
+        <select
+          style={selectStyle}
+          value={settings.leadAgentProvider}
+          onChange={event => set({ leadAgentProvider: event.target.value as AppSettings['leadAgentProvider'] })}
+          aria-label="Lead agent provider"
+        >
+          <option value="claude">Claude Agent SDK</option>
+          <option value="codex">Codex SDK</option>
+          <option value="antigravity">Antigravity (Google Gemini)</option>
+        </select>
+      </Row>
+      <div style={{ padding: '12px 0', fontSize: 11, lineHeight: 1.6, color: 'var(--text-3)' }}>
+        The selected provider is used from the next Agent run. Browser workers, NotebookLM, project approvals,
+        run history, and Stop behaviour stay the same.
+      </div>
+    </Card>
+  )
+}
+
 function AboutSection() {
   return (
     <Card title="About FlowDesk">
@@ -511,7 +414,6 @@ export default function Settings() {
         setSettings(prev => ({
           ...prev,
           ...s,
-          hotkeys: { ...DEFAULT_HOTKEYS, ...(s.hotkeys ?? {}) },
         }))
       }
     })()
@@ -531,7 +433,7 @@ export default function Settings() {
 
   const sectionTitle: Record<Section, string> = {
     general:    'General',
-    shortcuts:  'Keyboard Shortcuts',
+    agent:      'Agent',
     workspaces: 'Workspaces',
     about:      'About',
   }
@@ -625,7 +527,7 @@ export default function Settings() {
         {/* Section content */}
         <div style={{ flex: 1 }}>
           {section === 'general' && <GeneralSection settings={settings} set={patch} />}
-          {section === 'shortcuts' && <ShortcutsSection settings={settings} set={patch} />}
+          {section === 'agent' && <AgentSection settings={settings} set={patch} />}
           {section === 'workspaces' && <WorkspacesSection />}
           {section === 'about' && <AboutSection />}
         </div>
