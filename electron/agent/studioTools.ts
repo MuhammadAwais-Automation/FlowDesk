@@ -7,6 +7,7 @@ import { parseArtboards, replaceArtboardHtml, appendArtboard } from '../studio/a
 import { STUDIO_PRESETS, findPreset } from '../studio/presets'
 import { renderArtboardPng } from '../studio/render'
 import { exportArtboardPng, exportDocumentPdf } from '../studio/export'
+import { addImageToDocument } from '../studio/assetStore'
 
 /**
  * Studio's agent surface.
@@ -44,6 +45,7 @@ export const STUDIO_TOOL_NAMES = [
   'mcp__workers__studio_create_artboard',
   'mcp__workers__studio_write_html',
   'mcp__workers__studio_update_styles',
+  'mcp__workers__studio_add_image',
   'mcp__workers__studio_export',
 ]
 
@@ -198,6 +200,22 @@ export function createStudioTools(requestApproval: RequestApproval) {
             : html.replace('</head>', `<style>${cssTokens}</style>\n</head>`)
           return await writeDocumentHtml(documentId, next)
         })
+      },
+    ),
+
+    tool(
+      'studio_add_image',
+      'Copy an already-generated image into this document so it can be used in an <img> tag — accepts a flowdesk-image://... reference (from ask_chatgpt) or a local file path (e.g. one Google Flow already downloaded to disk). Does not generate an image itself; generate one with ask_chatgpt or a studio_flow_* tool first. Returns a studio-asset:// src to embed via studio_write_html.',
+      {
+        documentId: z.string(),
+        source: z.string().describe('A flowdesk-image://... reference, or an absolute local file path to an already-saved image.'),
+        altText: z.string().describe('Alt text for the <img> tag; also used to name the saved file.'),
+      },
+      async ({ documentId, source, altText }) => {
+        if (!await requestApproval({ tool: 'studio_add_image', title: 'Add an image to this document', detail: source.slice(0, 300) })) {
+          return fail('The user declined adding that image.')
+        }
+        return guard(async () => addImageToDocument(documentId, source, altText))
       },
     ),
 

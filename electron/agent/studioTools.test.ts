@@ -13,11 +13,14 @@ vi.mock('../studio/export', () => ({
   exportArtboardPng: vi.fn(async () => { diskWriteSpy(); return '/tmp/x.png' }),
   exportDocumentPdf: vi.fn(async () => { diskWriteSpy(); return '/tmp/x.pdf' }),
 }))
+vi.mock('../studio/assetStore', () => ({
+  addImageToDocument: vi.fn(async () => { diskWriteSpy(); return { url: 'studio-asset://d1/x.png', fileName: 'x.png', bytes: 3, mimeType: 'image/png' } }),
+}))
 
 const { createStudioTools, STUDIO_TOOL_NAMES } = await import('./studioTools')
 
 const READ_TOOLS = ['studio_list_documents', 'studio_get_html', 'studio_screenshot', 'studio_list_presets']
-const WRITE_TOOLS = ['studio_create_document', 'studio_create_artboard', 'studio_write_html', 'studio_update_styles', 'studio_export']
+const WRITE_TOOLS = ['studio_create_document', 'studio_create_artboard', 'studio_write_html', 'studio_update_styles', 'studio_add_image', 'studio_export']
 
 interface AnyTool {
   name: string
@@ -35,9 +38,9 @@ function get(tools: ReturnType<typeof createStudioTools>, name: string): AnyTool
 }
 
 describe('studio tools', () => {
-  it('exposes exactly the nine tools the spec lists', () => {
-    expect(STUDIO_TOOL_NAMES).toHaveLength(9)
-    expect(createStudioTools(async () => true)).toHaveLength(9)
+  it('exposes exactly the ten tools the spec lists', () => {
+    expect(STUDIO_TOOL_NAMES).toHaveLength(10)
+    expect(createStudioTools(async () => true)).toHaveLength(10)
     for (const name of [...READ_TOOLS, ...WRITE_TOOLS]) {
       expect(STUDIO_TOOL_NAMES).toContain(`mcp__workers__${name}`)
     }
@@ -64,12 +67,21 @@ describe('studio tools', () => {
     for (const name of WRITE_TOOLS) {
       const approve = vi.fn(async () => false)
       const result = await get(createStudioTools(approve), name).handler(
-        { documentId: 'd1', artboardId: 'a1', title: 'X', name: 'N', width: 10, height: 10, html: '<p/>', cssTokens: ':root{}' },
+        { documentId: 'd1', artboardId: 'a1', title: 'X', name: 'N', width: 10, height: 10, html: '<p/>', cssTokens: ':root{}', source: 'flowdesk-image://x.png', altText: 'X' },
         {} as never,
       )
       expect(approve, name).toHaveBeenCalled()
       expect(result.isError, name).toBe(true)
     }
+  })
+
+  it('adds an image once approved, returning the studio-asset:// url', async () => {
+    diskWriteSpy.mockClear()
+    const result = await get(createStudioTools(async () => true), 'studio_add_image')
+      .handler({ documentId: 'd1', source: 'flowdesk-image://x.png', altText: 'Cover' }, {} as never)
+    expect(diskWriteSpy).toHaveBeenCalled()
+    expect(result.isError).toBeUndefined()
+    expect(result.content[0].text).toContain('studio-asset://')
   })
 
   it('rejects an unknown preset before creating anything, so no orphan document is left', async () => {
