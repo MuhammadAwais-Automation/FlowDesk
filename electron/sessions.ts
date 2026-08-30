@@ -518,6 +518,29 @@ export function getTabIdForWebContents(webContentsId: number): string | null {
   return null
 }
 
+/**
+ * The hidden background window an ask_<tool> browser-worker call actually
+ * drives, by tool name alone — bypassing the "visible tab first" order
+ * `findAnyViewByUrl` uses.
+ *
+ * Needed for discovery probes specifically: a generic URL-substring probe
+ * target (e.g. "chatgpt.com") can attach to whatever visible AI Browser tab
+ * happens to be open on that site instead of the actual hidden worker tab
+ * browserWorkerQueue.ts is driving — confirmed by a real probe run that
+ * watched a tab where nothing was happening for 200s straight while a real
+ * ask_chatgpt call was genuinely in progress elsewhere. tabIds are
+ * `agent-<partition>-<tool>` (see browserWorkerQueue.ts), one per
+ * account/tool pair, so this returns the first live match for the tool
+ * regardless of which account it belongs to.
+ */
+export function findWorkerViewByTool(tool: string): { webContents: WebContents } | null {
+  const suffix = `-${tool}`
+  for (const [tabId, win] of backgroundWindows) {
+    if (tabId.startsWith('agent-') && tabId.endsWith(suffix) && !win.isDestroyed()) return win
+  }
+  return null
+}
+
 export function setCustomBounds(x: number, y: number, w: number, h: number) {
   if (!mainWindow || !activeTabId) return
   const view = viewCache.get(activeTabId)

@@ -66,7 +66,7 @@ interface PromptCategory {
 
 import { join, basename } from 'path'
 import Store from 'electron-store'
-import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView, findAnyViewByUrl } from './sessions'
+import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView, findAnyViewByUrl, findWorkerViewByTool } from './sessions'
 import { startProbeRunner } from './discovery/probeRunner'
 import { injectPrompt, getLatestAssistantText, getSelectedText, type AITool } from './injector'
 import { extractTextFromSSEEvent, extractUsageFromSSEEvent, extractModelInfoFromSSEEvent, extractIdsFromSSEEvent } from './chatgptParser'
@@ -1953,7 +1953,17 @@ app.whenReady().then(async () => {
       // window.electronAPI itself — used to drive the agent's own
       // browser-worker tools directly, the same way the real agent does,
       // without needing the agent chat UI at all.
-      resolveView: target => target === 'flowdesk' ? mainWindow?.webContents ?? null : findAnyViewByUrl(target)?.webContents ?? null,
+      resolveView: target => {
+        if (target === 'flowdesk') return mainWindow?.webContents ?? null
+        // "worker:<tool>" — the exact hidden background window
+        // browserWorkerQueue.ts drives for that tool, unambiguous even when
+        // a visible tab on the same site is also open (findAnyViewByUrl
+        // would attach to that visible tab first, which is a different,
+        // possibly idle page — confirmed by a real probe that watched the
+        // wrong one for 200s while a real ask_chatgpt call ran elsewhere).
+        if (target.startsWith('worker:')) return findWorkerViewByTool(target.slice('worker:'.length))?.webContents ?? null
+        return findAnyViewByUrl(target)?.webContents ?? null
+      },
       onResult: (name, result) => {
         const head = result.ok ? 'ok' : `FAILED: ${result.error}`
         console.log(`[probe] ${name} (${result.target}) ${result.durationMs}ms — ${head}`)
