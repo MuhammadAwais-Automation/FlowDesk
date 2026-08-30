@@ -76,7 +76,7 @@ import { extractTextFromSSEEvent as extractQwenTextFromSSEEvent, extractThinking
 import { extractPerplexitySSEEvent } from './perplexityParser'
 import type { AppSettings } from '../src/types/database'
 import { PROVIDER_URLS } from './providerUrls'
-import { configureBrowserWorkerQueue, notifyCaptureComplete, workerProgress } from './agent/browserWorkerQueue'
+import { configureBrowserWorkerQueue, notifyCaptureComplete, workerProgress, askBrowserProvider } from './agent/browserWorkerQueue'
 import { orderBrowserAccounts } from './agent/accountFailover'
 import * as agentSessions from './agentSessionStore'
 import * as studioStore from './studio/documentStore'
@@ -1939,15 +1939,46 @@ app.whenReady().then(async () => {
   // is open, which is exactly the capability that must not ship to users or
   // reach the in-app agent (see electron/discovery/probeRunner.ts).
   if (!app.isPackaged) {
+    // Debug-only IPC, exposed by preload.ts as window.electronAPI.debugAsk-
+    // BrowserProviderDirect / debugInspectChatGptDom. Lets a "flowdesk"-
+    // targeted discovery probe drive the real ask_<tool> browser-worker path
+    // (electron/agent/browserWorkerQueue.ts's askBrowserProvider) directly
+    // from the renderer, without going through the Claude Agent SDK loop —
+    // so a real ChatGPT/Claude/etc call can be observed even when the SDK
+    // CLI itself is unavailable (auth, rate limits, etc). Never registered
+    // in a packaged build: it lets arbitrary renderer code drive a real,
+    // authenticated browser session on the user's behalf.
+    ipcMain.handle('debug:askBrowserProviderDirect', async (_event, tool: AITool, prompt: string, resetFirst?: boolean) => {
+      if (resetFirst) {
+        const win = findWorkerViewByTool(tool)
+        if (win) await win.webContents.loadURL(PROVIDER_URLS[tool])
+      }
+      try {
+        const text = await askBrowserProvider(tool, prompt)
+        return { ok: true as const, text }
+      } catch (error) {
+        return { ok: false as const, error: error instanceof Error ? error.message : String(error) }
+      }
+    })
+
+    ipcMain.handle('debug:inspectChatGptDom', async () => {
+      const view = findWorkerViewByTool('chatgpt') ?? findAnyViewByUrl('chatgpt.com')
+      if (!view) return { ok: false as const, error: 'no open ChatGPT view (worker or visible tab)' }
+      const text = await getLatestAssistantText(view.webContents, 'chatgpt')
+      return { ok: true as const, text }
+    })
+
     void startProbeRunner({
       dir: join(app.getAppPath(), 'probes'),
       // browser-worker tool probes (e.g. debug-ask-chatgpt-direct.js) can
       // legitimately run for minutes — the queue's own HARD_CEILING_MS in
-      // browserWorkerQueue.ts is 360s — so the probe runner's default 30s
-      // internal timeout has to be raised well past that, or it would report
-      // a false "probe timed out" while the real call keeps running
-      // untracked in the background.
-      timeoutMs: 380_000,
+      // browserWorkerQueue.ts is 900s (see its own comment: real image
+      // generation was directly observed producing zero capture activity for
+      // 2+ minutes before eventually completing) — so the probe runner's
+      // default 30s internal timeout has to be raised well past that, or it
+      // would report a false "probe timed out" while the real call keeps
+      // running untracked in the background.
+      timeoutMs: 920_000,
       // "flowdesk" is a special-cased target for FlowDesk's own renderer
       // window (not a tracked site view), so a probe can call into
       // window.electronAPI itself — used to drive the agent's own

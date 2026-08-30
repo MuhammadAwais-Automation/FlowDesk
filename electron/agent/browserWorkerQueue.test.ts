@@ -32,7 +32,8 @@ describe('idle timeout with content already received', () => {
     await vi.advanceTimersByTimeAsync(1_000)
 
     notifyCaptureActivity('chatgpt', '![generated image](flowdesk-image://abc.png)')
-    await vi.advanceTimersByTimeAsync(130_000)
+    // Past IDLE_TIMEOUT_MS (600s) so settleIdle actually fires.
+    await vi.advanceTimersByTimeAsync(650_000)
 
     await expect(call).resolves.toContain('flowdesk-image://abc.png')
   })
@@ -40,7 +41,7 @@ describe('idle timeout with content already received', () => {
   it('still rejects when the stream produced nothing at all', async () => {
     const call = askBrowserProvider('chatgpt' as never, 'hello')
     await vi.advanceTimersByTimeAsync(1_000)
-    await vi.advanceTimersByTimeAsync(130_000)
+    await vi.advanceTimersByTimeAsync(650_000)
     await expect(call).rejects.toThrow(/no content at all/)
   })
 
@@ -51,8 +52,8 @@ describe('idle timeout with content already received', () => {
     let settled = false
     void call.then(() => { settled = true }, () => { settled = true })
 
-    // Three 90s gaps, each under the 120s idle limit — a fixed 60s (or even
-    // a non-resetting 120s) deadline would have killed this turn twice over.
+    // Three 90s gaps, each under the 600s idle limit — a fixed 60s (or even
+    // a non-resetting 120s) deadline would have killed this turn several times over.
     for (let i = 0; i < 3; i++) {
       await vi.advanceTimersByTimeAsync(90_000)
       notifyCaptureActivity('chatgpt', 'still working…')

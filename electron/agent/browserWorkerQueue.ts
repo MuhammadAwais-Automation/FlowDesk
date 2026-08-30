@@ -70,9 +70,33 @@ export type WorkerProgress =
 // "went idle for 60s, 131s after the prompt was sent" even with the
 // activity-reset mechanism working correctly. 60s of true silence is simply
 // within ChatGPT's normal range for image generation, not a sign of a stuck
-// provider — both numbers below are raised accordingly.
-const IDLE_TIMEOUT_MS = 120_000
-const HARD_CEILING_MS = 360_000
+// provider.
+//
+// Raised again after directly observing a real image-generation call end to
+// end (probes/out/cg-08-observe-real-generation.json, cg-10, cg-11 —
+// discovery probes watching the exact hidden worker window via
+// findWorkerViewByTool, not a guess): the composer showed ChatGPT actively
+// "Stop answering" for ~60s, then went fully idle — yet notifyCaptureActivity
+// was never called even once in the following 2 minutes (confirmed:
+// IDLE_TIMEOUT_MS fired at exactly 120s with zero partial content), while a
+// same-account, same-session plain text prompt on the SAME code path
+// answered correctly in under 8s. That rules out a broken account, a broken
+// capture pipeline, or a stuck provider — image generation is evidently a
+// single atomic server-side job with no streaming activity at all until it
+// finishes, so the "idle" model (built for a text stream that ticks and can
+// stall mid-stream) doesn't actually apply to it; there is nothing to reset
+// on. ChatGPT's own sidebar history for this account shows the same image
+// prompt silently failing this exact way 5+ times before this investigation
+// — i.e. every previous attempt was being killed by too-short a ceiling, not
+// by a real provider failure. The user's own real-world experience generating
+// images by hand in ChatGPT (not through FlowDesk) is that it can genuinely
+// take up to 10-15 minutes on a slow connection. Both numbers below are
+// raised to give a real job that much room; the existing heartbeat (fired
+// every HEARTBEAT_INTERVAL_MS below and forwarded to the renderer as
+// tool_progress) is what keeps the agent from looking like it's "just
+// sitting there" during that window — see its own comment.
+const IDLE_TIMEOUT_MS = 600_000
+const HARD_CEILING_MS = 900_000
 
 // Even with each provider now in its own independent hidden BrowserWindow
 // (fixing the sibling-focus-stealing bug), firing all 5 CDP dispatches at
