@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { ImageLightbox } from './ImageLightbox'
 import { CitationBadge } from './CitationBadge'
+import { flowdeskUrlTransform } from '@/lib/markdownUrl'
 import type { NotebookLMCitation } from '@/types/notebooklm'
 
 export interface RetroMarkdownProps {
@@ -175,7 +176,7 @@ export function RetroMarkdown({
   return (
     <>
       <div className="retro-md min-w-0">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={flowdeskUrlTransform}>
           {content}
         </ReactMarkdown>
         {pending && (

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Send, Check, X } from 'lucide-react'
 import { useAgentApprovals } from '@/hooks/useAgentApprovals'
+import { RetroMarkdown } from '@/components/chat/RetroMarkdown'
 import type { AgentRunEvent, AgentSessionMeta, AgentSessionTurn } from '@/types/electron'
 
 /**
@@ -91,13 +92,24 @@ export default function StudioChat({ isActive }: Props) {
                 : 'bg-white border border-[#E2DBD0] text-stone-800'
             }`}
           >
-            {turn.content.slice(0, 600)}
+            {/*
+              Rendered as markdown, not raw text: a generated image reaches
+              this panel as ![alt](flowdesk-image://….png), and as plain text
+              the user saw that link spelled out instead of the picture. The
+              old 600-char clamp is now a scroll cap — truncating the string
+              could cut an image link in half and lose it entirely.
+            */}
+            <div className="max-h-64 overflow-y-auto">
+              <RetroMarkdown content={turn.content} />
+            </div>
           </div>
         ))}
 
         {liveText && (
           <div className="rounded-xl px-3 py-2 bg-white border border-[#E2DBD0] font-retro-sans text-[11px] text-stone-800">
-            {liveText.slice(-600)}
+            <div className="max-h-64 overflow-y-auto">
+              <RetroMarkdown content={liveText} pending />
+            </div>
           </div>
         )}
 
