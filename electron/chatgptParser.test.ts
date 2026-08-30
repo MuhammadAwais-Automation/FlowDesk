@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractImageAssetsFromSSEEvent, extractTextFromSSEEvent, isLikelyImageEvent } from './chatgptParser'
+import { extractImageAssetsFromSSEEvent, extractTextFromSSEEvent, isLikelyImageEvent, isMessageStreamComplete } from './chatgptParser'
 
 /**
  * Real captured event (probes/out/_chatgpt-image-debug.log) from an actual
@@ -30,6 +30,38 @@ describe('extractTextFromSSEEvent on a real image event', () => {
     // existing text collector's assistant-only check skips the whole
     // message — an image-generation turn produces zero extracted text.
     expect(extractTextFromSSEEvent(REAL_IMAGE_EVENT)).toEqual([])
+  })
+})
+
+/**
+ * Captured live (FD_CAPTURE_DEBUG, 2026-08-30) during a real image-generation
+ * turn, verbatim. This is the authoritative "the turn is over" signal, and it
+ * matters because for an image turn the HTTP body stream does NOT end when the
+ * answer does — ChatGPT keeps the connection open, so the fetch-reader `done`
+ * that main.ts relied on arrives late (or not at all). Timeline from that run:
+ * image_asset_pointer at 14:31:14, this event at 14:31:20, and the agent was
+ * still sitting in its timeout well after both.
+ */
+const REAL_STREAM_COMPLETE_EVENT =
+  `data: {"type":"message_stream_complete","conversation_id":"6a943e6e-b600-83e8-bc57-6ba0b413812c"}`
+
+describe('isMessageStreamComplete', () => {
+  it('recognises the real captured end-of-turn event', () => {
+    expect(isMessageStreamComplete(REAL_STREAM_COMPLETE_EVENT)).toBe(true)
+  })
+
+  it('does not fire on the image event that precedes it', () => {
+    expect(isMessageStreamComplete(REAL_IMAGE_EVENT)).toBe(false)
+  })
+
+  it('does not fire on an ordinary text delta', () => {
+    const textEvent = `event: delta\ndata: {"p":"/message/content/parts/0","o":"append","v":"hello"}`
+    expect(isMessageStreamComplete(textEvent)).toBe(false)
+  })
+
+  it('is not fooled by the phrase appearing inside message text', () => {
+    const textEvent = `event: delta\ndata: {"p":"/message/content/parts/0","o":"append","v":"message_stream_complete"}`
+    expect(isMessageStreamComplete(textEvent)).toBe(false)
   })
 })
 

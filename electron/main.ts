@@ -69,14 +69,14 @@ import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView, findAnyViewByUrl, findWorkerViewByTool } from './sessions'
 import { startProbeRunner } from './discovery/probeRunner'
 import { injectPrompt, getLatestAssistantText, getSelectedText, type AITool } from './injector'
-import { extractTextFromSSEEvent, extractUsageFromSSEEvent, extractModelInfoFromSSEEvent, extractIdsFromSSEEvent } from './chatgptParser'
+import { extractTextFromSSEEvent, extractUsageFromSSEEvent, extractModelInfoFromSSEEvent, extractIdsFromSSEEvent, extractImageAssetsFromSSEEvent, isMessageStreamComplete } from './chatgptParser'
 import { extractTextFromClaudeSSEEvent, extractModelInfoFromSSEEvent as extractClaudeModelInfoFromSSEEvent, extractUsageFromSSEEvent as extractClaudeUsageFromSSEEvent } from './claudeParser'
 import { extractLatestGeminiText, extractTurnMetaFromRaw as extractGeminiTurnMetaFromRaw, extractImageUrlsFromRaw as extractGeminiImageUrlsFromRaw } from './geminiParser'
 import { extractTextFromSSEEvent as extractQwenTextFromSSEEvent, extractThinkingSummaryFromSSEEvent, extractUsageFromSSEEvent as extractQwenUsageFromSSEEvent } from './qwenParser'
 import { extractPerplexitySSEEvent } from './perplexityParser'
 import type { AppSettings } from '../src/types/database'
 import { PROVIDER_URLS } from './providerUrls'
-import { configureBrowserWorkerQueue, notifyCaptureComplete, workerProgress, askBrowserProvider } from './agent/browserWorkerQueue'
+import { configureBrowserWorkerQueue, notifyCaptureComplete, notifyCaptureActivity, workerProgress, askBrowserProvider } from './agent/browserWorkerQueue'
 import { orderBrowserAccounts } from './agent/accountFailover'
 import * as agentSessions from './agentSessionStore'
 import * as studioStore from './studio/documentStore'
@@ -1524,6 +1524,16 @@ interface CaptureBuffer {
   buf: string
   text: string
   tool: string
+  /**
+   * In-flight image downloads for this turn. Awaited before completing, so a
+   * turn whose only content is an image cannot complete empty and get
+   * discarded by browserWorkerQueue's empty-completion guard.
+   */
+  pendingImages?: Promise<void>[]
+  /** ChatGPT sent message_stream_complete — the turn is over. */
+  streamComplete?: boolean
+  /** Already settled, so the later HTTP-body end must not re-emit it empty. */
+  completed?: boolean
 }
 
 const IMAGE_EXT_BY_MIME: Record<string, string> = {
@@ -1561,6 +1571,52 @@ async function downloadAndSaveGeneratedImage(url: string, sess: Electron.Session
   }
 }
 
+/**
+ * Turns a ChatGPT image asset into a saved flowdesk-image:// URL.
+ *
+ * Two hops, both confirmed against the live API by discovery probes
+ * (probes/out/cg-02-image-fetch.json, cg-04-full-chain.json) rather than
+ * assumed:
+ *
+ *   1. /backend-api/files/download/{fileId} -> { download_url }
+ *      Needs an Authorization: Bearer token — cookies alone return 401 (probe
+ *      "files/download cookies only": 401 Unauthorized). Run inside the page,
+ *      which already holds that token, so no credential ever has to be read
+ *      into or stored by the main process.
+ *   2. GET download_url -> the actual bytes
+ *      A signed estuary URL; probe confirmed cookies alone are enough here
+ *      (step2_cookiesOnly: 200, 1223184 bytes), so the existing session-scoped
+ *      downloader handles it unchanged.
+ */
+async function resolveChatGPTImage(
+  asset: { fileId: string; conversationId?: string },
+  sender: Electron.WebContents,
+): Promise<string | null> {
+  try {
+    const query = asset.conversationId
+      ? `?conversation_id=${encodeURIComponent(asset.conversationId)}&inline=false&download_intent=false`
+      : ''
+    const downloadUrl: string | null = await sender.executeJavaScript(`
+      (async function () {
+        try {
+          var s = await fetch('/api/auth/session').then(function (r) { return r.json() })
+          if (!s || !s.accessToken) return null
+          var r = await fetch(${JSON.stringify(`/backend-api/files/download/${asset.fileId}${query}`)}, {
+            headers: { Authorization: 'Bearer ' + s.accessToken },
+          })
+          if (!r.ok) return null
+          var j = await r.json()
+          return j && j.download_url ? j.download_url : null
+        } catch (e) { return null }
+      })()
+    `)
+    if (!downloadUrl) return null
+    return await downloadAndSaveGeneratedImage(downloadUrl, sender.session)
+  } catch {
+    return null
+  }
+}
+
 function extractCaptureText(tool: string, evt: string): string[] {
   if (tool === 'claude') return extractTextFromClaudeSSEEvent(evt)
   return extractTextFromSSEEvent(evt)
@@ -1572,6 +1628,50 @@ function extractCaptureText(tool: string, evt: string): string[] {
 function emitCaptureComplete(payload: { id: string; tool: string; text: string; error?: string }) {
   mainWindow?.webContents.send('capture:complete', payload)
   notifyCaptureComplete(payload.tool, payload.text, payload.error)
+}
+
+// The live-tick counterpart, and the ONLY place capture:live is emitted.
+//
+// browserWorkerQueue.ts's notifyCaptureActivity is what resets a pending
+// waiter's idle timer — its own comment describes being called "from main.ts's
+// emitCaptureLive on every capture:live tick", but no such function existed
+// and notifyCaptureActivity was never called from anywhere in this file. The
+// idle timer therefore never reset, no matter how much data a provider was
+// actively streaming, making IDLE_TIMEOUT_MS behave as a flat deadline rather
+// than the stall detector it was written to be. Same class of loss as the
+// probe runner and the still-missing IPC handlers: dropped in the main.ts
+// rewrite, invisible because nothing errors when a notification simply never
+// fires. Every send site routes through here so it cannot silently drift apart
+// again.
+function emitCaptureLive(payload: { id: string; tool: string; textSoFar: string }) {
+  mainWindow?.webContents.send('capture:live', payload)
+  notifyCaptureActivity(payload.tool, payload.textSoFar)
+}
+
+/**
+ * Settles one captured turn exactly once.
+ *
+ * Awaits any in-flight image downloads first: an image-only turn has no text
+ * until its asset has been fetched and turned into markdown, and completing
+ * before that lands is precisely the bug this path exists to fix — the empty
+ * completion gets dropped by browserWorkerQueue's empty-completion guard and
+ * the agent waits out its timeout on an image that already finished.
+ *
+ * The entry is marked rather than deleted because both triggers can fire for
+ * the same turn: message_stream_complete arrives first, then the HTTP body
+ * ends some time later. Deleting here would let that second trigger build a
+ * fresh empty entry and broadcast a second, empty capture:complete over the
+ * real one.
+ */
+async function finishCapture(id: string, entry: CaptureBuffer) {
+  if (entry.completed) return
+  if (entry.pendingImages?.length) {
+    await Promise.all(entry.pendingImages)
+    entry.pendingImages = []
+  }
+  entry.completed = true
+  console.log(`[FlowDesk capture][${entry.tool}] response complete:\n`, entry.text)
+  emitCaptureComplete({ id, tool: entry.tool, text: entry.text })
 }
 
 // Discovery: log every network call a provider's tab makes, unfiltered,
@@ -1615,7 +1715,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
         for (const delta of deltas) entry.text += delta
         if (finalText) entry.text = finalText
       }
-      mainWindow?.webContents.send('capture:live', { id: payload.id, tool: entry.tool, textSoFar: entry.text })
+      emitCaptureLive({ id: payload.id, tool: entry.tool, textSoFar: entry.text })
     }
     if (payload.error) {
       // The page aborts the underlying connection right after end_of_stream
@@ -1656,7 +1756,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
   if (entry.tool === 'grok') {
     if (payload.chunk) {
       entry.text += payload.chunk
-      mainWindow?.webContents.send('capture:live', { id: payload.id, tool: entry.tool, textSoFar: entry.text })
+      emitCaptureLive({ id: payload.id, tool: entry.tool, textSoFar: entry.text })
     }
     if (payload.error) {
       console.error(`[FlowDesk capture][grok] stream error:`, payload.error)
@@ -1692,7 +1792,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
           mainWindow?.webContents.send('capture:usage', { tool: entry.tool, limits: usage })
         }
       }
-      mainWindow?.webContents.send('capture:live', { id: payload.id, tool: entry.tool, textSoFar: entry.text })
+      emitCaptureLive({ id: payload.id, tool: entry.tool, textSoFar: entry.text })
     }
     if (payload.error) {
       console.error(`[FlowDesk capture][qwen] stream error:`, payload.error)
@@ -1728,7 +1828,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
       entry.buf += payload.chunk
       const latest = extractLatestGeminiText(entry.buf)
       if (latest !== null) entry.text = latest
-      mainWindow?.webContents.send('capture:live', { id: payload.id, tool: entry.tool, textSoFar: entry.text })
+      emitCaptureLive({ id: payload.id, tool: entry.tool, textSoFar: entry.text })
     }
     if (payload.error) {
       console.error(`[FlowDesk capture][gemini] stream error:`, payload.error)
@@ -1814,6 +1914,34 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
           console.log(`[FlowDesk ids][chatgpt]`, `conversationId=${ids.conversationId} messageId=${ids.messageId}`)
           mainWindow?.webContents.send('capture:ids', { tool: entry.tool, ids })
         }
+
+        // An image-generation turn carries its result as a structured part
+        // (author role "tool", content_type "image_asset_pointer") that the
+        // text extractor above correctly finds nothing in — so without this
+        // the turn completes with EMPTY text and browserWorkerQueue's
+        // "ignore incidental empty completions" guard discards it, leaving
+        // the agent waiting on an image that already exists. Confirmed live
+        // (FD_CAPTURE_DEBUG, 2026-08-30): asset at 14:31:14, turn done at
+        // 14:31:20, "response complete:" printed with nothing after it.
+        for (const asset of extractImageAssetsFromSSEEvent(evt)) {
+          console.log(`[FlowDesk image][chatgpt] ${asset.fileId} (${asset.width}x${asset.height}) "${asset.title ?? 'untitled'}" — resolving`)
+          const pending = resolveChatGPTImage(asset, _e.sender).then(saved => {
+            if (saved) {
+              entry.text += `${entry.text ? '\n\n' : ''}![${asset.title ?? 'generated image'}](${saved})`
+              console.log(`[FlowDesk image][chatgpt] saved -> ${saved}`)
+            } else {
+              console.error(`[FlowDesk image][chatgpt] could not download ${asset.fileId}`)
+            }
+          })
+          ;(entry.pendingImages ??= []).push(pending)
+        }
+
+        // ChatGPT's own end-of-turn event. The fetch-reader `done` this
+        // handler otherwise completes on is the HTTP body ending, which for
+        // an image turn happens late or not at all because the connection is
+        // held open — so this is what actually makes the agent's waiter
+        // resolve when the answer is genuinely ready.
+        if (isMessageStreamComplete(evt)) entry.streamComplete = true
       }
       if (entry.tool === 'claude') {
         const modelInfo = extractClaudeModelInfoFromSSEEvent(evt)
@@ -1829,10 +1957,22 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
         }
       }
     }
-    mainWindow?.webContents.send('capture:live', { id: payload.id, tool: entry.tool, textSoFar: entry.text })
+    emitCaptureLive({ id: payload.id, tool: entry.tool, textSoFar: entry.text })
+
+    // The provider said the turn is done. Settle now instead of waiting for
+    // the HTTP body to end, which on an image turn lags the answer by minutes
+    // (or never arrives, since the connection is held open for notifications).
+    if (entry.streamComplete) {
+      await finishCapture(payload.id, entry)
+      return
+    }
   }
 
   if (payload.error) {
+    if (entry.completed) {
+      captureBuffers.delete(payload.id)
+      return
+    }
     console.error(`[FlowDesk capture][${entry.tool}] stream error:`, payload.error)
     emitCaptureComplete({ id: payload.id, tool: entry.tool, text: entry.text, error: payload.error })
     captureBuffers.delete(payload.id)
@@ -1840,6 +1980,11 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
   }
 
   if (payload.done) {
+    // Already settled via message_stream_complete — the body simply caught up.
+    if (entry.completed) {
+      captureBuffers.delete(payload.id)
+      return
+    }
     // Flush whatever's left in the buffer — the final SSE event is rarely
     // followed by a trailing blank line before the connection closes, so it
     // never gets processed by the '\n\n' splitter above.
@@ -1881,8 +2026,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
       }
       entry.buf = ''
     }
-    console.log(`[FlowDesk capture][${entry.tool}] response complete:\n`, entry.text)
-    emitCaptureComplete({ id: payload.id, tool: entry.tool, text: entry.text })
+    await finishCapture(payload.id, entry)
     captureBuffers.delete(payload.id)
   }
 })

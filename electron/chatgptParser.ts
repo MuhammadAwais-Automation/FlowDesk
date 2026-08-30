@@ -128,6 +128,35 @@ export function isLikelyImageEvent(event: string): boolean {
   return /image_asset_pointer|"content_type"\s*:\s*"image|dalle|asset_pointer/i.test(event)
 }
 
+/**
+ * ChatGPT's own "this turn is finished" event.
+ *
+ * Needed because the fetch-reader `done` main.ts completes on is the HTTP
+ * BODY ending, which is a different thing: on an image turn ChatGPT holds the
+ * connection open past the answer, so `done` lands late or never. Confirmed on
+ * a live run (FD_CAPTURE_DEBUG, 2026-08-30): image_asset_pointer at 14:31:14,
+ * this event at 14:31:20 — while the agent's waiter went on sitting in its
+ * timeout, because the only completion it ever saw carried empty text.
+ *
+ * Parsed as JSON per `data:` line rather than substring-matched, so the
+ * literal phrase occurring inside a message the model wrote cannot end a turn.
+ */
+export function isMessageStreamComplete(event: string): boolean {
+  for (const line of event.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('data:')) continue
+    const payload = trimmed.slice(5).trim()
+    if (!payload || payload === '[DONE]') continue
+    try {
+      const parsed = JSON.parse(payload) as { type?: unknown }
+      if (parsed && typeof parsed === 'object' && parsed.type === 'message_stream_complete') return true
+    } catch {
+      // split across a chunk boundary — same tolerance as the extractors above
+    }
+  }
+  return false
+}
+
 export interface ChatGPTImageAsset {
   /** e.g. "sediment://file_000000000d888208ab9c0426384a860b" — the id after the "sediment://" prefix is what /backend-api/files/download/{id} takes. */
   assetPointer: string
