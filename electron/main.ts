@@ -66,7 +66,8 @@ interface PromptCategory {
 
 import { join, basename } from 'path'
 import Store from 'electron-store'
-import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView } from './sessions'
+import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView, findAnyViewByUrl } from './sessions'
+import { startProbeRunner } from './discovery/probeRunner'
 import { injectPrompt, getLatestAssistantText, getSelectedText, type AITool } from './injector'
 import { extractTextFromSSEEvent, extractUsageFromSSEEvent, extractModelInfoFromSSEEvent, extractIdsFromSSEEvent } from './chatgptParser'
 import { extractTextFromClaudeSSEEvent, extractModelInfoFromSSEEvent as extractClaudeModelInfoFromSSEEvent, extractUsageFromSSEEvent as extractClaudeUsageFromSSEEvent } from './claudeParser'
@@ -1932,6 +1933,34 @@ app.whenReady().then(async () => {
     if (!filePath.startsWith(dir)) return new Response('Forbidden', { status: 403 })
     return net.fetch(pathToFileURL(filePath).href)
   })
+
+  // Discovery harness — development only, and never in a packaged build.
+  // It evaluates arbitrary JavaScript inside whatever authenticated session
+  // is open, which is exactly the capability that must not ship to users or
+  // reach the in-app agent (see electron/discovery/probeRunner.ts).
+  if (!app.isPackaged) {
+    void startProbeRunner({
+      dir: join(app.getAppPath(), 'probes'),
+      // browser-worker tool probes (e.g. debug-ask-chatgpt-direct.js) can
+      // legitimately run for minutes — the queue's own HARD_CEILING_MS in
+      // browserWorkerQueue.ts is 360s — so the probe runner's default 30s
+      // internal timeout has to be raised well past that, or it would report
+      // a false "probe timed out" while the real call keeps running
+      // untracked in the background.
+      timeoutMs: 380_000,
+      // "flowdesk" is a special-cased target for FlowDesk's own renderer
+      // window (not a tracked site view), so a probe can call into
+      // window.electronAPI itself — used to drive the agent's own
+      // browser-worker tools directly, the same way the real agent does,
+      // without needing the agent chat UI at all.
+      resolveView: target => target === 'flowdesk' ? mainWindow?.webContents ?? null : findAnyViewByUrl(target)?.webContents ?? null,
+      onResult: (name, result) => {
+        const head = result.ok ? 'ok' : `FAILED: ${result.error}`
+        console.log(`[probe] ${name} (${result.target}) ${result.durationMs}ms — ${head}`)
+        console.log(`[probe] -> probes/out/${name}.json`)
+      },
+    }).catch(error => console.log('[probe] runner did not start:', error))
+  }
 })
 app.on('window-all-closed', () => {
   const s = store.get('settings') as Partial<AppSettings>
