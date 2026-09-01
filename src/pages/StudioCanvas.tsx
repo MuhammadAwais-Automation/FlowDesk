@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Trash2, FileText, Image as ImageIcon, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import StudioChat from '@/components/studio/StudioChat'
 import { BRIDGE_SCRIPT, isBridgeMessage } from '@/lib/studioBridge'
-import { fitToViewport, type Size, type ViewportState } from '@/lib/canvasViewport'
+import { clampZoom, fitToViewport, type Size, type ViewportState } from '@/lib/canvasViewport'
 import type { StudioDocumentMeta } from '@/types/electron'
 
 /**
@@ -23,6 +23,7 @@ export default function StudioCanvas({ isActive }: Props) {
   const [view, setView] = useState<ViewportState>({ panX: 0, panY: 0, zoom: 1 })
   const [bounds, setBounds] = useState<Size>({ width: 0, height: 0 })
   const viewportRef = useRef<HTMLDivElement>(null)
+  const fittedFor = useRef<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const active = documents.find(d => d.id === activeId) ?? null
@@ -37,6 +38,8 @@ export default function StudioCanvas({ isActive }: Props) {
 
   useEffect(() => {
     if (!activeId) { setHtml(''); return }
+    setBounds({ width: 0, height: 0 })
+    fittedFor.current = null
     void api.studioReadHtml(activeId).then(value => setHtml(value ?? ''))
   }, [activeId, api, documents])
 
@@ -67,7 +70,6 @@ export default function StudioCanvas({ isActive }: Props) {
 
   // Fit once per document, when its size first becomes known — not on every
   // bounds report, or the user's own zoom would be undone mid-session.
-  const fittedFor = useRef<string | null>(null)
   useEffect(() => {
     if (!activeId || bounds.width === 0) return
     if (fittedFor.current === activeId) return
@@ -162,9 +164,9 @@ export default function StudioCanvas({ isActive }: Props) {
           <span className="font-retro-sans text-sm font-bold text-[#281E14] truncate flex-1">
             {active?.title ?? 'No document'}
           </span>
-          <button onClick={() => setView(v => ({ ...v, zoom: Math.max(0.1, v.zoom - 0.25) }))} title="Zoom out"><ZoomOut size={14} /></button>
+          <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom - 0.25) }))} title="Zoom out"><ZoomOut size={14} /></button>
           <span className="font-retro-mono text-[11px] text-stone-600 w-10 text-center">{Math.round(view.zoom * 100)}%</span>
-          <button onClick={() => setView(v => ({ ...v, zoom: Math.min(4, v.zoom + 0.25) }))} title="Zoom in"><ZoomIn size={14} /></button>
+          <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom + 0.25) }))} title="Zoom in"><ZoomIn size={14} /></button>
           <button onClick={fit} title="Fit to screen"><Maximize2 size={14} /></button>
           <button
             onClick={() => setView(v => ({ ...v, zoom: 1 }))}
