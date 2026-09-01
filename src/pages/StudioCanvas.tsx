@@ -42,11 +42,14 @@ export default function StudioCanvas({ isActive }: Props) {
   useEffect(() => { if (isActive) void refresh() }, [isActive, refresh])
 
   useEffect(() => {
-    if (!activeId) { setHtml(''); setSelection(null); setHistory(emptyHistory()); return }
     setBounds({ width: 0, height: 0 })
     setSelection(null)
     setHistory(emptyHistory())
     fittedFor.current = null
+  }, [activeId])
+
+  useEffect(() => {
+    if (!activeId) { setHtml(''); return }
     void api.studioReadHtml(activeId).then(value => setHtml(value ?? ''))
   }, [activeId, api, documents])
 
@@ -65,8 +68,18 @@ export default function StudioCanvas({ isActive }: Props) {
       if (!isBridgeMessage(event.data)) return
       const msg = event.data
       if (msg.__fdCanvas === 'bounds') { setBounds({ width: msg.width, height: msg.height }); return }
-      if (msg.__fdCanvas === 'selected') { setSelection({ artboardId: msg.artboardId, elementId: msg.elementId, tag: msg.tag, rect: msg.rect }); return }
-      if (msg.__fdCanvas === 'cleared') { setSelection(null); return }
+      if (msg.__fdCanvas === 'selected') {
+        setSelection({ artboardId: msg.artboardId, elementId: msg.elementId, tag: msg.tag, rect: msg.rect })
+        // Clicking inside the iframe moves focus into its document, which
+        // would silently kill the parent's keyboard shortcuts (undo, pan).
+        viewportRef.current?.focus()
+        return
+      }
+      if (msg.__fdCanvas === 'cleared') {
+        setSelection(null)
+        viewportRef.current?.focus()
+        return
+      }
       if (msg.__fdCanvas === 'sealed' && activeId) {
         // Ids are assigned once and written straight back, so a selection
         // made now still refers to the same element after a reload.
@@ -166,6 +179,24 @@ export default function StudioCanvas({ isActive }: Props) {
     const block = (e: WheelEvent) => { if (e.ctrlKey || e.metaKey) e.preventDefault() }
     node.addEventListener('wheel', block, { passive: false })
     return () => node.removeEventListener('wheel', block)
+  }, [])
+
+  // A middle-click over the iframe never reaches the React onPointerDown
+  // handler below, because the iframe consumes the event in its own
+  // document first. A capture-phase listener on the viewport itself fires
+  // before the event can be dispatched into the iframe, so it can start the
+  // pan directly.
+  useEffect(() => {
+    const node = viewportRef.current
+    if (!node) return
+    const onMiddleDown = (e: PointerEvent) => {
+      if (e.button !== 1) return
+      e.preventDefault()
+      node.setPointerCapture(e.pointerId)
+      panning.current = { x: e.clientX, y: e.clientY }
+    }
+    node.addEventListener('pointerdown', onMiddleDown, { capture: true })
+    return () => node.removeEventListener('pointerdown', onMiddleDown, { capture: true })
   }, [])
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -303,6 +334,7 @@ export default function StudioCanvas({ isActive }: Props) {
 
         <div
           ref={viewportRef}
+          tabIndex={-1}
           className="flex-1 min-h-0 relative overflow-hidden bg-[#e9e6df]"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -321,7 +353,7 @@ export default function StudioCanvas({ isActive }: Props) {
             }
             setView(v => panBy(v, e.shiftKey ? -e.deltaY : -e.deltaX, e.shiftKey ? 0 : -e.deltaY))
           }}
-          style={{ cursor: panning.current ? 'grabbing' : spaceHeld ? 'grab' : 'default' }}
+          style={{ cursor: panning.current ? 'grabbing' : spaceHeld ? 'grab' : 'default', outline: 'none' }}
         >
           {framedHtml ? (
             <div
