@@ -3,6 +3,7 @@ import { Plus, Trash2, FileText, Image as ImageIcon, ZoomIn, ZoomOut, Maximize2 
 import StudioChat from '@/components/studio/StudioChat'
 import { BRIDGE_SCRIPT, isBridgeMessage } from '@/lib/studioBridge'
 import { clampZoom, fitToViewport, panBy, zoomAt, type Size, type ViewportState } from '@/lib/canvasViewport'
+import { emptyHistory, record, undo as undoHistory, redo as redoHistory, type History } from '@/lib/editHistory'
 import type { StudioDocumentMeta } from '@/types/electron'
 
 /**
@@ -28,6 +29,7 @@ export default function StudioCanvas({ isActive }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const fittedFor = useRef<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [history, setHistory] = useState<History>(emptyHistory())
 
   const active = documents.find(d => d.id === activeId) ?? null
 
@@ -40,9 +42,10 @@ export default function StudioCanvas({ isActive }: Props) {
   useEffect(() => { if (isActive) void refresh() }, [isActive, refresh])
 
   useEffect(() => {
-    if (!activeId) { setHtml(''); setSelection(null); return }
+    if (!activeId) { setHtml(''); setSelection(null); setHistory(emptyHistory()); return }
     setBounds({ width: 0, height: 0 })
     setSelection(null)
+    setHistory(emptyHistory())
     fittedFor.current = null
     void api.studioReadHtml(activeId).then(value => setHtml(value ?? ''))
   }, [activeId, api, documents])
@@ -73,6 +76,42 @@ export default function StudioCanvas({ isActive }: Props) {
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [activeId, api])
+
+  /**
+   * The single path every canvas edit takes: persist, then record. Phase 4+
+   * gestures call this rather than writing to disk themselves, so undo can
+   * never fall out of step with what is on disk.
+   */
+  const applyEdit = useCallback(async (artboardId: string, before: string, after: string) => {
+    if (!activeId || before === after) return
+    await api.studioWriteArtboardHtml(activeId, artboardId, after)
+    setHistory(h => record(h, { artboardId, before, after }))
+  }, [activeId, api])
+
+  // Phase 4 gestures will call this directly. Until then it is reachable from
+  // DevTools so the persistence + undo path can be tested without waiting for
+  // a drag implementation to exist.
+  useEffect(() => {
+    ;(window as unknown as { __fdApplyEdit?: typeof applyEdit }).__fdApplyEdit = applyEdit
+    return () => { delete (window as unknown as { __fdApplyEdit?: typeof applyEdit }).__fdApplyEdit }
+  }, [applyEdit])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      if (!activeId) return
+      e.preventDefault()
+      const step = e.shiftKey ? redoHistory(history) : undoHistory(history)
+      if (!step) return
+      setHistory(step.history)
+      const restored = e.shiftKey ? step.entry.after : step.entry.before
+      void api.studioWriteArtboardHtml(activeId, step.entry.artboardId, restored)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [activeId, api, history])
 
   const fit = useCallback(() => {
     const box = viewportRef.current?.getBoundingClientRect()
