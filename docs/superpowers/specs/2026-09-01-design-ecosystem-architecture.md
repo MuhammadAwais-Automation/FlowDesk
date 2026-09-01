@@ -126,6 +126,103 @@ the test file.
 
 ---
 
+## Closing the gap to the reference
+
+The recreation proves the architecture. Held side by side with the original,
+it also shows exactly what is still missing — and the list is worth recording,
+because every item is a concrete build task rather than a matter of taste.
+
+### 1. Generate assets on green, not white
+
+The subject was prompted onto a white background so the white could be keyed
+out. That was the wrong choice, and the reason is structural: **white appears
+inside the subject too** — the macaw's eye highlight, the pale beak, the white
+facial feathers. Keying white therefore punches holes in the subject itself,
+and the flood-fill guard written to prevent that is why a white patch survived
+at the frame edge.
+
+Chroma green never occurs in a natural subject. Every generated asset should
+be prompted onto a flat `#00FF00` background instead.
+
+### 2. Type — the single largest visible difference
+
+This is most of why the recreation reads as generic.
+
+| Role | Reference | Recreation |
+| --- | --- | --- |
+| Display | Condensed grotesque — narrow, tall, letters nearly touching | Arial Black — wide, round, ordinary |
+| Script | Serif italic **with a swash** on the C | Georgia italic, no swash |
+
+`transform: scaleX(0.86)` was used to fake the condensed proportion. Faking it
+is not the same as having it: in a real condensed face every glyph is redrawn
+narrow, whereas squeezing distorts stroke weights and makes the letters look
+smeared. A licensed condensed display face is the fix, and it is worth more
+than any other single item on this list.
+
+### 3. The type must turn white where it crosses the subject
+
+The signature move of the reference, and currently absent. The type does not
+merely pass *behind* the parrot — it **changes colour** at the boundary.
+
+The technique is the same string rendered twice:
+
+1. dark type, on the type plane
+2. the subject
+3. **the identical type again in white, masked to the subject's alpha**
+
+so the white copy is visible only where the subject is. This is a second,
+independent reason the alpha channel is load-bearing — `mask-image` needs it,
+and no blend mode substitutes for it.
+
+### 4. The system should know the subject's parts
+
+A cutout's alpha yields geometry for free: bounding box, centroid, silhouette
+extremities. What it does not yield is **meaning** — which region is the beak,
+where the eye sits.
+
+That gap is closable with what already exists: the agent can *see*. A vision
+pass over the cutout produces named landmarks, and once it has them, an
+instruction like "set the display baseline at the bird's eye" becomes something
+the agent can actually execute rather than approximate.
+
+### 5. The subject needs colour treatment
+
+The reference parrot is graded, not photographic — pushed toward a single red,
+contrast raised, slightly desaturated, and sitting *under* the halftone rather
+than on top of it. The recreation dropped in a raw photograph, which is why it
+reads as a photo pasted onto a poster instead of part of one.
+
+### 6. Decorative elements should be generated, not approximated
+
+The reference's floating feathers are real assets, placed at angles. The
+recreation used CSS-drawn blobs, and they look like CSS-drawn blobs. Small
+decorative assets belong in the same generate-and-cut pipeline as the subject.
+
+### 7. Texture strength
+
+Halftone was applied at `opacity: 0.14` — technically present, visually
+negligible. The reference's dots are unmistakable, part of the composition's
+identity. Roughly three to four times stronger, with a larger dot pitch.
+
+### 8. Composition and scale
+
+The display line should run edge to edge; the subject should be larger and
+higher; the empty band through the middle should not exist.
+
+### What this list is really saying
+
+Three items — **type**, the **white-over-subject mask**, and **texture
+strength** — account for most of the perceived distance. The other five are
+polish.
+
+And one honest note: 100% is the wrong target. The original was made by a
+person making hundreds of individual judgements. 90–95% from the first
+generation, with everything editable afterwards, is both achievable and the
+actual point of the system — the last few percent is what the drag, resize, and
+text editing already built are for.
+
+---
+
 ## Why AI design looks average, and the fix
 
 The most important research finding is not about textures at all:
@@ -346,6 +443,57 @@ Each step is unblocked by the one before it, and step 1 is unblocked today.
 | Which OFL faces actually match the references | **Not researched.** Licensing is settled — OFL permits bundling in commercial Electron apps with attribution. The *selection* is not. | An afternoon with the reference set and Google Fonts' condensed grotesques |
 | Whether constrained effects genuinely raise first-shot accuracy for *us* | **Inference** from published results on UI generation, not measured on this system. | Once the vocabulary exists: same brief, ten runs with and without it, count usable outputs |
 | Responsive output for app/web work | **Open problem.** Not solved here, and not solved by Paper either. | Its own research pass before any web-UI push |
+
+---
+
+## Glossary
+
+Terms used above that are not self-explanatory, with what breaks without them.
+
+**Display face** — a typeface designed for large headline use, not body text.
+`MILLENIUM` set in a display face fills a poster; the same word in an ordinary
+UI font looks like a label.
+
+**Condensed** — narrow letterforms at full height. A condensed face fits far
+more characters across the same width. *Without it:* the only alternative is
+horizontally squeezing a normal face, which distorts stroke weights and reads
+as cheap — that is exactly what the recreation did.
+
+**Grotesque** — the family of plain sans-serif typefaces without decorative
+strokes. Anton, Oswald, and Archivo are free examples.
+
+**Swash** — a decorative extended flourish on a glyph, like the long curve
+sweeping off the `C` in the reference's *Clean + Unique*. *Without it:* the
+effect is unreachable, because a swash is a **separate glyph inside the font
+file**, not something CSS can add. A font without swash alternates can never
+produce it.
+
+**Bundling** — shipping the font file inside the application rather than
+relying on the user's machine to have it. *Without it:* the design is correct
+only on the machine that authored it; everywhere else the browser silently
+substitutes a fallback and the layout collapses.
+
+**OFL (SIL Open Font License)** — the licence most Google Fonts carry. It
+permits bundling a font inside an application, including a commercial one,
+provided the copyright notice travels with it and any modified version is
+renamed. *Without it:* bundling a commercially-licensed face such as Helvetica
+into a shipped product is a licensing violation.
+
+**Cutout / background removal** — separating the subject from its background.
+
+**ONNX** — a portable file format for a trained machine-learning model, the way
+`.mp4` is a portable format for video. A model in ONNX form runs locally,
+offline, with no service call. So *ONNX cutout* means: a small model that
+removes the background on the user's own machine, with nothing leaving it.
+*Without it:* only rule-based keying is available, which cannot follow hair or
+feather edges — the recreation's leftover white patch is precisely that
+limitation.
+
+**Alpha channel** — a fourth value per pixel alongside red, green and blue,
+recording opacity: 0 fully transparent, 255 fully solid. A cutout's real output
+is not a trimmed picture but this **map of where the subject is**. *Without it:*
+the white-type-over-subject effect is impossible, because nothing tells the
+renderer which pixels to reveal the white copy through.
 
 ---
 
