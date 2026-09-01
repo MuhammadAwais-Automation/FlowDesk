@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Plus, Trash2, FileText, Image as ImageIcon, ZoomIn, ZoomOut } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Plus, Trash2, FileText, Image as ImageIcon, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import StudioChat from '@/components/studio/StudioChat'
+import { BRIDGE_SCRIPT, isBridgeMessage } from '@/lib/studioBridge'
+import { fitToViewport, type Size, type ViewportState } from '@/lib/canvasViewport'
 import type { StudioDocumentMeta } from '@/types/electron'
 
 /**
@@ -11,29 +13,6 @@ import type { StudioDocumentMeta } from '@/types/electron'
  * maths.
  */
 
-/**
- * Injected into the frame to fit artboards to the panel.
- *
- * An artboard is authored at its real pixel size — up to 1440 wide, or 3000
- * tall for a page — so without this the frame simply scrolls a full-size
- * document and the user never sees a whole design at once.
- */
-const FIT_SCRIPT = (zoom: number) => `
-  (function () {
-    var pad = 48;
-    var avail = document.documentElement.clientWidth - pad;
-    document.querySelectorAll('.fd-artboard').forEach(function (el) {
-      var w = Number(el.getAttribute('data-fd-w')) || el.offsetWidth;
-      var h = Number(el.getAttribute('data-fd-h')) || el.offsetHeight;
-      var scale = Math.min(1, avail / w) * ${zoom};
-      el.style.transform = 'scale(' + scale + ')';
-      el.style.transformOrigin = 'top center';
-      // Reserve the scaled height too, or the next artboard overlaps this one.
-      el.style.marginBottom = (h * scale - h + 24) + 'px';
-    });
-  })();
-`
-
 interface Props { isActive: boolean }
 
 export default function StudioCanvas({ isActive }: Props) {
@@ -41,7 +20,9 @@ export default function StudioCanvas({ isActive }: Props) {
   const [documents, setDocuments] = useState<StudioDocumentMeta[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [html, setHtml] = useState('')
-  const [zoom, setZoom] = useState(1)
+  const [view, setView] = useState<ViewportState>({ panX: 0, panY: 0, zoom: 1 })
+  const [bounds, setBounds] = useState<Size>({ width: 0, height: 0 })
+  const viewportRef = useRef<HTMLDivElement>(null)
   const [busy, setBusy] = useState(false)
 
   const active = documents.find(d => d.id === activeId) ?? null
@@ -67,6 +48,33 @@ export default function StudioCanvas({ isActive }: Props) {
     return () => api.offStudioDocumentChanged(onChanged)
   }, [api, refresh])
 
+  // The document reports its own natural size; the iframe is sized to it so
+  // the world layer can transform a box that exactly contains the artboards.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (!isBridgeMessage(event.data) || event.data.__fdCanvas !== 'bounds') return
+      setBounds({ width: event.data.width, height: event.data.height })
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
+  const fit = useCallback(() => {
+    const box = viewportRef.current?.getBoundingClientRect()
+    if (!box) return
+    setView(fitToViewport(bounds, { width: box.width, height: box.height }))
+  }, [bounds])
+
+  // Fit once per document, when its size first becomes known — not on every
+  // bounds report, or the user's own zoom would be undone mid-session.
+  const fittedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!activeId || bounds.width === 0) return
+    if (fittedFor.current === activeId) return
+    fittedFor.current = activeId
+    fit()
+  }, [activeId, bounds, fit])
+
   async function handleExport(kind: 'png' | 'pdf', artboardId?: string) {
     if (!activeId) return
     setBusy(true)
@@ -82,7 +90,10 @@ export default function StudioCanvas({ isActive }: Props) {
     }
   }
 
-  const framedHtml = html ? html.replace('</body>', `<script>${FIT_SCRIPT(zoom)}</script></body>`) : ''
+  const framedHtml = useMemo(
+    () => (html ? html.replace('</body>', `<script>${BRIDGE_SCRIPT}</script></body>`) : ''),
+    [html],
+  )
 
   return (
     <div className="flex h-full bg-[#FAF7F0]">
@@ -151,9 +162,17 @@ export default function StudioCanvas({ isActive }: Props) {
           <span className="font-retro-sans text-sm font-bold text-[#281E14] truncate flex-1">
             {active?.title ?? 'No document'}
           </span>
-          <button onClick={() => setZoom(z => Math.max(0.25, z - 0.25))} title="Zoom out"><ZoomOut size={14} /></button>
-          <span className="font-retro-mono text-[11px] text-stone-600 w-10 text-center">{Math.round(zoom * 100)}%</span>
-          <button onClick={() => setZoom(z => Math.min(3, z + 0.25))} title="Zoom in"><ZoomIn size={14} /></button>
+          <button onClick={() => setView(v => ({ ...v, zoom: Math.max(0.1, v.zoom - 0.25) }))} title="Zoom out"><ZoomOut size={14} /></button>
+          <span className="font-retro-mono text-[11px] text-stone-600 w-10 text-center">{Math.round(view.zoom * 100)}%</span>
+          <button onClick={() => setView(v => ({ ...v, zoom: Math.min(4, v.zoom + 0.25) }))} title="Zoom in"><ZoomIn size={14} /></button>
+          <button onClick={fit} title="Fit to screen"><Maximize2 size={14} /></button>
+          <button
+            onClick={() => setView(v => ({ ...v, zoom: 1 }))}
+            title="Actual size"
+            className="font-retro-mono text-[11px] font-bold text-stone-700 px-1"
+          >
+            1:1
+          </button>
           <button
             onClick={() => void handleExport('pdf')}
             disabled={!active || active.artboards.length === 0 || busy}
@@ -163,14 +182,27 @@ export default function StudioCanvas({ isActive }: Props) {
           </button>
         </div>
 
-        <div className="flex-1 min-h-0 bg-[#e9e6df]">
+        <div
+          ref={viewportRef}
+          className="flex-1 min-h-0 relative overflow-hidden bg-[#e9e6df]"
+        >
           {framedHtml ? (
-            <iframe
-              title="Studio canvas"
-              srcDoc={framedHtml}
-              sandbox="allow-same-origin allow-scripts"
-              className="w-full h-full border-0"
-            />
+            <div
+              className="absolute top-0 left-0 origin-top-left"
+              style={{
+                transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`,
+                width: bounds.width || 1,
+                height: bounds.height || 1,
+              }}
+            >
+              <iframe
+                title="Studio canvas"
+                srcDoc={framedHtml}
+                sandbox="allow-same-origin allow-scripts"
+                className="border-0 block"
+                style={{ width: bounds.width || 1, height: bounds.height || 1 }}
+              />
+            </div>
           ) : (
             <div className="h-full flex items-center justify-center">
               <p className="font-retro-mono text-xs text-stone-500">
