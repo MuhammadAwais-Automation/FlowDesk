@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Trash2, FileText, Image as ImageIcon, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import StudioChat from '@/components/studio/StudioChat'
 import { BRIDGE_SCRIPT, isBridgeMessage } from '@/lib/studioBridge'
-import { clampZoom, fitToViewport, type Size, type ViewportState } from '@/lib/canvasViewport'
+import { clampZoom, fitToViewport, panBy, type Size, type ViewportState } from '@/lib/canvasViewport'
 import type { StudioDocumentMeta } from '@/types/electron'
 
 /**
@@ -76,6 +76,56 @@ export default function StudioCanvas({ isActive }: Props) {
     fittedFor.current = activeId
     fit()
   }, [activeId, bounds, fit])
+
+  // Space-to-pan is modal, so the held state has to live outside React's
+  // event flow: the key can be pressed while focus is anywhere in the page.
+  const [spaceHeld, setSpaceHeld] = useState(false)
+  const panning = useRef<{ x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return
+      const target = e.target as HTMLElement | null
+      // Never steal the spacebar from someone typing — the chat panel sits
+      // in the same page.
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      e.preventDefault()
+      setSpaceHeld(true)
+    }
+    const up = (e: KeyboardEvent) => { if (e.code === 'Space') setSpaceHeld(false) }
+    // A lost blur (alt-tab mid-drag) would otherwise leave the canvas stuck
+    // in pan mode with no way back except pressing space again.
+    const blur = () => { setSpaceHeld(false); panning.current = null }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', blur)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', blur)
+    }
+  }, [])
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    const isPan = spaceHeld || e.button === 1
+    if (!isPan) return
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    panning.current = { x: e.clientX, y: e.clientY }
+  }
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const from = panning.current
+    if (!from) return
+    panning.current = { x: e.clientX, y: e.clientY }
+    setView(v => panBy(v, e.clientX - from.x, e.clientY - from.y))
+  }
+
+  const endPan = (e: React.PointerEvent) => {
+    if (!panning.current) return
+    panning.current = null
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+  }
 
   async function handleExport(kind: 'png' | 'pdf', artboardId?: string) {
     if (!activeId) return
@@ -187,6 +237,15 @@ export default function StudioCanvas({ isActive }: Props) {
         <div
           ref={viewportRef}
           className="flex-1 min-h-0 relative overflow-hidden bg-[#e9e6df]"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endPan}
+          onPointerCancel={endPan}
+          onWheel={e => {
+            if (e.ctrlKey || e.metaKey) return // zoom, added in Task 4
+            setView(v => panBy(v, e.shiftKey ? -e.deltaY : -e.deltaX, e.shiftKey ? 0 : -e.deltaY))
+          }}
+          style={{ cursor: panning.current ? 'grabbing' : spaceHeld ? 'grab' : 'default' }}
         >
           {framedHtml ? (
             <div
@@ -195,6 +254,9 @@ export default function StudioCanvas({ isActive }: Props) {
                 transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`,
                 width: bounds.width || 1,
                 height: bounds.height || 1,
+                // An iframe consumes pointer events in its own document, which
+                // would end the drag the moment the cursor crossed an artboard.
+                pointerEvents: spaceHeld ? 'none' : 'auto',
               }}
             >
               <iframe
