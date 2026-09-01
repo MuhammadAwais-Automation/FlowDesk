@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Trash2, FileText, Image as ImageIcon, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import StudioChat from '@/components/studio/StudioChat'
 import { BRIDGE_SCRIPT, isBridgeMessage } from '@/lib/studioBridge'
-import { clampZoom, fitToViewport, panBy, type Size, type ViewportState } from '@/lib/canvasViewport'
+import { clampZoom, fitToViewport, panBy, zoomAt, type Size, type ViewportState } from '@/lib/canvasViewport'
 import type { StudioDocumentMeta } from '@/types/electron'
 
 /**
@@ -104,6 +104,17 @@ export default function StudioCanvas({ isActive }: Props) {
       window.removeEventListener('keyup', up)
       window.removeEventListener('blur', blur)
     }
+  }, [])
+
+  // React attaches wheel listeners passively, so preventDefault inside
+  // onWheel silently does nothing and ctrl+wheel zooms the whole app instead
+  // of the canvas. This listener exists only to cancel that default.
+  useEffect(() => {
+    const node = viewportRef.current
+    if (!node) return
+    const block = (e: WheelEvent) => { if (e.ctrlKey || e.metaKey) e.preventDefault() }
+    node.addEventListener('wheel', block, { passive: false })
+    return () => node.removeEventListener('wheel', block)
   }, [])
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -242,7 +253,16 @@ export default function StudioCanvas({ isActive }: Props) {
           onPointerUp={endPan}
           onPointerCancel={endPan}
           onWheel={e => {
-            if (e.ctrlKey || e.metaKey) return // zoom, added in Task 4
+            if (e.ctrlKey || e.metaKey) {
+              const box = viewportRef.current?.getBoundingClientRect()
+              if (!box) return
+              // Exponential so each wheel notch is the same proportional step
+              // whether zoomed far in or far out; a linear delta feels fast at
+              // 400% and glacial at 10%.
+              const factor = Math.exp(-e.deltaY * 0.002)
+              setView(v => zoomAt(v, factor, e.clientX - box.left, e.clientY - box.top))
+              return
+            }
             setView(v => panBy(v, e.shiftKey ? -e.deltaY : -e.deltaX, e.shiftKey ? 0 : -e.deltaY))
           }}
           style={{ cursor: panning.current ? 'grabbing' : spaceHeld ? 'grab' : 'default' }}
