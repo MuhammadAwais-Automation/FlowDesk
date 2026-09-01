@@ -247,20 +247,59 @@ roadmap for them.
 
 ---
 
+## Spike results — Recommendation 0, run 2026-09-01
+
+One 1080x1080 artboard, six bands, exported through the real
+`studio:exportPng` path (`offscreen: true`). Evidence:
+`Downloads/FlowDesk Studio/Export Fidelity Spike.png`.
+
+| Band | Technique | Result in the exported PNG |
+| --- | --- | --- |
+| 1 | SVG `feTurbulence` grain | **Works** — with one gotcha, below |
+| 2 | CSS halftone (`radial-gradient` + `blur(2px) contrast(24)`) | **Works** — crisp dot grid |
+| 3 | `mix-blend-mode: screen` | **Works** — overlap resolves to white correctly |
+| 4 | `backdrop-filter: blur(14px)` | **Works** — stripes visibly blurred behind the panel |
+| 5 | Live WebGL canvas | **Fails — renders black** |
+| 6 | Same canvas baked via `toDataURL()` | **Works** — gradient exports intact |
+
+### The WebGL result is a split verdict, and the split is the useful part
+
+In-page instrumentation reported `webgl: DREW, readPixels=[1,251,166]` — the
+context existed, the draw executed, and reading a pixel back returned real
+colour. WebGL genuinely renders on the live canvas. It is only the **offscreen
+export** that captures it as black, exactly as the research predicted.
+
+So WebGL is usable for authoring and unusable for export — which makes the bake
+step not a workaround but the required design. `preserveDrawingBuffer: true`
+plus `toDataURL()` produced a 9,434-character data URI that exported perfectly,
+**inside our existing `sandbox="allow-same-origin allow-scripts"` iframe**, with
+no changes to the export path.
+
+### Gotcha worth carrying into the effects system
+
+Band 1 initially rendered grain across only a 300x150 patch. That was not an
+export failure: an `<svg>` sized purely by CSS (`position:absolute; inset:0`)
+keeps its **default 300x150 viewport**, so the filter fills the viewport, not
+the element. Adding explicit `width`/`height` attributes fixed it completely on
+re-export. Any generated SVG-filter effect must carry real dimension
+attributes — CSS sizing alone silently truncates it.
+
+---
+
 ## Still unverified
 
 Each paired with the cheapest experiment that settles it.
 
 | Claim | Status | Cheapest experiment |
 | --- | --- | --- |
-| CSS `filter`, `mix-blend-mode`, and SVG filters survive our `offscreen: true` export | **Inference.** Compositor-level CSS is likelier to survive than WebGL, but nothing sourced confirms it for Electron OSR specifically. | Recommendation 0 — the same one artboard settles it |
-| WebGL renders at all under our current offscreen config | **Contested.** Electron docs say GPU-accelerated OSR supports WebGL; field reports say otherwise. Version- and platform-dependent. | Recommendation 0 |
-| `preserveDrawingBuffer: true` + `toDataURL()` bake works inside our iframe/sandbox setup | **Sourced for browsers generally, unverified here.** Our iframe is `sandbox="allow-same-origin allow-scripts"`. | Add a shader canvas to the spike artboard and call `toDataURL()` from the bridge |
-| Pure-CSS halftone is good enough to match the reference images | **Unverified.** The technique is real; whether it reaches that visual quality at artboard resolution is a judgement call. | Build one slide from the red/white set with CSS halftone, compare side by side |
+| CSS `filter`, `mix-blend-mode`, and SVG filters survive our `offscreen: true` export | **CONFIRMED YES** by the spike above (bands 1-4). | Settled. |
+| WebGL renders at all under our current offscreen config | **CONFIRMED SPLIT** by the spike: renders on the live canvas, exports black. | Settled. Shaders are an authoring tool that must be baked before export. |
+| `preserveDrawingBuffer: true` + `toDataURL()` bake works inside our iframe/sandbox setup | **CONFIRMED YES** by the spike (band 6), in the real sandbox, with no export-path changes. | Settled. |
+| Pure-CSS halftone is good enough to match the reference images | **Partly settled.** The spike proves it renders crisply at artboard resolution and exports intact; whether it matches the reference set artistically is still a judgement call. | Build one slide from the red/white set and compare side by side |
 | ONNX cutout quality on these subjects, and its bundle size | **Unverified.** Models are real and run locally; nothing measured for our case. | Run one reference photo through ISNet and BiRefNet, measure output quality and package size |
 | Fonts — how the display faces in the references are licensed and bundled offline | **Not researched.** Deferred as a smaller, separable question. | Its own short research pass before the typography work |
 | Whether an effects vocabulary stays UI-editable after the agent writes it | **Inference from our own contract.** Inline styles outrank the stylesheet, so it should hold. | Falls out of Recommendation 1 naturally |
 
-**The first three share one experiment.** That experiment is the correct first
-task of the build, not a preliminary — it converts the largest uncertainty in
-this document into a decision for the cost of a single artboard.
+**The first three shared one experiment, and it has now been run** — see Spike
+results above. What remains unverified is the ONNX cutout, fonts, and the
+artistic-quality judgement, none of which block starting the build.
