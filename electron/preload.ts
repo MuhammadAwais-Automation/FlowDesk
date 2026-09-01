@@ -177,6 +177,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   studioDeleteDocument: (id: string) => ipcRenderer.invoke('studio:deleteDocument', id),
   studioExportPng: (documentId: string, artboardId: string) => ipcRenderer.invoke('studio:exportPng', documentId, artboardId),
   studioExportPdf: (documentId: string) => ipcRenderer.invoke('studio:exportPdf', documentId),
+  studioWriteArtboardHtml: (documentId: string, artboardId: string, html: string) =>
+    ipcRenderer.invoke('studio:writeArtboardHtml', documentId, artboardId, html),
   onStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => ipcRenderer.on('studio:documentChanged', cb),
   offStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => ipcRenderer.removeListener('studio:documentChanged', cb),
   agentSessionList: () => ipcRenderer.invoke('agentSession:list'),

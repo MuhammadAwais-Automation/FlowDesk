@@ -321,6 +321,7 @@ export interface ElectronAPI {
   studioDeleteDocument: (id: string) => Promise<void>
   studioExportPng: (documentId: string, artboardId: string) => Promise<string>
   studioExportPdf: (documentId: string) => Promise<string>
+  studioWriteArtboardHtml: (documentId: string, artboardId: string, html: string) => Promise<void>
   onStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => void
   offStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => void
 

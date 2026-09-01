@@ -82,6 +82,7 @@ import * as agentSessions from './agentSessionStore'
 import * as studioStore from './studio/documentStore'
 import { isValidDocumentId as studioIsValidDocumentId } from './studio/paths'
 import { exportArtboardPng, exportDocumentPdf } from './studio/export'
+import { replaceArtboardHtml } from './studio/artboards'
 import { buildCatchUp } from '../src/lib/agentCatchUp'
 import { runAgentTurn, type AgentStreamEvent } from './agent/leadAgent'
 import { waStatus, waListChats, waListMessages, waSend } from './whatsapp'
@@ -1352,6 +1353,19 @@ ipcMain.handle('studio:deleteDocument', (_e, id: unknown) => studioStore.deleteD
 ipcMain.handle('studio:exportPng', (_e, documentId: unknown, artboardId: unknown) =>
   exportArtboardPng(asStudioDocumentId(documentId), String(artboardId ?? '')))
 ipcMain.handle('studio:exportPdf', (_e, documentId: unknown) => exportDocumentPdf(asStudioDocumentId(documentId)))
+
+// The canvas edits inside the iframe, where a real HTML parser lives, and
+// sends back the affected artboard's inner HTML. Persisting goes through
+// replaceArtboardHtml — the same path the agent's studio_write_html tool
+// uses — so a user edit and an agent edit cannot produce different files.
+ipcMain.handle('studio:writeArtboardHtml', async (_e, documentId: unknown, artboardId: unknown, html: unknown) => {
+  const id = asStudioDocumentId(documentId)
+  if (typeof artboardId !== 'string' || !artboardId) throw new Error('An artboard id is required.')
+  if (typeof html !== 'string') throw new Error('Artboard HTML must be a string.')
+  const current = await studioStore.readDocumentHtml(id)
+  if (current === null) throw new Error(`No Studio document "${id}".`)
+  await studioStore.writeDocumentHtml(id, replaceArtboardHtml(current, artboardId, html))
+})
 
 studioStore.studioDocumentChanged.on('changed', (documentId: string) => {
   mainWindow?.webContents.send('studio:documentChanged', documentId)
