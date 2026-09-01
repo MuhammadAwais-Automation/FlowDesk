@@ -22,6 +22,9 @@ export default function StudioCanvas({ isActive }: Props) {
   const [html, setHtml] = useState('')
   const [view, setView] = useState<ViewportState>({ panX: 0, panY: 0, zoom: 1 })
   const [bounds, setBounds] = useState<Size>({ width: 0, height: 0 })
+  const [selection, setSelection] = useState<
+    { artboardId: string; elementId: string; tag: string; rect: { x: number; y: number; width: number; height: number } } | null
+  >(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const fittedFor = useRef<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -37,8 +40,9 @@ export default function StudioCanvas({ isActive }: Props) {
   useEffect(() => { if (isActive) void refresh() }, [isActive, refresh])
 
   useEffect(() => {
-    if (!activeId) { setHtml(''); return }
+    if (!activeId) { setHtml(''); setSelection(null); return }
     setBounds({ width: 0, height: 0 })
+    setSelection(null)
     fittedFor.current = null
     void api.studioReadHtml(activeId).then(value => setHtml(value ?? ''))
   }, [activeId, api, documents])
@@ -55,12 +59,20 @@ export default function StudioCanvas({ isActive }: Props) {
   // the world layer can transform a box that exactly contains the artboards.
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      if (!isBridgeMessage(event.data) || event.data.__fdCanvas !== 'bounds') return
-      setBounds({ width: event.data.width, height: event.data.height })
+      if (!isBridgeMessage(event.data)) return
+      const msg = event.data
+      if (msg.__fdCanvas === 'bounds') { setBounds({ width: msg.width, height: msg.height }); return }
+      if (msg.__fdCanvas === 'selected') { setSelection({ artboardId: msg.artboardId, elementId: msg.elementId, tag: msg.tag, rect: msg.rect }); return }
+      if (msg.__fdCanvas === 'cleared') { setSelection(null); return }
+      if (msg.__fdCanvas === 'sealed' && activeId) {
+        // Ids are assigned once and written straight back, so a selection
+        // made now still refers to the same element after a reload.
+        void api.studioWriteArtboardHtml(activeId, msg.artboardId, msg.html)
+      }
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [])
+  }, [activeId, api])
 
   const fit = useCallback(() => {
     const box = viewportRef.current?.getBoundingClientRect()
@@ -225,6 +237,11 @@ export default function StudioCanvas({ isActive }: Props) {
           <span className="font-retro-sans text-sm font-bold text-[#281E14] truncate flex-1">
             {active?.title ?? 'No document'}
           </span>
+          {selection && (
+            <span className="font-retro-mono text-[10px] text-stone-500 truncate max-w-[160px]">
+              &lt;{selection.tag}&gt; {selection.elementId}
+            </span>
+          )}
           <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom - 0.25) }))} title="Zoom out"><ZoomOut size={14} /></button>
           <span className="font-retro-mono text-[11px] text-stone-600 w-10 text-center">{Math.round(view.zoom * 100)}%</span>
           <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom + 0.25) }))} title="Zoom in"><ZoomIn size={14} /></button>
@@ -286,6 +303,21 @@ export default function StudioCanvas({ isActive }: Props) {
                 className="border-0 block"
                 style={{ width: bounds.width || 1, height: bounds.height || 1 }}
               />
+              {selection && (
+                <div
+                  className="absolute pointer-events-none border-2 border-[#D97706]"
+                  style={{
+                    left: selection.rect.x,
+                    top: selection.rect.y,
+                    width: selection.rect.width,
+                    height: selection.rect.height,
+                    // Drawn in world space but kept one screen pixel thick at
+                    // any zoom — a scaled border reads as blur at 400% and
+                    // vanishes at 10%.
+                    borderWidth: 1 / view.zoom,
+                  }}
+                />
+              )}
             </div>
           ) : (
             <div className="h-full flex items-center justify-center">
