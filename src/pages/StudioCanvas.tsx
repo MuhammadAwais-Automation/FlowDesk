@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Trash2, FileText, Image as ImageIcon, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
-import StudioChat from '@/components/studio/StudioChat'
+import { FileText, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
+import DocumentTabs from '@/components/studio/DocumentTabs'
+import LayersPanel from '@/components/studio/LayersPanel'
+import ToolRail, { type StudioTool } from '@/components/studio/ToolRail'
+import PropertiesPanel from '@/components/studio/PropertiesPanel'
+import { useStudioNode } from '@/hooks/useStudioNode'
 import { BRIDGE_SCRIPT, isBridgeMessage } from '@/lib/studioBridge'
 import { clampZoom, fitToViewport, panBy, zoomAt, type Size, type ViewportState } from '@/lib/canvasViewport'
 import { emptyHistory, record, undo as undoHistory, redo as redoHistory, type History } from '@/lib/editHistory'
@@ -26,10 +30,15 @@ export default function StudioCanvas({ isActive }: Props) {
   const [selection, setSelection] = useState<
     { artboardId: string; elementId: string; tag: string; rect: { x: number; y: number; width: number; height: number } } | null
   >(null)
+  const [artboards, setArtboards] = useState<{ id: string; name: string }[]>([])
+  const [activeArtboard, setActiveArtboard] = useState<string | null>(null)
+  const [tool, setTool] = useState<StudioTool>('select')
   const viewportRef = useRef<HTMLDivElement>(null)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
   const fittedFor = useRef<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [history, setHistory] = useState<History>(emptyHistory())
+  const node = useStudioNode(iframeRef.current)
 
   const active = documents.find(d => d.id === activeId) ?? null
 
@@ -39,12 +48,26 @@ export default function StudioCanvas({ isActive }: Props) {
     setActiveId(prev => prev && list.some(d => d.id === prev) ? prev : list[0]?.id ?? null)
   }, [api])
 
+  const handleNewDocument = useCallback(async () => {
+    const c = await api.studioCreateDocument()
+    await refresh()
+    setActiveId(c.id)
+  }, [api, refresh])
+
+  const handleCloseDocument = useCallback(async (id: string) => {
+    if (!confirm('Delete this document? Its HTML is not recoverable.')) return
+    await api.studioDeleteDocument(id)
+    await refresh()
+  }, [api, refresh])
+
   useEffect(() => { if (isActive) void refresh() }, [isActive, refresh])
 
   useEffect(() => {
     setBounds({ width: 0, height: 0 })
     setSelection(null)
     setHistory(emptyHistory())
+    setArtboards([])
+    setActiveArtboard(null)
     fittedFor.current = null
   }, [activeId])
 
@@ -61,34 +84,56 @@ export default function StudioCanvas({ isActive }: Props) {
     return () => api.offStudioDocumentChanged(onChanged)
   }, [api, refresh])
 
+  // The layer tree and artboard list are only meaningful once the document
+  // actually has content in the iframe, so re-read both whenever the html
+  // this page is showing changes.
+  useEffect(() => {
+    if (!html) return
+    node.refreshTree()
+    iframeRef.current?.contentWindow?.postMessage({ cmd: 'readArtboards' }, '*')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [html])
+
   // The document reports its own natural size; the iframe is sized to it so
   // the world layer can transform a box that exactly contains the artboards.
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (!isBridgeMessage(event.data)) return
       const msg = event.data
-      if (!('__fdCanvas' in msg)) return
-      if (msg.__fdCanvas === 'bounds') { setBounds({ width: msg.width, height: msg.height }); return }
-      if (msg.__fdCanvas === 'selected') {
-        setSelection({ artboardId: msg.artboardId, elementId: msg.elementId, tag: msg.tag, rect: msg.rect })
-        // Clicking inside the iframe moves focus into its document, which
-        // would silently kill the parent's keyboard shortcuts (undo, pan).
-        viewportRef.current?.focus()
+      if ('__fdCanvas' in msg) {
+        if (msg.__fdCanvas === 'bounds') { setBounds({ width: msg.width, height: msg.height }); return }
+        if (msg.__fdCanvas === 'selected') {
+          setSelection({ artboardId: msg.artboardId, elementId: msg.elementId, tag: msg.tag, rect: msg.rect })
+          // Clicking inside the iframe moves focus into its document, which
+          // would silently kill the parent's keyboard shortcuts (undo, pan).
+          viewportRef.current?.focus()
+          return
+        }
+        if (msg.__fdCanvas === 'cleared') {
+          setSelection(null)
+          viewportRef.current?.focus()
+          return
+        }
+        if (msg.__fdCanvas === 'sealed' && activeId) {
+          // Ids are assigned once and written straight back, so a selection
+          // made now still refers to the same element after a reload.
+          void api.studioWriteArtboardHtml(activeId, msg.artboardId, msg.html)
+          // Ids just became stable, so this is the first moment the layer
+          // tree and artboard list can be read reliably.
+          node.refreshTree()
+          iframeRef.current?.contentWindow?.postMessage({ cmd: 'readArtboards' }, '*')
+          return
+        }
         return
       }
-      if (msg.__fdCanvas === 'cleared') {
-        setSelection(null)
-        viewportRef.current?.focus()
-        return
-      }
-      if (msg.__fdCanvas === 'sealed' && activeId) {
-        // Ids are assigned once and written straight back, so a selection
-        // made now still refers to the same element after a reload.
-        void api.studioWriteArtboardHtml(activeId, msg.artboardId, msg.html)
+      if ('type' in event.data && event.data.type === 'artboards') {
+        setArtboards(event.data.boards)
+        setActiveArtboard(prev => prev && event.data.boards.some(b => b.id === prev) ? prev : event.data.boards[0]?.id ?? null)
       }
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, api])
 
   /**
@@ -175,11 +220,11 @@ export default function StudioCanvas({ isActive }: Props) {
   // onWheel silently does nothing and ctrl+wheel zooms the whole app instead
   // of the canvas. This listener exists only to cancel that default.
   useEffect(() => {
-    const node = viewportRef.current
-    if (!node) return
+    const viewportEl = viewportRef.current
+    if (!viewportEl) return
     const block = (e: WheelEvent) => { if (e.ctrlKey || e.metaKey) e.preventDefault() }
-    node.addEventListener('wheel', block, { passive: false })
-    return () => node.removeEventListener('wheel', block)
+    viewportEl.addEventListener('wheel', block, { passive: false })
+    return () => viewportEl.removeEventListener('wheel', block)
   }, [])
 
   // A middle-click over the iframe never reaches the React onPointerDown
@@ -188,16 +233,16 @@ export default function StudioCanvas({ isActive }: Props) {
   // before the event can be dispatched into the iframe, so it can start the
   // pan directly.
   useEffect(() => {
-    const node = viewportRef.current
-    if (!node) return
+    const viewportEl = viewportRef.current
+    if (!viewportEl) return
     const onMiddleDown = (e: PointerEvent) => {
       if (e.button !== 1) return
       e.preventDefault()
-      node.setPointerCapture(e.pointerId)
+      viewportEl.setPointerCapture(e.pointerId)
       panning.current = { x: e.clientX, y: e.clientY }
     }
-    node.addEventListener('pointerdown', onMiddleDown, { capture: true })
-    return () => node.removeEventListener('pointerdown', onMiddleDown, { capture: true })
+    viewportEl.addEventListener('pointerdown', onMiddleDown, { capture: true })
+    return () => viewportEl.removeEventListener('pointerdown', onMiddleDown, { capture: true })
   }, [])
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -242,101 +287,27 @@ export default function StudioCanvas({ isActive }: Props) {
   )
 
   return (
-    <div className="flex h-full bg-[#FAF7F0]">
-      <div className="w-[240px] shrink-0 flex flex-col border-r-2 border-[#281E14]">
-        <div className="flex items-center justify-between h-14 px-3 border-b-2 border-[#281E14] bg-[#EBE5D5]">
-          <span className="font-retro-mono text-[11px] font-bold uppercase tracking-wider text-[#281E14]">Documents</span>
-          <button
-            onClick={async () => { const c = await api.studioCreateDocument(); await refresh(); setActiveId(c.id) }}
-            className="retro-btn flex items-center gap-1 px-2 py-1 rounded-lg bg-[#D97706] hover:bg-[#B45309] text-white border border-[#B45309] font-retro-mono text-[11px] font-bold"
-          >
-            <Plus size={11} /> New
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-          {documents.length === 0 ? (
-            <p className="font-retro-mono text-[11px] text-stone-500 p-3 text-center">
-              No documents yet. Ask the agent to design something.
-            </p>
-          ) : documents.map(doc => (
-            <div
-              key={doc.id}
-              onClick={() => setActiveId(doc.id)}
-              className={`group p-2.5 rounded-xl cursor-pointer transition-all ${
-                doc.id === activeId ? 'border-2 border-[#D97706] bg-[#FEF3C7]' : 'border border-[#E2DBD0] bg-white hover:border-[#D97706]/40'
-              }`}
-            >
-              <div className="flex items-center gap-1">
-                <p className="flex-1 min-w-0 truncate font-retro-sans text-[11px] font-bold text-stone-900">{doc.title}</p>
-                <button
-                  onClick={async e => {
-                    e.stopPropagation()
-                    if (!confirm('Delete this document? Its HTML is not recoverable.')) return
-                    await api.studioDeleteDocument(doc.id)
-                    await refresh()
-                  }}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Delete"
-                >
-                  <Trash2 size={11} className="text-stone-400 hover:text-[#DC2626]" />
-                </button>
-              </div>
-              <p className="font-retro-mono text-[10px] text-stone-500 mt-0.5">
-                {doc.artboards.length} artboard{doc.artboards.length === 1 ? '' : 's'}
-              </p>
-              {doc.id === activeId && doc.artboards.map(board => (
-                <button
-                  key={board.id}
-                  onClick={e => { e.stopPropagation(); void handleExport('png', board.id) }}
-                  disabled={busy}
-                  className="mt-1 w-full text-left px-2 py-1 rounded bg-white/70 border border-[#E2DBD0] font-retro-mono text-[10px] text-stone-700 hover:border-[#D97706] flex items-center gap-1 disabled:opacity-40"
-                  title="Export this artboard as PNG"
-                >
-                  <ImageIcon size={9} />
-                  <span className="truncate">{board.name || board.id}</span>
-                  <span className="ml-auto text-stone-400">{board.width}×{board.height}</span>
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex-1 min-w-0 flex flex-col">
-        <div className="flex items-center gap-3 h-14 px-4 border-b-2 border-[#281E14] bg-[#EBE5D5] shrink-0">
-          <span className="font-retro-sans text-sm font-bold text-[#281E14] truncate flex-1">
-            {active?.title ?? 'No document'}
-          </span>
-          {selection && (
-            <span className="font-retro-mono text-[10px] text-stone-500 truncate max-w-[160px]">
-              &lt;{selection.tag}&gt; {selection.elementId}
-            </span>
-          )}
-          <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom - 0.25) }))} title="Zoom out"><ZoomOut size={14} /></button>
-          <span className="font-retro-mono text-[11px] text-stone-600 w-10 text-center">{Math.round(view.zoom * 100)}%</span>
-          <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom + 0.25) }))} title="Zoom in"><ZoomIn size={14} /></button>
-          <button onClick={fit} title="Fit to screen"><Maximize2 size={14} /></button>
-          <button
-            onClick={() => setView(v => ({ ...v, zoom: 1 }))}
-            title="Actual size"
-            className="font-retro-mono text-[11px] font-bold text-stone-700 px-1"
-          >
-            1:1
-          </button>
-          <button
-            onClick={() => void handleExport('pdf')}
-            disabled={!active || active.artboards.length === 0 || busy}
-            className="retro-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border-2 border-[#281E14] font-retro-mono text-[11px] font-bold text-[#281E14] disabled:opacity-40"
-          >
-            <FileText size={12} /> Export PDF
-          </button>
-        </div>
-
+    <div className="flex h-full w-full flex-col bg-bg">
+      <DocumentTabs
+        documents={documents}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onClose={handleCloseDocument}
+        onNew={handleNewDocument}
+      />
+      <div className="flex flex-1 min-h-0">
+        <LayersPanel
+          artboards={artboards}
+          activeArtboard={activeArtboard}
+          onSelectArtboard={setActiveArtboard}
+          tree={node.tree}
+          selected={node.selected}
+          onSelectNode={node.select}
+        />
+        <ToolRail tool={tool} onChange={setTool} />
         <div
           ref={viewportRef}
           tabIndex={-1}
-          className="flex-1 min-h-0 relative overflow-hidden bg-[#e9e6df]"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endPan}
@@ -354,8 +325,47 @@ export default function StudioCanvas({ isActive }: Props) {
             }
             setView(v => panBy(v, e.shiftKey ? -e.deltaY : -e.deltaX, e.shiftKey ? 0 : -e.deltaY))
           }}
-          style={{ cursor: panning.current ? 'grabbing' : spaceHeld ? 'grab' : 'default', outline: 'none' }}
+          style={{ outline: 'none', background: 'var(--canvas-void)', cursor: panning.current ? 'grabbing' : spaceHeld ? 'grab' : 'default' }}
+          className="flex-1 relative overflow-hidden"
         >
+          {/* Floating toolbar: document title, selection info, zoom, export. Overlaid
+              on the canvas rather than a separate header row, since the shell no
+              longer has a header strip above the viewport. */}
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 h-10 px-3 rounded-md border border-border bg-surface shadow-sm">
+            <span className="text-xs font-medium text-tx truncate max-w-[160px]">
+              {active?.title ?? 'No document'}
+            </span>
+            {selection && (
+              <span className="text-[10px] font-mono text-t3 truncate max-w-[160px]">
+                &lt;{selection.tag}&gt; {selection.elementId}
+              </span>
+            )}
+            <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom - 0.25) }))} title="Zoom out" className="text-t2 hover:text-tx">
+              <ZoomOut size={14} />
+            </button>
+            <span className="text-[11px] font-mono text-t2 w-10 text-center">{Math.round(view.zoom * 100)}%</span>
+            <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom + 0.25) }))} title="Zoom in" className="text-t2 hover:text-tx">
+              <ZoomIn size={14} />
+            </button>
+            <button onClick={fit} title="Fit to screen" className="text-t2 hover:text-tx">
+              <Maximize2 size={14} />
+            </button>
+            <button
+              onClick={() => setView(v => ({ ...v, zoom: 1 }))}
+              title="Actual size"
+              className="text-[11px] font-mono font-bold text-t2 hover:text-tx px-1"
+            >
+              1:1
+            </button>
+            <button
+              onClick={() => void handleExport('pdf')}
+              disabled={!active || active.artboards.length === 0 || busy}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-border text-[11px] font-medium text-tx disabled:opacity-40"
+            >
+              <FileText size={12} /> Export PDF
+            </button>
+          </div>
+
           {framedHtml ? (
             <div
               className="absolute top-0 left-0 origin-top-left"
@@ -369,6 +379,7 @@ export default function StudioCanvas({ isActive }: Props) {
               }}
             >
               <iframe
+                ref={iframeRef}
                 title="Studio canvas"
                 srcDoc={framedHtml}
                 sandbox="allow-same-origin allow-scripts"
@@ -377,7 +388,7 @@ export default function StudioCanvas({ isActive }: Props) {
               />
               {selection && (
                 <div
-                  className="absolute pointer-events-none border-2 border-[#D97706]"
+                  className="absolute pointer-events-none border-2 border-accent"
                   style={{
                     left: selection.rect.x,
                     top: selection.rect.y,
@@ -393,15 +404,20 @@ export default function StudioCanvas({ isActive }: Props) {
             </div>
           ) : (
             <div className="h-full flex items-center justify-center">
-              <p className="font-retro-mono text-xs text-stone-500">
+              <p className="text-xs text-t3">
                 Select or create a document, then ask the agent to design it.
               </p>
             </div>
           )}
         </div>
+        <PropertiesPanel
+          styles={node.styles}
+          onUpdate={node.update}
+          hasSelection={node.selected !== null}
+        />
       </div>
-
-      <StudioChat isActive={isActive} />
+      {/* replaced by AgentWindow in the next task */}
+      <div className="h-9 border-t border-border" />
     </div>
   )
 }
