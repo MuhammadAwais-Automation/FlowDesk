@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FileText, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
+import { FileText, Image as ImageIcon, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import DocumentTabs from '@/components/studio/DocumentTabs'
 import LayersPanel from '@/components/studio/LayersPanel'
 import ToolRail, { type StudioTool } from '@/components/studio/ToolRail'
@@ -363,6 +363,13 @@ export default function StudioCanvas({ isActive }: Props) {
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-border text-[11px] font-medium text-tx disabled:opacity-40"
             >
               <FileText size={12} /> Export PDF
+            </button>
+            <button
+              onClick={() => activeArtboard && void handleExport('png', activeArtboard)}
+              disabled={!activeArtboard || busy}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-border text-[11px] font-medium text-tx disabled:opacity-40"
+            >
+              <ImageIcon size={12} /> Export PNG
             </button>
           </div>
 
