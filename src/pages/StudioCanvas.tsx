@@ -35,11 +35,18 @@ export default function StudioCanvas({ isActive }: Props) {
   const [activeArtboard, setActiveArtboard] = useState<string | null>(null)
   const [tool, setTool] = useState<StudioTool>('select')
   const viewportRef = useRef<HTMLDivElement>(null)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const [iframeEl, setIframeEl] = useState<HTMLIFrameElement | null>(null)
   const fittedFor = useRef<string | null>(null)
+  // Tracks each artboard's last-known inner HTML so a 'sealed' message (fired
+  // both by the initial id-assignment pass and by a panel edit's style write)
+  // can hand applyEdit a real 'before' — a plain write here would silently
+  // skip undo. The very first sealed message for an artboard has no prior
+  // entry, so before === after and applyEdit correctly records nothing: id
+  // assignment on load is not a user edit.
+  const artboardHtmlRef = useRef<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [history, setHistory] = useState<History>(emptyHistory())
-  const node = useStudioNode(iframeRef.current)
+  const node = useStudioNode(iframeEl)
 
   const active = documents.find(d => d.id === activeId) ?? null
 
@@ -70,6 +77,7 @@ export default function StudioCanvas({ isActive }: Props) {
     setArtboards([])
     setActiveArtboard(null)
     fittedFor.current = null
+    artboardHtmlRef.current = {}
   }, [activeId])
 
   useEffect(() => {
@@ -91,9 +99,19 @@ export default function StudioCanvas({ isActive }: Props) {
   useEffect(() => {
     if (!html) return
     node.refreshTree()
-    iframeRef.current?.contentWindow?.postMessage({ cmd: 'readArtboards' }, '*')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html])
+    iframeEl?.contentWindow?.postMessage({ cmd: 'readArtboards' }, '*')
+  }, [html, iframeEl, node.refreshTree])
+
+  /**
+   * The single path every canvas edit takes: persist, then record. Phase 4+
+   * gestures call this rather than writing to disk themselves, so undo can
+   * never fall out of step with what is on disk.
+   */
+  const applyEdit = useCallback(async (artboardId: string, before: string, after: string) => {
+    if (!activeId || before === after) return
+    await api.studioWriteArtboardHtml(activeId, artboardId, after)
+    setHistory(h => record(h, { artboardId, before, after }))
+  }, [activeId, api])
 
   // The document reports its own natural size; the iframe is sized to it so
   // the world layer can transform a box that exactly contains the artboards.
@@ -120,12 +138,17 @@ export default function StudioCanvas({ isActive }: Props) {
         }
         if (msg.__fdCanvas === 'sealed' && activeId) {
           // Ids are assigned once and written straight back, so a selection
-          // made now still refers to the same element after a reload.
-          void api.studioWriteArtboardHtml(activeId, msg.artboardId, msg.html)
+          // made now still refers to the same element after a reload. A panel
+          // style edit reaches this same branch (studioBridge posts the same
+          // shape after applying a patch), so this is also the single write
+          // + undo-record path for the properties panel.
+          const before = artboardHtmlRef.current[msg.artboardId] ?? msg.html
+          artboardHtmlRef.current[msg.artboardId] = msg.html
+          void applyEdit(msg.artboardId, before, msg.html)
           // Ids just became stable, so this is the first moment the layer
           // tree and artboard list can be read reliably.
           node.refreshTree()
-          iframeRef.current?.contentWindow?.postMessage({ cmd: 'readArtboards' }, '*')
+          iframeEl?.contentWindow?.postMessage({ cmd: 'readArtboards' }, '*')
           return
         }
         return
@@ -137,19 +160,7 @@ export default function StudioCanvas({ isActive }: Props) {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, api])
-
-  /**
-   * The single path every canvas edit takes: persist, then record. Phase 4+
-   * gestures call this rather than writing to disk themselves, so undo can
-   * never fall out of step with what is on disk.
-   */
-  const applyEdit = useCallback(async (artboardId: string, before: string, after: string) => {
-    if (!activeId || before === after) return
-    await api.studioWriteArtboardHtml(activeId, artboardId, after)
-    setHistory(h => record(h, { artboardId, before, after }))
-  }, [activeId, api])
+  }, [activeId, api, applyEdit, iframeEl, node.select, node.refreshTree])
 
   // Phase 4 gestures will call this directly. Until then it is reachable from
   // DevTools so the persistence + undo path can be tested without waiting for
@@ -170,11 +181,23 @@ export default function StudioCanvas({ isActive }: Props) {
       if (!step) return
       setHistory(step.history)
       const restored = e.shiftKey ? step.entry.after : step.entry.before
+      // Keep the sealed-message 'before' cache in step with what undo/redo
+      // just put on disk, or the next panel edit on this artboard would
+      // record a 'before' that no longer matches reality.
+      artboardHtmlRef.current[step.entry.artboardId] = restored
       void api.studioWriteArtboardHtml(activeId, step.entry.artboardId, restored)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [activeId, api, history])
+
+  // A layer-tree row click goes through the same 'selectNode' bridge command
+  // the canvas-click path answers with a 'selected' message for, so both
+  // doors converge on the single __fdCanvas === 'selected' handler above
+  // instead of one updating the overlay/header and the other silently not.
+  const selectNodeFromLayers = useCallback((elementId: string) => {
+    iframeEl?.contentWindow?.postMessage({ cmd: 'selectNode', elementId }, '*')
+  }, [iframeEl])
 
   const fit = useCallback(() => {
     const box = viewportRef.current?.getBoundingClientRect()
@@ -350,7 +373,7 @@ export default function StudioCanvas({ isActive }: Props) {
           onSelectArtboard={setActiveArtboard}
           tree={node.tree}
           selected={node.selected}
-          onSelectNode={node.select}
+          onSelectNode={selectNodeFromLayers}
         />
         <ToolRail tool={tool} onChange={setTool} />
         <div
@@ -389,7 +412,7 @@ export default function StudioCanvas({ isActive }: Props) {
               }}
             >
               <iframe
-                ref={iframeRef}
+                ref={setIframeEl}
                 title="Studio canvas"
                 srcDoc={framedHtml}
                 sandbox="allow-same-origin allow-scripts"

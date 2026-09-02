@@ -66,8 +66,8 @@ export default function StudioChat({ isActive }: Props) {
 
   if (!session) {
     return (
-      <div className="w-[320px] shrink-0 border-l-2 border-[#281E14] bg-[#FAF7F0] flex items-center justify-center p-6">
-        <p className="font-retro-mono text-[11px] text-stone-500 text-center">
+      <div className="w-[320px] shrink-0 border-l border-border bg-surface flex items-center justify-center p-6">
+        <p className="font-retro-mono text-[11px] text-t3 text-center">
           No agent session yet. Start one on the Agent page, then come back — Studio uses that same conversation.
         </p>
       </div>
@@ -75,9 +75,9 @@ export default function StudioChat({ isActive }: Props) {
   }
 
   return (
-    <div className="w-[320px] shrink-0 border-l-2 border-[#281E14] bg-[#FAF7F0] flex flex-col">
-      <div className="h-14 shrink-0 px-3 flex items-center border-b-2 border-[#281E14] bg-[#EBE5D5]">
-        <span className="font-retro-mono text-[11px] font-bold uppercase tracking-wider text-[#281E14] truncate">
+    <div className="w-[320px] shrink-0 border-l border-border bg-surface flex flex-col">
+      <div className="h-14 shrink-0 px-3 flex items-center border-b border-border bg-s2">
+        <span className="font-retro-mono text-[11px] font-bold uppercase tracking-wider text-tx truncate">
           {session.title}
         </span>
       </div>
@@ -88,8 +88,8 @@ export default function StudioChat({ isActive }: Props) {
             key={turn.id}
             className={`rounded-xl px-3 py-2 font-retro-sans text-[11px] leading-relaxed ${
               turn.role === 'user'
-                ? 'bg-[#FEF3C7] border border-[#D97706]/40 text-[#92400E]'
-                : 'bg-white border border-[#E2DBD0] text-stone-800'
+                ? 'bg-accent-m border border-accent-border text-tx'
+                : 'bg-s2 border border-border-soft text-t2'
             }`}
           >
             {/*
@@ -106,7 +106,7 @@ export default function StudioChat({ isActive }: Props) {
         ))}
 
         {liveText && (
-          <div className="rounded-xl px-3 py-2 bg-white border border-[#E2DBD0] font-retro-sans text-[11px] text-stone-800">
+          <div className="rounded-xl px-3 py-2 bg-s2 border border-border-soft font-retro-sans text-[11px] text-t2">
             <div className="max-h-64 overflow-y-auto">
               <RetroMarkdown content={liveText} pending />
             </div>
@@ -115,21 +115,21 @@ export default function StudioChat({ isActive }: Props) {
 
         {/* The agent is blocked until one of these is answered. */}
         {pending.map(request => (
-          <div key={request.requestId} className="rounded-xl border-2 border-[#D97706] bg-[#FEF3C7] p-3 space-y-2">
-            <p className="font-retro-sans text-[11px] font-bold text-[#92400E]">{request.title}</p>
+          <div key={request.requestId} className="rounded-xl border border-accent-border bg-accent-m p-3 space-y-2">
+            <p className="font-retro-sans text-[11px] font-bold text-tx">{request.title}</p>
             {request.detail && (
-              <p className="font-retro-mono text-[10px] text-stone-600 break-words max-h-24 overflow-y-auto">{request.detail}</p>
+              <p className="font-retro-mono text-[10px] text-t3 break-words max-h-24 overflow-y-auto">{request.detail}</p>
             )}
             <div className="flex gap-2">
               <button
                 onClick={() => respond(request.requestId, true)}
-                className="retro-btn flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-[#059669] text-white border border-[#047857] font-retro-mono text-[11px] font-bold"
+                className="retro-btn flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-s2 text-tx border border-border-soft font-retro-mono text-[11px] font-bold"
               >
                 <Check size={11} /> Allow
               </button>
               <button
                 onClick={() => respond(request.requestId, false)}
-                className="retro-btn flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-white text-stone-700 border border-[#D6CFC0] font-retro-mono text-[11px] font-bold"
+                className="retro-btn flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-surface text-t2 border border-border-soft font-retro-mono text-[11px] font-bold"
               >
                 <X size={11} /> Deny
               </button>
@@ -140,7 +140,7 @@ export default function StudioChat({ isActive }: Props) {
         <div ref={bottomRef} />
       </div>
 
-      <div className="p-3 border-t-2 border-[#281E14] bg-[#EBE5D5]">
+      <div className="p-3 border-t border-border bg-s2">
         <div className="flex gap-2">
           <textarea
             value={draft}
@@ -148,12 +148,12 @@ export default function StudioChat({ isActive }: Props) {
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handleSend() } }}
             placeholder="Ask the agent to design something…"
             rows={2}
-            className="flex-1 min-w-0 resize-none rounded-lg border-2 border-[#281E14] bg-white px-2 py-1.5 font-retro-sans text-[11px] outline-none"
+            className="flex-1 min-w-0 resize-none rounded-lg border border-border-soft bg-surface px-2 py-1.5 font-retro-sans text-[11px] text-tx outline-none focus:border-accent-border"
           />
           <button
             onClick={() => void handleSend()}
             disabled={!draft.trim() || sending}
-            className="retro-btn shrink-0 self-end px-3 py-2 rounded-lg bg-[#D97706] hover:bg-[#B45309] text-white border-2 border-[#B45309] disabled:opacity-40"
+            className="retro-btn shrink-0 self-end px-3 py-2 rounded-lg bg-s2 text-tx border border-border-soft disabled:opacity-40"
           >
             <Send size={12} />
           </button>

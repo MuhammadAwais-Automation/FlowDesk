@@ -7,6 +7,8 @@
  * so the canvas can ignore postMessage traffic from anything else.
  */
 
+import { PANEL_PROPERTIES } from './studioNode'
+
 export interface BridgeRect { x: number; y: number; width: number; height: number }
 
 export type BridgeMessage =
@@ -92,13 +94,10 @@ export const BRIDGE_SCRIPT = `
     }
   }
 
-  document.addEventListener('click', function (e) {
-    var el = e.target;
-    while (el && el !== document.body && !el.hasAttribute('data-fd-el')) el = el.parentElement;
-    if (!el || el === document.body) {
-      parent.postMessage({ __fdCanvas: 'cleared' }, '*');
-      return;
-    }
+  // Shared by the canvas click handler and the 'selectNode' command from the
+  // layer tree, so both selection doors post the exact same message shape and
+  // land on the same host handler — one model, not two that can drift.
+  function fdSelect(el) {
     var board = el.closest('.fd-artboard');
     if (!board) { parent.postMessage({ __fdCanvas: 'cleared' }, '*'); return; }
     var r = el.getBoundingClientRect();
@@ -111,11 +110,21 @@ export const BRIDGE_SCRIPT = `
       // without knowing anything about scroll inside the frame.
       rect: { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height },
     }, '*');
+  }
+
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    while (el && el !== document.body && !el.hasAttribute('data-fd-el')) el = el.parentElement;
+    if (!el || el === document.body) {
+      parent.postMessage({ __fdCanvas: 'cleared' }, '*');
+      return;
+    }
+    fdSelect(el);
   });
 
   seal();
 
-  var FD_PANEL_PROPERTIES = ['left','top','width','height','rotate','display','flex-direction','align-items','justify-content','gap','padding','overflow','border-radius','opacity','mix-blend-mode','background-color','color','font-family','font-size','font-weight','letter-spacing','line-height'];
+  var FD_PANEL_PROPERTIES = ${JSON.stringify(PANEL_PROPERTIES)};
 
   function fdFind(id) { return document.querySelector('[data-fd-el="' + id + '"]'); }
 
@@ -176,6 +185,23 @@ export const BRIDGE_SCRIPT = `
       var after = {};
       FD_PANEL_PROPERTIES.forEach(function (p) { after[p] = cs2.getPropertyValue(p).trim(); });
       parent.postMessage({ source: 'fd-bridge', type: 'styles', elementId: d.elementId, styles: after }, '*');
+      // A style write is a document edit like any other: route it through the
+      // same 'sealed' message the id-assignment pass sends, so the host's
+      // single write-and-record path persists it and enters it into undo
+      // instead of the change living only in the live iframe DOM.
+      var editedBoard = target.closest('.fd-artboard');
+      if (editedBoard) {
+        parent.postMessage({
+          __fdCanvas: 'sealed',
+          artboardId: editedBoard.getAttribute('data-fd-id'),
+          html: editedBoard.innerHTML,
+        }, '*');
+      }
+    }
+
+    if (d.cmd === 'selectNode') {
+      var node = fdFind(d.elementId);
+      if (node) fdSelect(node);
     }
 
     if (d.cmd === 'readTree') fdTree();
