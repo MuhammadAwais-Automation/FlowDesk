@@ -424,6 +424,10 @@ this document.
 
 Each step is unblocked by the one before it, and step 1 is unblocked today.
 
+0. **Runtime spike** — one hidden renderer window that checks `navigator.gpu`,
+   runs one ONNX session, and initialises one WebGL context. Added after
+   [round 2](2026-09-02-design-ecosystem-research-round2.md), which found that
+   steps 4 and 5 both depend on facts this spike settles in an afternoon.
 1. **Per-element style read/write** — the whole conversational loop depends on it, and nothing else can be built convincingly first.
 2. **Effects vocabulary v1** — grain, halftone, paper, vignette, duotone. Pure CSS/SVG, all export-validated. Encode the `<svg>`-dimension and stacking-context rules inside the effects.
 3. **Design-intelligence document** — tokens, grid, scale, NEVER rules, plus the tool that queries it.
@@ -436,13 +440,17 @@ Each step is unblocked by the one before it, and step 1 is unblocked today.
 
 ## Still unverified
 
+Updated by [research round 2](2026-09-02-design-ecosystem-research-round2.md).
+
 | Claim | Status | Cheapest experiment |
 | --- | --- | --- |
-| ONNX cutout quality on real subjects, and packaged size | **Unverified.** The test used a hand-written chroma-key, not a model; it left a visible artifact where the subject met the frame edge. | Run one reference photo through ISNet and BiRefNet; measure edge quality on hair and package size |
-| Paper Shaders renders correctly inside our sandboxed iframe | **Unverified.** Raw WebGL does (tested); the library adds React/npm packaging on top. | `npm i @paper-design/shaders-react`, drop one Grain Gradient into a test artboard, export |
-| Which OFL faces actually match the references | **Not researched.** Licensing is settled — OFL permits bundling in commercial Electron apps with attribution. The *selection* is not. | An afternoon with the reference set and Google Fonts' condensed grotesques |
-| Whether constrained effects genuinely raise first-shot accuracy for *us* | **Inference** from published results on UI generation, not measured on this system. | Once the vocabulary exists: same brief, ten runs with and without it, count usable outputs |
-| Responsive output for app/web work | **Open problem.** Not solved here, and not solved by Paper either. | Its own research pass before any web-UI push |
+| ONNX cutout quality on real subjects, and packaged size | **Sizing settled, quality not.** ISNet fp32 ~179 MB → fp16 ~80 MB → quint8 ~30–44 MB; BiRefNet ~973 MB and MIT-licensed. quint8 is documented to soften hair and fur edges. So this is a tiering decision, not a bundling one. | Same photo through all three tiers, compared at 100% |
+| Paper Shaders renders correctly inside our sandboxed iframe | **Still unverified, and now narrower.** The open question is not WebGL but whether the library's own context ownership survives a *shared* `OffscreenCanvas` context — which round 2 established we need, because Chromium caps active WebGL contexts at 16 and a carousel is 8 artboards. | Drop one Grain Gradient into a test artboard; if the React wrapper fights the shared context, use `@paper-design/shaders` core instead |
+| Which OFL faces actually match the references | **Half closed.** Condensed display: Anton (OFL-1.1), Oswald, Bebas Neue, Fjalla One, Barlow Condensed, Archivo Narrow. The swash serif is **not** closed — CSS reaches swashes via `font-variant-alternates: swash()` / `font-feature-settings: "swsh"`, but no source named a free face that carries them. | Inspect candidate fonts' glyph tables directly; two search passes have already failed |
+| Whether constrained effects genuinely raise first-shot accuracy for *us* | **Still inference** from published results on UI generation. | Once the vocabulary exists: same brief, ten runs with and without it, count usable outputs |
+| Responsive output for app/web work | **Open, but no longer directionless.** LayoutPrompter and LaySPA show constraint-compliant layout generation; container queries move responsiveness component-first, which suits artboards. No source describes inferring constraints *from* an absolute design — Figma's own answer is manual. Treat fixed and responsive as two output modes, not one with a conversion step. | Its own research pass before any web-UI push |
+| Subject **part** semantics (beak, head) | **New. Mechanism found, granularity untested.** Florence-2 does open-vocabulary detection returning labelled boxes and pairs with SAM-2; it runs under transformers.js. Nothing confirms it names parts rather than objects. | One reference photo, one open-vocabulary prompt list, count hits |
+| WebGPU available in our Electron renderer | **New and decisive.** `onnxruntime-node` is CPU-only on Windows, where BiRefNet takes 9–20 s; the renderer is a web environment, so `onnxruntime-web` + WebGPU applies and brings that to ~821 ms. This inverts the obvious "use the native backend" choice. | `navigator.gpu` in a hidden window — minutes |
 
 ---
 
