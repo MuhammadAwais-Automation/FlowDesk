@@ -470,6 +470,24 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
   color: var(--text-3);
 }
 
+/* Studio panel density.
+   The app's radii (12-24px) are correct for cards and wrong for a column of
+   26px-tall inputs, where they read as pills. This scope narrows radius and
+   size for instrument controls only, and touches nothing app-wide. */
+.studio-panel {
+  --panel-radius: 5px;
+  --panel-control-h: 26px;
+  --panel-label: 11px;
+  --panel-input: 12px;
+  --panel-gap: 6px;
+}
+
+/* The void behind artboards. Artboards are usually white, so --surface makes
+   them glare and --bg makes them merge with the app chrome. This value sits
+   deliberately between the two. */
+:root { --canvas-void: #0C0A09; }
+[data-theme="light"] { --canvas-void: #E7E5E4; }
+
 @media (max-width: 900px) {
   .notebook-studio__header::after { display: none; }
 }
