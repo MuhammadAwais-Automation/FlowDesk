@@ -4,6 +4,7 @@ import DocumentTabs from '@/components/studio/DocumentTabs'
 import LayersPanel from '@/components/studio/LayersPanel'
 import ToolRail, { type StudioTool } from '@/components/studio/ToolRail'
 import PropertiesPanel from '@/components/studio/PropertiesPanel'
+import AgentWindow from '@/components/studio/AgentWindow'
 import { useStudioNode } from '@/hooks/useStudioNode'
 import { BRIDGE_SCRIPT, isBridgeMessage } from '@/lib/studioBridge'
 import { clampZoom, fitToViewport, panBy, zoomAt, type Size, type ViewportState } from '@/lib/canvasViewport'
@@ -425,8 +426,7 @@ export default function StudioCanvas({ isActive }: Props) {
           hasSelection={node.selected !== null}
         />
       </div>
-      {/* replaced by AgentWindow in the next task */}
-      <div className="h-9 border-t border-border" />
+      <AgentWindow />
     </div>
   )
 }
