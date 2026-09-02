@@ -19,6 +19,7 @@ export function useStudioNode(iframe: HTMLIFrameElement | null) {
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
       if (!isBridgeMessage(ev.data)) return
+      if (!('type' in ev.data)) return
       if (ev.data.type === 'styles') setStyles(ev.data.styles)
       if (ev.data.type === 'tree') setTree(ev.data.nodes)
     }

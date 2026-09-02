@@ -67,6 +67,7 @@ export default function StudioCanvas({ isActive }: Props) {
     const onMessage = (event: MessageEvent) => {
       if (!isBridgeMessage(event.data)) return
       const msg = event.data
+      if (!('__fdCanvas' in msg)) return
       if (msg.__fdCanvas === 'bounds') { setBounds({ width: msg.width, height: msg.height }); return }
       if (msg.__fdCanvas === 'selected') {
         setSelection({ artboardId: msg.artboardId, elementId: msg.elementId, tag: msg.tag, rect: msg.rect })
