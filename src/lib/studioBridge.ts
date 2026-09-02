@@ -15,9 +15,17 @@ export type BridgeMessage =
   | { __fdCanvas: 'sealed'; artboardId: string; html: string }
   | { __fdCanvas: 'selected'; artboardId: string; elementId: string; tag: string; rect: BridgeRect }
   | { __fdCanvas: 'cleared' }
+  | { source: 'fd-bridge'; type: 'styles'; elementId: string; styles: Record<string, string> }
+  | { source: 'fd-bridge'; type: 'tree'; nodes: Array<{ elementId: string; tag: string; label: string; depth: number; childCount: number }> }
+  | { source: 'fd-bridge'; type: 'artboards'; boards: Array<{ id: string; name: string }> }
+
+const FD_BRIDGE_TYPES = new Set(['styles', 'tree', 'artboards'])
 
 export function isBridgeMessage(data: unknown): data is BridgeMessage {
-  return typeof data === 'object' && data !== null && '__fdCanvas' in data
+  if (typeof data !== 'object' || data === null) return false
+  if ('__fdCanvas' in data) return true
+  const record = data as Record<string, unknown>
+  return record.source === 'fd-bridge' && typeof record.type === 'string' && FD_BRIDGE_TYPES.has(record.type)
 }
 
 /**
@@ -106,5 +114,72 @@ export const BRIDGE_SCRIPT = `
   });
 
   seal();
+
+  var FD_PANEL_PROPERTIES = ['left','top','width','height','rotate','display','flex-direction','align-items','justify-content','gap','padding','overflow','border-radius','opacity','mix-blend-mode','background-color','color','font-family','font-size','font-weight','letter-spacing','line-height'];
+
+  function fdFind(id) { return document.querySelector('[data-fd-el="' + id + '"]'); }
+
+  function fdLabel(el) {
+    var text = (el.textContent || '').trim().replace(/\\s+/g, ' ');
+    if (text && text.length <= 40) return text;
+    if (text) return text.slice(0, 37) + '…';
+    return el.tagName.toLowerCase();
+  }
+
+  function fdTree() {
+    var nodes = [];
+    var walk = function (el, depth) {
+      var kids = Array.prototype.filter.call(el.children, function (c) { return c.hasAttribute('data-fd-el'); });
+      nodes.push({
+        elementId: el.getAttribute('data-fd-el'),
+        tag: el.tagName.toLowerCase(),
+        label: fdLabel(el),
+        depth: depth,
+        childCount: kids.length,
+      });
+      kids.forEach(function (c) { walk(c, depth + 1); });
+    };
+    Array.prototype.forEach.call(document.querySelectorAll('[data-fd-el]'), function (el) {
+      if (!el.parentElement || !el.parentElement.closest('[data-fd-el]')) walk(el, 0);
+    });
+    parent.postMessage({ source: 'fd-bridge', type: 'tree', nodes: nodes }, '*');
+  }
+
+  function fdArtboards() {
+    var boards = [];
+    Array.prototype.forEach.call(document.querySelectorAll('.fd-artboard[data-fd-id]'), function (el) {
+      boards.push({ id: el.getAttribute('data-fd-id'), name: el.getAttribute('data-fd-name') || el.getAttribute('data-fd-id') });
+    });
+    parent.postMessage({ source: 'fd-bridge', type: 'artboards', boards: boards }, '*');
+  }
+
+  window.addEventListener('message', function (ev) {
+    var d = ev.data;
+    if (!d || typeof d !== 'object') return;
+
+    if (d.cmd === 'readStyles') {
+      var el = fdFind(d.elementId);
+      if (!el) return;
+      var cs = getComputedStyle(el);
+      var styles = {};
+      FD_PANEL_PROPERTIES.forEach(function (p) { styles[p] = cs.getPropertyValue(p).trim(); });
+      parent.postMessage({ source: 'fd-bridge', type: 'styles', elementId: d.elementId, styles: styles }, '*');
+    }
+
+    if (d.cmd === 'applyStyles') {
+      var target = fdFind(d.elementId);
+      if (!target) return;
+      Object.keys(d.patch || {}).forEach(function (p) { target.style.setProperty(p, d.patch[p]); });
+      // Report back so the panel shows what the document actually accepted,
+      // not what was requested — an invalid value silently does nothing.
+      var cs2 = getComputedStyle(target);
+      var after = {};
+      FD_PANEL_PROPERTIES.forEach(function (p) { after[p] = cs2.getPropertyValue(p).trim(); });
+      parent.postMessage({ source: 'fd-bridge', type: 'styles', elementId: d.elementId, styles: after }, '*');
+    }
+
+    if (d.cmd === 'readTree') fdTree();
+    if (d.cmd === 'readArtboards') fdArtboards();
+  });
 })();
 `
