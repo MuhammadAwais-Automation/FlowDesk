@@ -70,3 +70,7 @@ probes/li-b*.js
 # Python bytecode from the discovery skill scripts
 __pycache__/
 *.pyc
+
+# ONNX model weights. Large binaries fetched on demand (ISNet ~170MB,
+# BiRefNet ~950MB) — the loader downloads them, git does not carry them.
+models/

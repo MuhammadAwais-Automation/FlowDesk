@@ -89,6 +89,7 @@
     "livekit-client": "^2.22.0",
     "livekit-server-sdk": "^2.18.0",
     "lucide-react": "^0.344.0",
+    "onnxruntime-web": "^1.29.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^2.6.1",

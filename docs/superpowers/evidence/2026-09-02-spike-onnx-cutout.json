@@ -1,0 +1,89 @@
+{
+  "probe": "spike-onnx-cutout",
+  "ranAt": "2026-09-02T10:08:39.673Z",
+  "ok": true,
+  "target": "flowdesk",
+  "url": "http://localhost:5173/",
+  "durationMs": 90841,
+  "result": {
+    "steps": [
+      {
+        "name": "imported ort",
+        "atMs": 1
+      },
+      {
+        "name": "model reachable",
+        "atMs": 210
+      },
+      {
+        "name": "webgpu done",
+        "atMs": 11912,
+        "ok": true
+      },
+      {
+        "name": "wasm done",
+        "atMs": 90839,
+        "ok": true
+      }
+    ],
+    "ortVersion": "1.29.0",
+    "model": {
+      "status": 200,
+      "bytes": 178648008
+    },
+    "webgpu": {
+      "ep": "webgpu",
+      "loadMs": 4970,
+      "inputNames": [
+        "input_image"
+      ],
+      "outputNames": [
+        "output_image",
+        "1890",
+        "1891",
+        "1892"
+      ],
+      "coldRunMs": 4076,
+      "outputDims": [
+        1,
+        1,
+        1024,
+        1024
+      ],
+      "outputType": "float32",
+      "maskMin": 0.0002,
+      "maskMax": 0.9957,
+      "maskVaries": true,
+      "warmRunMs": 2617,
+      "ok": true
+    },
+    "wasm": {
+      "ep": "wasm",
+      "loadMs": 910,
+      "inputNames": [
+        "input_image"
+      ],
+      "outputNames": [
+        "output_image",
+        "1890",
+        "1891",
+        "1892"
+      ],
+      "coldRunMs": 39999,
+      "outputDims": [
+        1,
+        1,
+        1024,
+        1024
+      ],
+      "outputType": "float32",
+      "maskMin": 0.0002,
+      "maskMax": 0.9957,
+      "maskVaries": true,
+      "warmRunMs": 38012,
+      "ok": true
+    },
+    "speedup": 14.53,
+    "totalMs": 90839
+  }
+}

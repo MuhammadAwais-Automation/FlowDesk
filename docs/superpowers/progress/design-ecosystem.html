@@ -1,0 +1,429 @@
+<title>Studio Design Ecosystem</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+  :root {
+    --ground: #F4F3F7;
+    --surface: #FFFFFF;
+    --surface-2: #EAE8F0;
+    --line: #D6D2E0;
+    --line-soft: #E6E3EE;
+    --ink: #1A1721;
+    --ink-2: #4A4458;
+    --ink-3: #7B7389;
+    --cyan: #0E7F97;
+    --magenta: #C0286F;
+    --ok: #1E7A55;
+    --warn: #96650B;
+    --crit: #B33A2C;
+    --ok-bg: #DDF0E7;
+    --warn-bg: #F7ECD4;
+    --crit-bg: #F8E0DC;
+    --cyan-bg: #DCEFF3;
+    --shadow: 0 1px 2px rgba(26,23,33,.06), 0 8px 24px -12px rgba(26,23,33,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #14121A;
+      --surface: #1D1A25;
+      --surface-2: #262231;
+      --line: #322C40;
+      --line-soft: #2A2534;
+      --ink: #EDE9F2;
+      --ink-2: #B9B2C6;
+      --ink-3: #857C94;
+      --cyan: #3FC5DE;
+      --magenta: #E0559A;
+      --ok: #5FD39A;
+      --warn: #E8B04B;
+      --crit: #F2695C;
+      --ok-bg: #14342A;
+      --warn-bg: #382C12;
+      --crit-bg: #3A1E1B;
+      --cyan-bg: #10323A;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #14121A;
+    --surface: #1D1A25;
+    --surface-2: #262231;
+    --line: #322C40;
+    --line-soft: #2A2534;
+    --ink: #EDE9F2;
+    --ink-2: #B9B2C6;
+    --ink-3: #857C94;
+    --cyan: #3FC5DE;
+    --magenta: #E0559A;
+    --ok: #5FD39A;
+    --warn: #E8B04B;
+    --crit: #F2695C;
+    --ok-bg: #14342A;
+    --warn-bg: #382C12;
+    --crit-bg: #3A1E1B;
+    --cyan-bg: #10323A;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 24px 96px; }
+
+  .eyebrow {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-size: 12px; font-weight: 500;
+    letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  h1 {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-weight: 600;
+    font-size: clamp(34px, 6vw, 54px);
+    line-height: 1.02;
+    letter-spacing: -.005em;
+    text-transform: uppercase;
+    margin: 6px 0 12px;
+    text-wrap: balance;
+  }
+  h2 {
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    font-weight: 500;
+    font-size: 15px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    margin: 0;
+  }
+  .lede { color: var(--ink-2); max-width: 62ch; margin: 0; }
+
+  header { border-bottom: 1px solid var(--line); padding-bottom: 28px; }
+  .stamp {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px; color: var(--ink-3);
+    margin-top: 16px;
+    display: flex; flex-wrap: wrap; gap: 6px 18px;
+  }
+  .stamp b { color: var(--ink-2); font-weight: 500; }
+
+  section { margin-top: 52px; }
+  .sechead {
+    display: flex; align-items: baseline; gap: 14px;
+    border-bottom: 1px solid var(--line-soft);
+    padding-bottom: 10px; margin-bottom: 22px;
+  }
+  .sechead p { margin: 0; font-size: 13px; color: var(--ink-3); }
+
+  .verdicts { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 18px 18px 16px;
+    box-shadow: var(--shadow);
+  }
+  .card h3 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 15px; font-weight: 600; margin: 10px 0 6px;
+    letter-spacing: -.01em;
+  }
+  .card p { margin: 0; font-size: 14px; color: var(--ink-2); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px; font-weight: 500;
+    letter-spacing: .08em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 3px;
+  }
+  .p-ok { background: var(--ok-bg); color: var(--ok); }
+  .p-warn { background: var(--warn-bg); color: var(--warn); }
+  .p-crit { background: var(--crit-bg); color: var(--crit); }
+  .p-info { background: var(--cyan-bg); color: var(--cyan); }
+  .p-idle { background: var(--surface-2); color: var(--ink-3); }
+
+  .measure {
+    font-family: "IBM Plex Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 12.5px;
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 10px 12px;
+    margin-top: 14px;
+    color: var(--ink-2);
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .measure b { color: var(--ink); font-weight: 500; }
+
+  /* The context ceiling, drawn. 24 asked for, 16 survived. */
+  .ceiling { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 16px; }
+  .ctx { width: 20px; height: 20px; border-radius: 3px; border: 1px solid var(--line); }
+  .ctx.alive { background: var(--cyan); border-color: var(--cyan); }
+  .ctx.dead {
+    background: repeating-linear-gradient(45deg, transparent, transparent 3px, var(--crit) 3px, var(--crit) 4px);
+    border-color: var(--crit);
+  }
+  .ceilnote { font-size: 13px; color: var(--ink-3); margin: 10px 0 0; }
+  .ceilnote b { color: var(--crit); font-weight: 600; }
+
+  ol.ladder { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+  ol.ladder li {
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    gap: 16px;
+    align-items: start;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  ol.ladder li:first-child { border-radius: 6px 6px 0 0; }
+  ol.ladder li:last-child { border-radius: 0 0 6px 6px; }
+  ol.ladder li + li { border-top: none; }
+  .step {
+    font-family: "Oswald", sans-serif;
+    font-size: 20px; font-weight: 600;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.3;
+  }
+  li.done .step { color: var(--ok); }
+  li.now .step { color: var(--magenta); }
+  .ladder strong { font-weight: 600; display: block; letter-spacing: -.01em; }
+  .ladder span.why { color: var(--ink-3); font-size: 13.5px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th {
+    text-align: left; font-family: "Oswald", sans-serif; font-weight: 500;
+    font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-3); padding: 0 12px 8px 0; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 12px 12px 12px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; color: var(--ink-2); }
+  td:first-child { color: var(--ink); }
+  .tablewrap { overflow-x: auto; }
+
+  .blocked {
+    border: 1px solid var(--warn);
+    background: var(--warn-bg);
+    border-radius: 6px;
+    padding: 18px 20px;
+  }
+  .blocked h3 { margin: 8px 0 8px; font-size: 16px; font-weight: 600; color: var(--ink); }
+  .blocked p { margin: 0 0 10px; color: var(--ink-2); font-size: 14px; }
+  .blocked code {
+    font-family: "IBM Plex Mono", monospace; font-size: 12.5px;
+    background: var(--surface); padding: 2px 6px; border-radius: 3px; color: var(--ink);
+  }
+  .blocked p:last-child { margin-bottom: 0; }
+
+  footer {
+    margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--line);
+    font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-3);
+  }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">FlowDesk Studio · build log</p>
+  <h1>Studio Design Ecosystem</h1>
+  <p class="lede">A conversational design engine: generate a poster, then change it by talking to it. This page tracks what has been proven, what is still assumption, and what the build is doing right now.</p>
+  <div class="stamp">
+    <span>updated <b>2 Sep 2026, 15:22</b></span>
+    <span>branch <b>main</b></span>
+    <span>last commit <b>20a98ea</b></span>
+    <span>runtime <b>Electron 41.7.2 · Chrome 146</b></span>
+  </div>
+</header>
+
+<section>
+  <div class="sechead">
+    <h2>Runtime spike</h2>
+    <p>Three questions two architecture decisions depended on. Run live in the app, not reasoned about.</p>
+  </div>
+  <div class="verdicts">
+
+    <div class="card">
+      <span class="pill p-ok">Verified</span>
+      <h3>WebGPU is available</h3>
+      <p>Adapter <em>and</em> device both acquired — an adapter alone would have proven nothing. So cutout belongs in a renderer window with onnxruntime-web, not in the main process where Windows is CPU-only.</p>
+      <div class="measure"><b>vendor</b>        amd · gcn-5
+<b>device</b>        acquired
+<b>maxTexture2D</b>  16384
+<b>maxBufferSize</b> 2,147,483,648
+<b>shader-f16</b>    supported</div>
+    </div>
+
+    <div class="card">
+      <span class="pill p-ok">Verified</span>
+      <h3>One GPU context feeds many canvases</h3>
+      <p>A single OffscreenCanvas rendered four different frames and handed each to its own display canvas. Every pixel came back exact, alpha included. Artboard count stops mattering.</p>
+      <div class="measure"><b>contexts used</b>    1
+<b>display canvases</b> 4
+red    expected 255,0,0    got 255,0,0,255
+green  expected 0,255,0    got 0,255,0,255
+blue   expected 0,0,255    got 0,0,255,255
+yellow expected 255,255,0  got 255,255,0,255</div>
+    </div>
+
+    <div class="card">
+      <span class="pill p-ok">Verified</span>
+      <h3>The cutout model runs on the GPU — 14.5× faster</h3>
+      <p>Real ISNet weights, real inference, both backends measured on this machine. The mask varies across its full range, so the GPU path is producing genuine output rather than running and returning nothing.</p>
+      <div class="measure"><b>webgpu</b>  load 4,970ms · warm run  <b>2,617ms</b>
+<b>wasm</b>    load   910ms · warm run <b>38,012ms</b>
+<b>speedup</b> 14.53×
+mask     [1,1,1024,1024] f32 · 0.0002 → 0.9957</div>
+    </div>
+
+    <div class="card">
+      <span class="pill p-crit">Confirmed hazard</span>
+      <h3>The 16-context ceiling is real — and silent</h3>
+      <p>24 contexts were requested. Every single request succeeded: nothing returned null, nothing threw. Only 16 were still alive afterwards. Eight died without a word.</p>
+      <div class="ceiling" role="img" aria-label="24 requested WebGL contexts: 16 alive, 8 silently lost"></div>
+      <p class="ceilnote">Per-artboard contexts would have shipped as <b>blank artboards with no error</b>. One carousel is 8 artboards.</p>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="sechead">
+    <h2>Build ladder</h2>
+    <p>A real sequence — each step is unblocked by the one before it.</p>
+  </div>
+  <ol class="ladder">
+    <li class="done">
+      <span class="step">00</span>
+      <span><strong>Runtime spike</strong><span class="why">GPU, shared context, context ceiling. Answered all three above.</span></span>
+      <span class="pill p-ok">Done</span>
+    </li>
+    <li class="done">
+      <span class="step">01</span>
+      <span><strong>Cutout on the GPU</strong><span class="why">onnxruntime-web 1.29, WebGPU build, real ISNet weights. Measured, not assumed.</span></span>
+      <span class="pill p-ok">Done</span>
+    </li>
+    <li class="now">
+      <span class="step">02</span>
+      <span><strong>Per-element style read and write</strong><span class="why">Ten Studio tools exist today; none can read or write one element. Every conversational edit needs both halves.</span></span>
+      <span class="pill p-info">Next</span>
+    </li>
+    <li>
+      <span class="step">03</span>
+      <span><strong>Design intelligence behind a tool</strong><span class="why">Promoted ahead of effects: the reference set turned out to be one repeating template, and rules without effects still compose correctly — effects without rules produced our generic recreation.</span></span>
+      <span class="pill p-idle">Queued</span>
+    </li>
+    <li>
+      <span class="step">04</span>
+      <span><strong>Effects vocabulary</strong><span class="why">Grain, halftone, paper, vignette, duotone. No library combines these — confirmed, not assumed.</span></span>
+      <span class="pill p-idle">Queued</span>
+    </li>
+    <li>
+      <span class="step">05</span>
+      <span><strong>Shared-context shader layer</strong><span class="why">Designed in from the first shader — retrofitting this is a rewrite.</span></span>
+      <span class="pill p-idle">Queued</span>
+    </li>
+    <li>
+      <span class="step">06</span>
+      <span><strong>Typography</strong><span class="why">Bundle OFL display faces. This closes the largest visible gap to the references.</span></span>
+      <span class="pill p-idle">Queued</span>
+    </li>
+    <li>
+      <span class="step">07</span>
+      <span><strong>Vector / SVG editing</strong><span class="why">Last. Still roadmap for Paper too.</span></span>
+      <span class="pill p-idle">Queued</span>
+    </li>
+  </ol>
+</section>
+
+<section>
+  <div class="sechead">
+    <h2>Still open</h2>
+    <p>Assumption, not fact. Each paired with the experiment that would settle it.</p>
+  </div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Question</th><th>Standing</th><th>Cheapest experiment</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Does quantised ISNet keep hair and feather edges?</td>
+        <td><span class="pill p-warn">Open</span></td>
+        <td>One photo through fp32, fp16 and quint8, compared at 100%. fp32 is now proven to run at 2.6s — the question is only how much smaller we can go</td>
+      </tr>
+      <tr>
+        <td>Is 2.6s fast enough to feel interactive?</td>
+        <td><span class="pill p-warn">New</span></td>
+        <td>Published figures said ~350ms; this GPU is an older AMD GCN-5 and fp32 is the heaviest tier. Try fp16 before designing a progress affordance around it</td>
+      </tr>
+      <tr>
+        <td>Can a vision pass name subject <em>parts</em> — beak, head — not just "bird"?</td>
+        <td><span class="pill p-warn">Open</span></td>
+        <td>One reference photo, one open-vocabulary prompt list, count hits</td>
+      </tr>
+      <tr>
+        <td>Which free serif actually carries swash glyphs?</td>
+        <td><span class="pill p-warn">Open</span></td>
+        <td>Read the glyph tables directly — two search passes already failed</td>
+      </tr>
+      <tr>
+        <td>Do constrained effects raise first-shot accuracy for us specifically?</td>
+        <td><span class="pill p-warn">Inference</span></td>
+        <td>Ten runs, same brief, with and without the vocabulary</td>
+      </tr>
+      <tr>
+        <td>Responsive output for app and web work</td>
+        <td><span class="pill p-warn">Unsolved</span></td>
+        <td>Its own research pass — treat fixed and responsive as two modes, not a conversion</td>
+      </tr>
+      <tr>
+        <td>Houdini Paint API as a texture path</td>
+        <td><span class="pill p-crit">Closed</span></td>
+        <td>Settled: paint worklets cannot draw images, so they cannot texture a photograph</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <div class="sechead">
+    <h2>Blocked on you</h2>
+    <p>One thing, and the loop cannot start without it.</p>
+  </div>
+  <div class="blocked">
+    <span class="pill p-warn">Waiting</span>
+    <h3>The reference posters need to be files on disk</h3>
+    <p>The critic that judges each round has to open the real image. Given only a written description it invents the comparison and approves everything — that is the single most common way this kind of loop fails, and it fails invisibly.</p>
+    <p>Save the reference set into <code>E:\FlowDesk\docs\superpowers\references\</code>. Names that tell them apart are enough: <code>millenium-parrot.png</code>, <code>fonts-diet-coke.png</code>, <code>mango-productivity.png</code>.</p>
+    <p>They were shared in the conversation, which is why the system has already been read out of them — see <code>specs/2026-09-02-reference-system.md</code>, where slides 2–7 turned out to be one template run six times. That reading is written down and usable. But a fresh critic cannot see a conversation, only the disk.</p>
+    <p>Everything above ran without them. Everything that gets <em>judged</em> needs them.</p>
+  </div>
+</section>
+
+<footer>
+  Evidence lives in the repo — probes/out/spike-runtime-gpu.json for the numbers above,
+  docs/superpowers/specs/ for the research they came from.
+</footer>
+
+</div>
+
+<script>
+  // 24 requested, 16 survived — drawn from the measured result rather than
+  // hand-authored, so the picture cannot drift from the number.
+  (function () {
+    var REQUESTED = 24, ALIVE = 16;
+    var host = document.querySelector('.ceiling');
+    if (!host) return;
+    for (var i = 0; i < REQUESTED; i++) {
+      var d = document.createElement('div');
+      d.className = 'ctx ' + (i < ALIVE ? 'alive' : 'dead');
+      host.appendChild(d);
+    }
+  })();
+</script>

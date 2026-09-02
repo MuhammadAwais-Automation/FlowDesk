@@ -1,0 +1,118 @@
+{
+  "probe": "spike-runtime-gpu",
+  "ranAt": "2026-09-02T09:59:19.111Z",
+  "ok": true,
+  "target": "flowdesk",
+  "url": "http://localhost:5173/",
+  "durationMs": 20881,
+  "result": {
+    "href": "http://localhost:5173/",
+    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) flowdesk/1.0.0 Chrome/146.0.7680.216 Electron/41.7.2 Safari/537.36",
+    "webgpu": {
+      "present": true,
+      "adapter": true,
+      "vendor": "amd",
+      "architecture": "gcn-5",
+      "device_desc": "",
+      "features": [
+        "depth32float-stencil8",
+        "rg11b10ufloat-renderable",
+        "bgra8unorm-storage",
+        "texture-formats-tier1",
+        "texture-compression-bc",
+        "dual-source-blending",
+        "core-features-and-limits",
+        "float32-filterable",
+        "indirect-first-instance",
+        "float32-blendable",
+        "depth-clip-control",
+        "texture-compression-bc-sliced-3d",
+        "shader-f16",
+        "texture-formats-tier2",
+        "timestamp-query",
+        "clip-distances",
+        "primitive-index",
+        "texture-component-swizzle",
+        "subgroups"
+      ],
+      "maxTextureDimension2D": 16384,
+      "maxBufferSize": "2147483648",
+      "device": true
+    },
+    "shared": {
+      "contextType": "webgl2",
+      "readback": [
+        {
+          "i": 0,
+          "expected": [
+            255,
+            0,
+            0
+          ],
+          "got": [
+            255,
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "i": 1,
+          "expected": [
+            0,
+            255,
+            0
+          ],
+          "got": [
+            0,
+            255,
+            0,
+            255
+          ]
+        },
+        {
+          "i": 2,
+          "expected": [
+            0,
+            0,
+            255
+          ],
+          "got": [
+            0,
+            0,
+            255,
+            255
+          ]
+        },
+        {
+          "i": 3,
+          "expected": [
+            255,
+            255,
+            0
+          ],
+          "got": [
+            255,
+            255,
+            0,
+            255
+          ]
+        }
+      ],
+      "allCorrect": true,
+      "contextsUsed": 1,
+      "displayCanvases": 4
+    },
+    "ceiling": {
+      "requested": 24,
+      "created": 24,
+      "firstNullAt": -1,
+      "stillAliveAfterAll": 16,
+      "released": true
+    },
+    "deps": {
+      "onnxruntimeWeb": false,
+      "transformers": false
+    }
+  }
+}
