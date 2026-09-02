@@ -36,7 +36,7 @@ export default function AgentWindow() {
                    rounded-full bg-surface border border-border shadow-md
                    text-xs text-t2 hover:text-tx transition-colors"
       >
-        <Terminal size={13} className="text-accent" />
+        <Terminal size={13} className="text-accent/70" />
         Agent
       </button>
     )
@@ -58,7 +58,7 @@ export default function AgentWindow() {
         className={`h-8 shrink-0 flex items-center gap-2 px-3 border-b border-border-soft
                     ${docked ? '' : 'cursor-grab active:cursor-grabbing'}`}
       >
-        <Terminal size={12} className="text-accent" />
+        <Terminal size={12} className="text-accent/70" />
         <span className="text-[11px] font-mono text-t3 flex-1 truncate">agent</span>
         <button onClick={() => setMode(docked ? 'floating' : 'docked')} aria-label={docked ? 'Float' : 'Dock to bottom'}
                 className="w-5 h-5 rounded-xs flex items-center justify-center text-t3 hover:text-tx hover:bg-s2">
