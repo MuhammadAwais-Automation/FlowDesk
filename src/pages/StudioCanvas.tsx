@@ -104,6 +104,9 @@ export default function StudioCanvas({ isActive }: Props) {
         if (msg.__fdCanvas === 'bounds') { setBounds({ width: msg.width, height: msg.height }); return }
         if (msg.__fdCanvas === 'selected') {
           setSelection({ artboardId: msg.artboardId, elementId: msg.elementId, tag: msg.tag, rect: msg.rect })
+          // One selection model, three doors: a canvas click drives the same
+          // node-selection state the layer tree and properties panel read.
+          node.select(msg.elementId)
           // Clicking inside the iframe moves focus into its document, which
           // would silently kill the parent's keyboard shortcuts (undo, pan).
           viewportRef.current?.focus()
@@ -295,6 +298,50 @@ export default function StudioCanvas({ isActive }: Props) {
         onClose={handleCloseDocument}
         onNew={handleNewDocument}
       />
+      {/* Real header strip above the three-pane row, not an overlay -- an absolute
+          toolbar centered over the canvas would cover artwork near the top of a
+          fitted view. */}
+      <div className="h-10 shrink-0 flex items-center gap-3 px-3 border-b border-border bg-surface">
+        <span className="text-xs font-medium text-tx truncate max-w-[160px]">
+          {active?.title ?? 'No document'}
+        </span>
+        {selection && (
+          <span className="text-[10px] font-mono text-t3 truncate max-w-[160px]">
+            &lt;{selection.tag}&gt; {selection.elementId}
+          </span>
+        )}
+        <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom - 0.25) }))} title="Zoom out" className="text-t2 hover:text-tx">
+          <ZoomOut size={14} />
+        </button>
+        <span className="text-[11px] font-mono text-t2 w-10 text-center">{Math.round(view.zoom * 100)}%</span>
+        <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom + 0.25) }))} title="Zoom in" className="text-t2 hover:text-tx">
+          <ZoomIn size={14} />
+        </button>
+        <button onClick={fit} title="Fit to screen" className="text-t2 hover:text-tx">
+          <Maximize2 size={14} />
+        </button>
+        <button
+          onClick={() => setView(v => ({ ...v, zoom: 1 }))}
+          title="Actual size"
+          className="text-[11px] font-mono font-bold text-t2 hover:text-tx px-1"
+        >
+          1:1
+        </button>
+        <button
+          onClick={() => void handleExport('pdf')}
+          disabled={!active || active.artboards.length === 0 || busy}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-border text-[11px] font-medium text-tx disabled:opacity-40"
+        >
+          <FileText size={12} /> Export PDF
+        </button>
+        <button
+          onClick={() => activeArtboard && void handleExport('png', activeArtboard)}
+          disabled={!activeArtboard || busy}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-border text-[11px] font-medium text-tx disabled:opacity-40"
+        >
+          <ImageIcon size={12} /> Export PNG
+        </button>
+      </div>
       <div className="flex flex-1 min-h-0">
         <LayersPanel
           artboards={artboards}
@@ -328,51 +375,6 @@ export default function StudioCanvas({ isActive }: Props) {
           style={{ outline: 'none', background: 'var(--canvas-void)', cursor: panning.current ? 'grabbing' : spaceHeld ? 'grab' : 'default' }}
           className="flex-1 relative overflow-hidden"
         >
-          {/* Floating toolbar: document title, selection info, zoom, export. Overlaid
-              on the canvas rather than a separate header row, since the shell no
-              longer has a header strip above the viewport. */}
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 h-10 px-3 rounded-md border border-border bg-surface shadow-sm">
-            <span className="text-xs font-medium text-tx truncate max-w-[160px]">
-              {active?.title ?? 'No document'}
-            </span>
-            {selection && (
-              <span className="text-[10px] font-mono text-t3 truncate max-w-[160px]">
-                &lt;{selection.tag}&gt; {selection.elementId}
-              </span>
-            )}
-            <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom - 0.25) }))} title="Zoom out" className="text-t2 hover:text-tx">
-              <ZoomOut size={14} />
-            </button>
-            <span className="text-[11px] font-mono text-t2 w-10 text-center">{Math.round(view.zoom * 100)}%</span>
-            <button onClick={() => setView(v => ({ ...v, zoom: clampZoom(v.zoom + 0.25) }))} title="Zoom in" className="text-t2 hover:text-tx">
-              <ZoomIn size={14} />
-            </button>
-            <button onClick={fit} title="Fit to screen" className="text-t2 hover:text-tx">
-              <Maximize2 size={14} />
-            </button>
-            <button
-              onClick={() => setView(v => ({ ...v, zoom: 1 }))}
-              title="Actual size"
-              className="text-[11px] font-mono font-bold text-t2 hover:text-tx px-1"
-            >
-              1:1
-            </button>
-            <button
-              onClick={() => void handleExport('pdf')}
-              disabled={!active || active.artboards.length === 0 || busy}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-border text-[11px] font-medium text-tx disabled:opacity-40"
-            >
-              <FileText size={12} /> Export PDF
-            </button>
-            <button
-              onClick={() => activeArtboard && void handleExport('png', activeArtboard)}
-              disabled={!activeArtboard || busy}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-border text-[11px] font-medium text-tx disabled:opacity-40"
-            >
-              <ImageIcon size={12} /> Export PNG
-            </button>
-          </div>
-
           {framedHtml ? (
             <div
               className="absolute top-0 left-0 origin-top-left"
@@ -395,7 +397,7 @@ export default function StudioCanvas({ isActive }: Props) {
               />
               {selection && (
                 <div
-                  className="absolute pointer-events-none border-2 border-accent"
+                  className="absolute pointer-events-none border-2 border-accent-border"
                   style={{
                     left: selection.rect.x,
                     top: selection.rect.y,
