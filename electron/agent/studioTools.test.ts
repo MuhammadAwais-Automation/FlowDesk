@@ -19,7 +19,7 @@ vi.mock('../studio/assetStore', () => ({
 
 const { createStudioTools, STUDIO_TOOL_NAMES } = await import('./studioTools')
 
-const READ_TOOLS = ['studio_list_documents', 'studio_get_html', 'studio_screenshot', 'studio_list_presets']
+const READ_TOOLS = ['studio_list_documents', 'studio_get_html', 'studio_screenshot', 'studio_list_presets', 'studio_get_guide']
 const WRITE_TOOLS = ['studio_create_document', 'studio_create_artboard', 'studio_write_html', 'studio_update_styles', 'studio_add_image', 'studio_export']
 
 interface AnyTool {
@@ -38,9 +38,9 @@ function get(tools: ReturnType<typeof createStudioTools>, name: string): AnyTool
 }
 
 describe('studio tools', () => {
-  it('exposes exactly the ten tools the spec lists', () => {
-    expect(STUDIO_TOOL_NAMES).toHaveLength(10)
-    expect(createStudioTools(async () => true)).toHaveLength(10)
+  it('exposes exactly the eleven tools the spec lists', () => {
+    expect(STUDIO_TOOL_NAMES).toHaveLength(11)
+    expect(createStudioTools(async () => true)).toHaveLength(11)
     for (const name of [...READ_TOOLS, ...WRITE_TOOLS]) {
       expect(STUDIO_TOOL_NAMES).toContain(`mcp__workers__${name}`)
     }
@@ -52,7 +52,15 @@ describe('studio tools', () => {
     await get(tools, 'studio_list_documents').handler({}, {} as never)
     await get(tools, 'studio_list_presets').handler({}, {} as never)
     await get(tools, 'studio_get_html').handler({ documentId: 'd1' }, {} as never)
+    await get(tools, 'studio_get_guide').handler({}, {} as never)
     expect(approve).not.toHaveBeenCalled()
+  })
+
+  it('returns the composition rules from studio_get_guide, including the mistake they exist to prevent', async () => {
+    const result = await get(createStudioTools(async () => true), 'studio_get_guide').handler({}, {} as never)
+    expect(result.isError).toBeUndefined()
+    expect(result.content[0].text).toMatch(/three colours/i)
+    expect(result.content[0].text).toMatch(/0\.14/)
   })
 
   it('screenshots without writing a file, so looking does not litter Downloads', async () => {

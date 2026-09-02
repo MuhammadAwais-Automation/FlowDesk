@@ -58,6 +58,28 @@ describe('replaceArtboardHtml', () => {
     const duplicate = `${DOC.replace('</body>', '')}<div class="fd-artboard" data-fd-id="a1"></div></body></html>`
     expect(() => replaceArtboardHtml(duplicate, 'a1', '<p/>')).toThrow(/duplicate/i)
   })
+
+  it('strips a CDATA wrapper the caller mistakenly added, rather than storing it as literal text', () => {
+    // <![CDATA[ ]]> is meaningless in HTML — a browser parses it as a bogus
+    // comment plus stray text, not as a real section — but a model trained
+    // on XML habits writes it anyway. Reproduces the real bug: without
+    // stripping, the literal markers accumulate on every successive write.
+    const wrapped = replaceArtboardHtml(DOC, 'a1', '<![CDATA[\n<h1>Changed</h1>\n]]>')
+    expect(wrapped).not.toContain('CDATA')
+    expect(wrapped).not.toContain(']]>')
+    expect(wrapped).toContain('<h1>Changed</h1>')
+  })
+
+  it('strips CDATA wrapping even with surrounding whitespace', () => {
+    const wrapped = replaceArtboardHtml(DOC, 'a1', '  <![CDATA[ <h1>Changed</h1> ]]>  ')
+    expect(wrapped).not.toContain('CDATA')
+    expect(wrapped).toContain('<h1>Changed</h1>')
+  })
+
+  it('leaves ordinary html with no CDATA markers completely alone', () => {
+    const next = replaceArtboardHtml(DOC, 'a1', '<h1>Plain</h1>')
+    expect(next).toContain('<h1>Plain</h1>')
+  })
 })
 
 describe('appendArtboard', () => {
@@ -93,6 +115,12 @@ describe('appendArtboard', () => {
     const hexadecimal = `${DOC.replace('</body>', '')}<div class="fd-artboard" data-fd-id="a&#x26;1"></div></body></html>`
     expect(() => appendArtboard(decimal, { id: 'a&1', name: 'Dup', width: 10, height: 10 })).toThrow(/already used|duplicated/i)
     expect(() => appendArtboard(hexadecimal, { id: 'a&1', name: 'Dup', width: 10, height: 10 })).toThrow(/already used|duplicated/i)
+  })
+
+  it('strips a CDATA wrapper from the initial html, same as replaceArtboardHtml', () => {
+    const next = appendArtboard(DOC, { id: 'a3', name: 'New', width: 10, height: 10, html: '<![CDATA[<p>Fresh</p>]]>' })
+    expect(next).not.toContain('CDATA')
+    expect(parseArtboards(next)[2].html).toBe('<p>Fresh</p>')
   })
 })
 

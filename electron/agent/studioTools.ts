@@ -8,6 +8,7 @@ import { STUDIO_PRESETS, findPreset } from '../studio/presets'
 import { renderArtboardPng } from '../studio/render'
 import { exportArtboardPng, exportDocumentPdf } from '../studio/export'
 import { addImageToDocument } from '../studio/assetStore'
+import { getDesignGuide } from '../studio/designGuide'
 
 /**
  * Studio's agent surface.
@@ -41,6 +42,7 @@ export const STUDIO_TOOL_NAMES = [
   'mcp__workers__studio_get_html',
   'mcp__workers__studio_screenshot',
   'mcp__workers__studio_list_presets',
+  'mcp__workers__studio_get_guide',
   'mcp__workers__studio_create_document',
   'mcp__workers__studio_create_artboard',
   'mcp__workers__studio_write_html',
@@ -109,6 +111,14 @@ export function createStudioTools(requestApproval: RequestApproval) {
     ),
 
     tool(
+      'studio_get_guide',
+      'Read the composition rules for posters, covers, and carousel slides — palette roles, type pairing, texture, bleed, and the specific mistakes to avoid. Call this before composing any such design, the same way studio_list_presets is checked before inventing a palette: this is the other half, covering layout and typography rather than colour and fonts.',
+      {},
+      () => guard(async () => getDesignGuide()),
+      readOnly,
+    ),
+
+    tool(
       'studio_create_document',
       "Create a new Studio document, optionally seeded with a preset's fonts and CSS tokens.",
       {
@@ -163,11 +173,11 @@ export function createStudioTools(requestApproval: RequestApproval) {
 
     tool(
       'studio_write_html',
-      "Replace one artboard's inner HTML. Everything outside that artboard is untouched, so this is safe to call repeatedly while iterating on one slide.",
+      "Replace one artboard's inner HTML. Everything outside that artboard is untouched, so this is safe to call repeatedly while iterating on one slide. This is a plain HTML document, not XML — write raw HTML directly, never wrapped in <![CDATA[ ... ]]>. A browser does not recognize that as a section marker; it renders as literal, visible text.",
       {
         documentId: z.string(),
         artboardId: z.string(),
-        html: z.string().describe('Inner HTML for the artboard. Do not include the artboard wrapper element itself.'),
+        html: z.string().describe('Inner HTML for the artboard, as raw HTML — no <![CDATA[ ... ]]> wrapper. Do not include the artboard wrapper element itself.'),
       },
       async ({ documentId, artboardId, html }) => {
         if (!await requestApproval({ tool: 'studio_write_html', title: `Write ${html.length} characters into artboard ${artboardId}` })) {

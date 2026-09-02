@@ -162,13 +162,32 @@ export function parseArtboards(documentHtml: string): Artboard[] {
   return locate(documentHtml).map(({ start: _s, end: _e, ...board }) => board)
 }
 
+/**
+ * `<![CDATA[ ... ]]>` is meaningless in HTML — only XML and SVG/MathML
+ * foreign content understand it. A browser parsing this document sees
+ * `<![CDATA[` as a bogus comment and `]]>` as ordinary text, so a model that
+ * wraps its output in CDATA (an XML-authoring habit) doesn't get an ignored
+ * wrapper — it gets that literal text rendered into the page. Worse, every
+ * later `replaceArtboardHtml` call finds the *same* artboard boundary via
+ * real `<div>` nesting (which the wrapper doesn't disturb) and inserts its
+ * new content in that content's place, but the stray CDATA text from the
+ * previous write was never inside a tag, so nothing marks it for removal —
+ * it is ordinary sibling text that survives untouched and simply
+ * accumulates, one copy per edit.
+ */
+function stripCdataWrapper(html: string): string {
+  const trimmed = html.trim()
+  const match = /^<!\[CDATA\[([\s\S]*)\]\]>$/.exec(trimmed)
+  return match ? match[1].trim() : html
+}
+
 export function replaceArtboardHtml(documentHtml: string, id: string, innerHtml: string): string {
   const boards = locate(documentHtml)
   const target = boards.find(board => decodeAttribute(board.id) === decodeAttribute(id))
   if (!target) {
     throw new Error(`No artboard "${id}" in this document. Real ids: ${boards.map(b => b.id).join(', ') || '(none)'}`)
   }
-  return documentHtml.slice(0, target.start) + innerHtml + documentHtml.slice(target.end)
+  return documentHtml.slice(0, target.start) + stripCdataWrapper(innerHtml) + documentHtml.slice(target.end)
 }
 
 export function appendArtboard(
@@ -182,7 +201,7 @@ export function appendArtboard(
   const element =
     `\n<div class="fd-artboard" data-fd-id="${escapeAttribute(id)}" data-fd-name="${escapeAttribute(name)}"` +
     ` data-fd-w="${width}" data-fd-h="${height}"` +
-    ` style="--fd-w:${width}px;--fd-h:${height}px">${artboard.html ?? ''}</div>\n`
+    ` style="--fd-w:${width}px;--fd-h:${height}px">${stripCdataWrapper(artboard.html ?? '')}</div>\n`
   const closing = documentHtml.lastIndexOf('</body>')
   if (closing === -1) return documentHtml + element
   return documentHtml.slice(0, closing) + element + documentHtml.slice(closing)
