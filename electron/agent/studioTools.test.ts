@@ -25,7 +25,7 @@ const READ_TOOLS = [
   'studio_list_fonts', 'studio_get_computed_styles',
 ]
 const WRITE_TOOLS = [
-  'studio_create_document', 'studio_create_artboard', 'studio_write_html', 'studio_update_styles', 'studio_add_image', 'studio_export',
+  'studio_create_document', 'studio_create_artboard', 'studio_create_variants', 'studio_write_html', 'studio_update_styles', 'studio_add_image', 'studio_export',
   'studio_set_text_style', 'studio_set_effect', 'studio_set_fill', 'studio_set_stroke', 'studio_layer_op',
 ]
 
@@ -45,9 +45,9 @@ function get(tools: ReturnType<typeof createStudioTools>, name: string): AnyTool
 }
 
 describe('studio tools', () => {
-  it('exposes exactly the eighteen tools the spec lists', () => {
-    expect(STUDIO_TOOL_NAMES).toHaveLength(18)
-    expect(createStudioTools(async () => true)).toHaveLength(18)
+  it('exposes exactly the nineteen tools the spec lists', () => {
+    expect(STUDIO_TOOL_NAMES).toHaveLength(19)
+    expect(createStudioTools(async () => true)).toHaveLength(19)
     for (const name of [...READ_TOOLS, ...WRITE_TOOLS]) {
       expect(STUDIO_TOOL_NAMES).toContain(`mcp__workers__${name}`)
     }
@@ -110,6 +110,7 @@ describe('studio tools', () => {
           source: 'flowdesk-image://x.png', altText: 'X',
           elementId: 'e1', family: 'Anton', kind: 'shadow', type: 'solid', color: '#000000',
           command: { cmd: 'delete', elementId: 'e1' },
+          count: 2, brief: 'Try a bolder direction.',
         },
         {} as never,
       )
@@ -134,6 +135,15 @@ describe('studio tools', () => {
     expect(result.isError).toBe(true)
     expect(result.content[0].text).toContain('Crisp Navy')
     // Refused before the approval prompt, so nothing was created either.
+    expect(approve).not.toHaveBeenCalled()
+  })
+
+  it('rejects more than 6 variants before asking approval, explaining why rather than truncating', async () => {
+    const approve = vi.fn(async () => true)
+    const result = await get(createStudioTools(approve), 'studio_create_variants')
+      .handler({ documentId: 'd1', artboardId: 'a1', count: 40, brief: 'Explore forty directions' }, {} as never)
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('caps at 6')
     expect(approve).not.toHaveBeenCalled()
   })
 })
@@ -252,6 +262,32 @@ describe('Task 10 per-element tools actually write through to the document', () 
       const parsed = JSON.parse(result.content[0].text!)
       expect(parsed.effect.kind).toBe('neon')
       expect(parsed.style['text-shadow']).toBeTruthy()
+    })
+  })
+
+  it('studio_create_variants duplicates the source into fresh, distinctly-named artboards and hands back its html for the follow-up writes', async () => {
+    await withFixture(async getDoc => {
+      const tools = createStudioTools(async () => true)
+      const result = await get(tools, 'studio_create_variants').handler(
+        { documentId: 'd1', artboardId: 'ab1', count: 3, brief: 'Three bold directions' },
+        {} as never,
+      )
+      expect(result.isError).toBeUndefined()
+      const parsed = JSON.parse(result.content[0].text!)
+      expect(parsed.createdArtboardIds).toHaveLength(3)
+      expect(new Set(parsed.createdArtboardIds).size).toBe(3) // fresh, non-colliding ids
+      expect(parsed.createdArtboardIds).not.toContain('ab1')
+      expect(parsed.source).toMatchObject({ artboardId: 'ab1', name: 'A', width: 100, height: 100 })
+      expect(parsed.source.html).toContain('data-fd-el="e1"')
+
+      const boards = parseArtboards(getDoc())
+      expect(boards).toHaveLength(4) // source + 3 variants
+      const names = boards.map(b => b.name)
+      expect(names).toEqual(['A', 'A — variant 2', 'A — variant 3', 'A — variant 4'])
+      // Every duplicate starts as an exact copy of the source's html.
+      for (const id of parsed.createdArtboardIds) {
+        expect(boards.find(b => b.id === id)!.html).toBe('<div data-fd-el="e1" style="color: red;">Hi</div>')
+      }
     })
   })
 })

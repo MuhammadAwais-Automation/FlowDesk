@@ -50,6 +50,7 @@ export const STUDIO_TOOL_NAMES = [
   'mcp__workers__studio_get_guide',
   'mcp__workers__studio_create_document',
   'mcp__workers__studio_create_artboard',
+  'mcp__workers__studio_create_variants',
   'mcp__workers__studio_write_html',
   'mcp__workers__studio_update_styles',
   'mcp__workers__studio_add_image',
@@ -231,6 +232,50 @@ export function createStudioTools(requestApproval: RequestApproval) {
           if (html === null) throw new Error(`No Studio document "${documentId}".`)
           const id = `ab-${randomUUID().slice(0, 8)}`
           return await writeDocumentHtml(documentId, appendArtboard(html, { id, name, width, height }))
+        })
+      },
+    ),
+
+    tool(
+      'studio_create_variants',
+      "Fan out one artboard into N empty variant slots for a genuinely different design direction each — the feature a human can't do at this cost: one call producing N parallel directions from the same brief, instead of one design rendered N times. This tool does not design anything: each new artboard starts as an exact copy of the source's current HTML and dimensions. It returns the new artboard ids plus the source's html/width/height so the necessary follow-up is unambiguous — call studio_write_html once per returned id, writing a distinct, brief-informed direction into each rather than leaving them as duplicates. Capped at 6 variants per call; a larger request is almost always a mistake, so ask for fewer or call again for another batch instead of it being silently truncated.",
+      {
+        documentId: z.string(),
+        artboardId: z.string().describe('The source artboard to fan out from.'),
+        count: z.number().int().positive().describe('How many new variant artboards to create alongside the source. Max 6.'),
+        brief: z.string().describe("The design brief driving the variants. Not written anywhere by this tool — it is echoed back so the follow-up studio_write_html calls stay anchored to what each variant is supposed to explore."),
+      },
+      async ({ documentId, artboardId, count, brief }) => {
+        const MAX_VARIANTS = 6
+        if (count > MAX_VARIANTS) {
+          return fail(
+            `Asked for ${count} variants, but this tool caps at ${MAX_VARIANTS} per call — that many simultaneous directions is almost certainly a mistake. Ask for ${MAX_VARIANTS} or fewer, or call studio_create_variants again for another batch.`,
+          )
+        }
+        if (!await requestApproval({
+          tool: 'studio_create_variants',
+          title: `Create ${count} variant${count === 1 ? '' : 's'} of artboard "${artboardId}"`,
+          detail: brief.slice(0, 300),
+        })) {
+          return fail('The user declined creating those variants.')
+        }
+        return guard(async () => {
+          const { documentHtml, board } = await loadArtboard(documentId, artboardId)
+          let html = documentHtml
+          const createdArtboardIds: string[] = []
+          for (let i = 0; i < count; i++) {
+            const id = `ab-${randomUUID().slice(0, 8)}`
+            const name = `${board.name} — variant ${i + 2}`
+            html = appendArtboard(html, { id, name, width: board.width, height: board.height, html: board.html })
+            createdArtboardIds.push(id)
+          }
+          await writeDocumentHtml(documentId, html)
+          return {
+            createdArtboardIds,
+            source: { artboardId: board.id, name: board.name, width: board.width, height: board.height, html: board.html },
+            brief,
+            next: `Each artboard in createdArtboardIds currently holds an exact copy of the source's HTML. Call studio_write_html once per id with a genuinely different design direction for "${brief}" — leaving them as duplicates defeats the point of this tool.`,
+          }
         })
       },
     ),
