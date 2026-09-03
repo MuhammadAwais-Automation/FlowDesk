@@ -9,6 +9,7 @@ import { renderArtboardPng } from '../studio/render'
 import { exportArtboardPng, exportDocumentPdf } from '../studio/export'
 import { addImageToDocument } from '../studio/assetStore'
 import { getDesignGuide } from '../studio/designGuide'
+import { recordAgentProposal } from '../studio/designMemory'
 import { readElement, patchStyle, patchAttr, applyLayerCommand } from '../studio/nodeOps'
 import { effectToCss, type EffectParams } from '../../src/lib/textEffects'
 import { FONT_CATALOGUE, findFont, searchFonts, type FontFamily } from '../../src/lib/fontCatalogue'
@@ -433,7 +434,17 @@ export function createStudioTools(requestApproval: RequestApproval) {
         if (!await requestApproval({ tool: 'studio_set_text_style', title: `Set typography on ${elementId}`, detail: JSON.stringify(patch) })) {
           return fail('The user declined that typography change.')
         }
-        return guard(async () => editElement(documentId, artboardId, elementId, html => patchStyle(html, elementId, patch)))
+        return guard(async () => {
+          const meta = await editElement(documentId, artboardId, elementId, html => patchStyle(html, elementId, patch))
+          // Design memory (Task 13): a subsequent panel edit to the same
+          // elementId+property within the TTL is an override, not this write
+          // itself — see designMemory.ts for why this is the only place an
+          // agent-authored value for these fields is knowable.
+          for (const [property, value] of Object.entries(patch)) {
+            if (value !== null) recordAgentProposal(elementId, property, value)
+          }
+          return meta
+        })
       },
     ),
 
@@ -493,10 +504,16 @@ export function createStudioTools(requestApproval: RequestApproval) {
         if (!await requestApproval({ tool: 'studio_set_fill', title: `Set ${type} fill on ${elementId}` })) {
           return fail('The user declined that fill change.')
         }
-        return guard(async () => editElement(documentId, artboardId, elementId, html => {
-          if (type === 'solid') return patchStyle(html, elementId, { 'background-color': color!, background: null })
-          return patchStyle(html, elementId, { background: buildGradientCss(type, angle ?? 90, stops!) })
-        }))
+        return guard(async () => {
+          const property = type === 'solid' ? 'background-color' : 'background'
+          const value = type === 'solid' ? color! : buildGradientCss(type, angle ?? 90, stops!)
+          const meta = await editElement(documentId, artboardId, elementId, html => {
+            if (type === 'solid') return patchStyle(html, elementId, { 'background-color': color!, background: null })
+            return patchStyle(html, elementId, { background: value })
+          })
+          recordAgentProposal(elementId, property, value)
+          return meta
+        })
       },
     ),
 
@@ -514,13 +531,24 @@ export function createStudioTools(requestApproval: RequestApproval) {
         if (!await requestApproval({ tool: 'studio_set_stroke', title: `Set stroke on ${elementId}`, detail: `${width}px ${color}` })) {
           return fail('The user declined that stroke change.')
         }
-        return guard(async () => editElement(documentId, artboardId, elementId, html => {
-          const el = readElement(html, elementId)
-          if (!el) return null
-          return isTextTag(el.tag)
-            ? patchStyle(html, elementId, { '-webkit-text-stroke': width > 0 ? `${width}px ${color}` : null })
-            : patchStyle(html, elementId, { border: width > 0 ? `${width}px solid ${color}` : null })
-        }))
+        return guard(async () => {
+          let property: string | null = null
+          let value: string | null = null
+          const meta = await editElement(documentId, artboardId, elementId, html => {
+            const el = readElement(html, elementId)
+            if (!el) return null
+            if (isTextTag(el.tag)) {
+              property = '-webkit-text-stroke'
+              value = width > 0 ? `${width}px ${color}` : null
+            } else {
+              property = 'border'
+              value = width > 0 ? `${width}px solid ${color}` : null
+            }
+            return patchStyle(html, elementId, { [property]: value })
+          })
+          if (property && value !== null) recordAgentProposal(elementId, property, value)
+          return meta
+        })
       },
     ),
 

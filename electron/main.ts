@@ -80,6 +80,7 @@ import { configureBrowserWorkerQueue, notifyCaptureComplete, notifyCaptureActivi
 import { orderBrowserAccounts } from './agent/accountFailover'
 import * as agentSessions from './agentSessionStore'
 import * as studioStore from './studio/documentStore'
+import * as designMemory from './studio/designMemory'
 import { isValidDocumentId as studioIsValidDocumentId } from './studio/paths'
 import { exportArtboardPng, exportDocumentPdf } from './studio/export'
 import { replaceArtboardHtml } from './studio/artboards'
@@ -1358,6 +1359,12 @@ ipcMain.handle('studio:exportPdf', (_e, documentId: unknown) => exportDocumentPd
 // sends back the affected artboard's inner HTML. Persisting goes through
 // replaceArtboardHtml — the same path the agent's studio_write_html tool
 // uses — so a user edit and an agent edit cannot produce different files.
+//
+// This handler is also the one definite signal that a write is
+// user-authored (design memory, Task 13): it's the only path a panel edit
+// reaches writeDocumentHtml through, so it's where a pending agent
+// proposal (recorded by studioTools.ts) gets checked against what the user
+// actually landed on.
 ipcMain.handle('studio:writeArtboardHtml', async (_e, documentId: unknown, artboardId: unknown, html: unknown) => {
   const id = asStudioDocumentId(documentId)
   if (typeof artboardId !== 'string' || !artboardId) throw new Error('An artboard id is required.')
@@ -1365,6 +1372,7 @@ ipcMain.handle('studio:writeArtboardHtml', async (_e, documentId: unknown, artbo
   const current = await studioStore.readDocumentHtml(id)
   if (current === null) throw new Error(`No Studio document "${id}".`)
   await studioStore.writeDocumentHtml(id, replaceArtboardHtml(current, artboardId, html))
+  await designMemory.checkForOverrides(html).catch(error => console.log('[FlowDesk studio] design memory check skipped:', error))
 })
 
 studioStore.studioDocumentChanged.on('changed', (documentId: string) => {
@@ -2056,6 +2064,8 @@ app.whenReady().then(async () => {
 
   const previousRun = agentRunSnapshot()
   if (previousRun.status === 'running') finishAgentRun('interrupted')
+
+  await designMemory.loadDesignMemory().catch(error => console.log('[FlowDesk studio] design memory load skipped:', error))
 
   await migrateLegacyAgentSession().catch(error => console.log('[FlowDesk agent] session migration skipped:', error))
   createWindow()

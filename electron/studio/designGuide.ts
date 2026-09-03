@@ -1,3 +1,5 @@
+import { getLearnedPreferences, type AggregatedOverride } from './designMemory'
+
 /**
  * The design-intelligence layer, as a tool the agent queries rather than
  * prompt text it is told once and may forget past a context compaction.
@@ -10,6 +12,13 @@
  * composition from a freeform prompt alone, and the concrete failure this
  * fixes is real — a generated poster used a random font-size, no fixed
  * palette, and a texture at opacity 0.14 that was effectively invisible.
+ *
+ * `getDesignGuide` appends one further section, generated fresh on every
+ * call from `designMemory.getLearnedPreferences()` — this is the only part
+ * of the guide that changes over a session, and it is absent entirely
+ * until the user has actually corrected the agent's output on the same
+ * property three or more times (see designMemory.ts). It is phrased as
+ * guidance for next time, not as a dump of the raw override data.
  */
 
 export const DESIGN_GUIDE = `# Poster and carousel design rules
@@ -69,6 +78,29 @@ containing any NEVER item, is not following the reference system.
   is more reliable than guessing the current value.
 `
 
+/** One human-readable guidance line for a stated preference, not a raw data dump. */
+function describePreference(pref: AggregatedOverride): string {
+  const { property, agentValue, userValue } = pref
+  const asNumber = (v: string) => {
+    const n = parseFloat(v)
+    return Number.isNaN(n) ? null : n
+  }
+  const a = asNumber(agentValue)
+  const u = asNumber(userValue)
+  if (a !== null && u !== null && a !== u) {
+    const direction = u > a ? 'increases' : 'decreases'
+    return `- This user consistently ${direction} the suggested \`${property}\` (from around \`${agentValue}\` toward \`${userValue}\`) — start closer to \`${userValue}\` instead of the usual default.`
+  }
+  return `- This user consistently replaces the suggested \`${property}\` (\`${agentValue}\`) with \`${userValue}\` — use \`${userValue}\` for \`${property}\` unless the brief says otherwise.`
+}
+
+function learnedPreferencesSection(): string {
+  const preferences = getLearnedPreferences()
+  if (preferences.length === 0) return ''
+  const lines = preferences.map(describePreference).join('\n')
+  return `\n## Learned preferences\n\nPatterns folded in from what this user has actually corrected after the\nagent produced it — each below reflects three or more consistent\noverrides of the same property, not a one-off edit.\n\n${lines}\n`
+}
+
 export function getDesignGuide(): string {
-  return DESIGN_GUIDE
+  return DESIGN_GUIDE + learnedPreferencesSection()
 }
