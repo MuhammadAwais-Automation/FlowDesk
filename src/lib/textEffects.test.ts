@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { effectToCss, EFFECT_DEFAULTS, type EffectKind } from './textEffects'
 
+/**
+ * Counts distinct shadow layers in a `text-shadow` value by matching the
+ * `dx dy blur` triple that opens each layer, rather than splitting on commas —
+ * echo/glitch colours are `rgba(r, g, b, a)`, which contain internal commas
+ * that would make a naive comma-split overcount a single layer as several.
+ */
+function countShadowLayers(textShadow: string): number {
+  return (textShadow.match(/-?\d+(\.\d+)?px\s+-?\d+(\.\d+)?px\s+-?\d+(\.\d+)?px/g) ?? []).length
+}
+
 describe('effectToCss', () => {
   it('returns nothing for none, so a cleared effect writes no properties', () => {
     expect(effectToCss({ kind: 'none' })).toEqual({})
@@ -20,7 +30,16 @@ describe('effectToCss', () => {
   })
   it('echo repeats the text offset at decreasing opacity', () => {
     const css = effectToCss({ kind: 'echo', offset: 8, color: '#f00' })
-    expect((css.textShadow ?? '').split(',').length).toBeGreaterThanOrEqual(2)
+    // Counts actual shadow layers, not raw commas — echo's rgba() colours contain
+    // internal commas, so a naive split(',').length would pass even if echo
+    // regressed to emitting a single shadow.
+    expect(countShadowLayers(css.textShadow ?? '')).toBe(2)
+  })
+  it('echo copy count grows with intensity, so its slider is not decorative either', () => {
+    const low = effectToCss({ kind: 'echo', offset: 8, intensity: 30, color: '#f00' })
+    const high = effectToCss({ kind: 'echo', offset: 8, intensity: 80, color: '#f00' })
+    expect(countShadowLayers(low.textShadow ?? '')).toBe(2)
+    expect(countShadowLayers(high.textShadow ?? '')).toBe(3)
   })
   it('intensity actually changes the output, so the slider is not decorative', () => {
     const low = effectToCss({ kind: 'neon', intensity: 10, color: '#0ff' })
