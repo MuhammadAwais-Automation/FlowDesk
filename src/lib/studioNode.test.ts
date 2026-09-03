@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { PANEL_PROPERTIES, pickPanelStyles, stylePatch, parseLength, formatLength } from './studioNode'
+import { PANEL_PROPERTIES, pickPanelStyles, stylePatch, parseLength, formatLength, isTextTag } from './studioNode'
 
 describe('pickPanelStyles', () => {
   it('keeps only properties the panel knows how to edit', () => {
@@ -13,6 +13,36 @@ describe('pickPanelStyles', () => {
 
   it('lists every panel property exactly once', () => {
     expect(new Set(PANEL_PROPERTIES).size).toBe(PANEL_PROPERTIES.length)
+  })
+
+  it('covers the typography, stroke/effect output, fill and border properties Tasks 6-7 write', () => {
+    const required = [
+      'font-family', 'font-weight', 'font-size', 'letter-spacing', 'line-height',
+      'text-align', 'text-transform', 'font-style', 'text-decoration-line', 'font-feature-settings',
+      '-webkit-text-stroke', 'text-shadow', 'background', 'border',
+    ]
+    for (const prop of required) {
+      expect(PANEL_PROPERTIES).toContain(prop)
+    }
+  })
+})
+
+describe('isTextTag', () => {
+  it('treats common copy-bearing tags as text', () => {
+    expect(isTextTag('h1')).toBe(true)
+    expect(isTextTag('P')).toBe(true) // case-insensitive, since tagName is uppercase in the DOM
+    expect(isTextTag('span')).toBe(true)
+  })
+
+  it('treats container tags as boxes, not text', () => {
+    expect(isTextTag('div')).toBe(false)
+    expect(isTextTag('section')).toBe(false)
+  })
+
+  it('falls back to "box" for null/undefined/unknown tags rather than throwing', () => {
+    expect(isTextTag(null)).toBe(false)
+    expect(isTextTag(undefined)).toBe(false)
+    expect(isTextTag('marquee')).toBe(false)
   })
 })
 

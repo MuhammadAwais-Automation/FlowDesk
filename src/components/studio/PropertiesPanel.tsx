@@ -5,12 +5,22 @@ import FillSection from './panel/FillSection'
 import StrokeSection from './panel/StrokeSection'
 import EffectsSection from './panel/EffectsSection'
 import { formatLength, parseLength, type NodeStyles } from '@/lib/studioNode'
+import type { EffectParams } from '@/lib/textEffects'
 
-interface Props { styles: NodeStyles; onUpdate: (next: NodeStyles) => void; hasSelection: boolean }
+interface Props {
+  styles: NodeStyles
+  onUpdate: (next: NodeStyles) => void
+  hasSelection: boolean
+  /** Ruling D1: the selected node's tag, so tag-aware controls (Stroke) can pick the one control that applies. */
+  tag: string | null
+  /** Ruling D2: the params behind the currently-applied effect, read back from the document so the Effects sliders can repopulate. */
+  effect: EffectParams | null
+  onEffectChange: (params: EffectParams | null, cssPatch: NodeStyles) => void
+}
 
 const BLEND_MODES = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'difference']
 
-export default function PropertiesPanel({ styles, onUpdate, hasSelection }: Props) {
+export default function PropertiesPanel({ styles, onUpdate, hasSelection, tag, effect, onEffectChange }: Props) {
   // A rejected value must not silently vanish, and must not be written either.
   const setLength = (prop: string) => (raw: string) => {
     const parsed = parseLength(raw)
@@ -64,8 +74,8 @@ export default function PropertiesPanel({ styles, onUpdate, hasSelection }: Prop
       </PanelSection>
 
       <FillSection styles={styles} onUpdate={onUpdate} />
-      <StrokeSection styles={styles} onUpdate={onUpdate} />
-      <EffectsSection styles={styles} onUpdate={onUpdate} />
+      <StrokeSection styles={styles} onUpdate={onUpdate} tag={tag} />
+      <EffectsSection styles={styles} onUpdate={onUpdate} effect={effect} onEffectChange={onEffectChange} />
     </div>
   )
 }

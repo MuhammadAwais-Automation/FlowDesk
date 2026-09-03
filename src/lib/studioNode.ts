@@ -33,8 +33,11 @@ export const PANEL_PROPERTIES = [
   'gap', 'padding', 'overflow',
   'border-radius',
   'opacity', 'mix-blend-mode',
-  'background-color', 'color',
+  'background-color', 'color', 'background', 'border',
   'font-family', 'font-size', 'font-weight', 'letter-spacing', 'line-height',
+  'margin-bottom', 'text-align', 'text-transform', 'font-style',
+  'text-decoration-line', 'font-feature-settings',
+  '-webkit-text-stroke', 'text-shadow',
 ] as const
 
 const PANEL_SET = new Set<string>(PANEL_PROPERTIES)
@@ -73,4 +76,24 @@ export function parseLength(input: string): string | null {
 export function formatLength(value: string): string {
   if (!value) return '—'
   return value.endsWith('px') ? value.slice(0, -2) : value
+}
+
+/**
+ * Ruling D1: the panel cannot always tell a text node from a box just by
+ * looking at styles, so the bridge's `selected` message carries the node's
+ * tag and this decides what "text" means for controls like Stroke that
+ * apply differently to each (`-webkit-text-stroke` vs `border`). This is a
+ * heuristic over common HTML tags the agent and the document generator use
+ * for copy, not an exhaustive content-model check — an unlisted tag (e.g. a
+ * bespoke custom element) falls back to being treated as a box, which is the
+ * safer default since `border` is meaningful on anything.
+ */
+const TEXT_TAGS = new Set([
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'p', 'span', 'a', 'li', 'blockquote', 'figcaption', 'label',
+  'strong', 'em', 'b', 'i', 'small', 'caption', 'q', 'cite', 'mark',
+])
+
+export function isTextTag(tag: string | null | undefined): boolean {
+  return !!tag && TEXT_TAGS.has(tag.toLowerCase())
 }

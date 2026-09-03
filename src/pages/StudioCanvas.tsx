@@ -125,7 +125,9 @@ export default function StudioCanvas({ isActive }: Props) {
           setSelection({ artboardId: msg.artboardId, elementId: msg.elementId, tag: msg.tag, rect: msg.rect })
           // One selection model, three doors: a canvas click drives the same
           // node-selection state the layer tree and properties panel read.
-          node.select(msg.elementId)
+          // The tag rides along so Ruling D1's tag-aware controls (Stroke)
+          // know whether the selection is text or a box.
+          node.select(msg.elementId, msg.tag)
           // Clicking inside the iframe moves focus into its document, which
           // would silently kill the parent's keyboard shortcuts (undo, pan).
           viewportRef.current?.focus()
@@ -133,6 +135,7 @@ export default function StudioCanvas({ isActive }: Props) {
         }
         if (msg.__fdCanvas === 'cleared') {
           setSelection(null)
+          node.select(null)
           viewportRef.current?.focus()
           return
         }
@@ -374,10 +377,11 @@ export default function StudioCanvas({ isActive }: Props) {
           tree={node.tree}
           selected={node.selected}
           onSelectNode={selectNodeFromLayers}
-          // Task 9 wires this to the bridge (group/ungroup/reorder/hide/lock/
-          // rename/delete/duplicate all mutate through it); until then the
-          // panel is display- and selection-only for those operations.
-          onCommand={() => {}}
+          // Every layer mutation (group/ungroup/reorder/hide/rename/delete/
+          // duplicate) goes through the same validated door the agent's
+          // studio_layer_op tool will use (Task 10). setLocked is filtered
+          // out inside runLayerCommand — it stays editor-only state.
+          onCommand={node.runLayerCommand}
           styles={node.styles}
           onUpdateStyles={node.update}
         />
@@ -453,6 +457,9 @@ export default function StudioCanvas({ isActive }: Props) {
           styles={node.styles}
           onUpdate={node.update}
           hasSelection={node.selected !== null}
+          tag={node.tag}
+          effect={node.effect}
+          onEffectChange={node.setEffectParams}
         />
       </div>
       <AgentWindow />

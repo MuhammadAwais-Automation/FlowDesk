@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import PanelSection from './PanelSection'
 import NumberField from './NumberField'
 import ColorInput from './ColorInput'
@@ -6,7 +6,13 @@ import { hexToRgb } from './color'
 import { EFFECT_DEFAULTS, effectToCss, type EffectKind, type EffectParams } from '@/lib/textEffects'
 import type { NodeStyles } from '@/lib/studioNode'
 
-interface Props { styles: NodeStyles; onUpdate: (next: NodeStyles) => void }
+interface Props {
+  styles: NodeStyles
+  onUpdate: (next: NodeStyles) => void
+  /** Ruling D2: the params behind the currently-applied effect, read back from the document's data-fd-effect attribute (null when the node has none). */
+  effect: EffectParams | null
+  onEffectChange: (params: EffectParams | null, cssPatch: NodeStyles) => void
+}
 
 const KIND_OPTIONS: EffectKind[] = ['none', 'shadow', 'lift', 'hollow', 'splice', 'echo', 'neon', 'glitch']
 
@@ -41,18 +47,22 @@ const FIELD_LABEL: Record<Field, string> = {
 }
 
 /**
- * `EffectParams` — specifically *which kind* is selected — has no field of
- * its own in NodeStyles: this section calls `effectToCss` and only ever
- * writes its projection (`textShadow`/`webkitTextStroke`/`color`), same as
- * every other write in this panel. That means the working params live as
- * local state here rather than round-tripping through the document; picking
- * a different node resets this section to "none" even if that node already
- * carries a text-shadow, because there is no stored kind to recover it from.
- * Task 9 extending PANEL_PROPERTIES with an effect field is what would let
- * this section rebuild `params` from the document instead.
+ * Ruling D2: `EffectParams` now round-trips through the document's
+ * `data-fd-effect` attribute (read/written via `useStudioNode`'s `effect`
+ * state and `setEffectParams`), so this section seeds its working state from
+ * the prop instead of resetting to "none" on every selection — reopening the
+ * panel on a node that already carries an effect repopulates the sliders
+ * that produced it, not just the resulting `text-shadow`.
  */
-export default function EffectsSection({ styles, onUpdate }: Props) {
-  const [params, setParams] = useState<EffectParams>(EFFECT_DEFAULTS.none)
+export default function EffectsSection({ styles, effect, onEffectChange }: Props) {
+  const [params, setParams] = useState<EffectParams>(effect ?? EFFECT_DEFAULTS.none)
+
+  // Re-seed whenever the selection changes (a new `effect` prop arrives,
+  // including `null` for a node with none) rather than only on mount — this
+  // section is not remounted when the selected node changes.
+  useEffect(() => {
+    setParams(effect ?? EFFECT_DEFAULTS.none)
+  }, [effect])
 
   function apply(next: EffectParams) {
     const prevKind = params.kind
@@ -72,7 +82,11 @@ export default function EffectsSection({ styles, onUpdate }: Props) {
       // transparent text).
       patch.color = ''
     }
-    onUpdate(patch)
+    // 'none' has nothing worth remembering — clear the stored attribute
+    // rather than writing `{ kind: 'none' }` into the document, so a node
+    // that was never given an effect and a node whose effect was cleared
+    // look identical on disk.
+    onEffectChange(next.kind === 'none' ? null : next, patch)
   }
 
   function setKind(kind: EffectKind) {
