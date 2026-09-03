@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import PanelSection from './panel/PanelSection'
 import NumberField from './panel/NumberField'
 import Segmented from './panel/Segmented'
+import TypographySection from './panel/TypographySection'
 import { formatLength, parseLength, type NodeStyles } from '@/lib/studioNode'
 
 interface Props { styles: NodeStyles; onUpdate: (next: NodeStyles) => void; hasSelection: boolean }
@@ -44,6 +45,8 @@ export default function PropertiesPanel({ styles, onUpdate, hasSelection }: Prop
           <NumberField label="H" value={formatLength(styles.height ?? '')} onCommit={setLength('height')} />
         </div>
       </PanelSection>
+
+      <TypographySection styles={styles} onUpdate={onUpdate} />
 
       <PanelSection title="Radius">
         <NumberField label="R" value={formatLength(styles['border-radius'] ?? '')} onCommit={setLength('border-radius')} />
