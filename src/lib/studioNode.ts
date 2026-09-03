@@ -7,6 +7,16 @@
 
 export type NodeStyles = Record<string, string>
 
+/**
+ * The attribute Ruling D2 gives an applied text effect's parameters a home in
+ * the document itself (see textEffects.ts). Defined here -- the shared,
+ * DOM-free node model both the bridge and the agent's studio_* tools import
+ * from -- rather than in studioBridge.ts, which builds BRIDGE_SCRIPT (a
+ * DOM-touching injected-string template) and so isn't itself DOM-free as a
+ * whole.
+ */
+export const EFFECT_ATTR = 'data-fd-effect'
+
 export interface NodeRef {
   artboardId: string
   elementId: string

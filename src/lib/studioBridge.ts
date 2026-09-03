@@ -7,8 +7,12 @@
  * so the canvas can ignore postMessage traffic from anything else.
  */
 
-import { PANEL_PROPERTIES } from './studioNode'
+import { PANEL_PROPERTIES, EFFECT_ATTR } from './studioNode'
 import type { EffectParams } from './textEffects'
+
+// Re-exported for callers (and studioBridge.test.ts) that import it from here,
+// as before the move — its canonical definition now lives in ./studioNode.
+export { EFFECT_ATTR }
 
 export interface BridgeRect { x: number; y: number; width: number; height: number }
 
@@ -17,9 +21,9 @@ export interface BridgeRect { x: number; y: number; width: number; height: numbe
  * document itself. The bridge reads/writes it as plain JSON text, distinct
  * from `PANEL_PROPERTIES` (which is only ever computed CSS) because the
  * kind/intensity/offset that produced a `text-shadow` isn't recoverable from
- * the `text-shadow` value alone.
+ * the `text-shadow` value alone. Defined in ./studioNode (DOM-free, shared
+ * with the agent's studio_* tools) rather than here.
  */
-export const EFFECT_ATTR = 'data-fd-effect'
 
 export type BridgeMessage =
   | { __fdCanvas: 'bounds'; width: number; height: number }

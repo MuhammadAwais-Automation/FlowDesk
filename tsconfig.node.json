@@ -7,7 +7,8 @@
     "src/lib/agentCatchUp.ts",
     "src/lib/layerOps.ts",
     "src/lib/textEffects.ts",
-    "src/lib/fontCatalogue.ts"
+    "src/lib/fontCatalogue.ts",
+    "src/lib/studioNode.ts"
   ],
   "compilerOptions": {
     "composite": true,

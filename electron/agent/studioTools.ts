@@ -13,6 +13,7 @@ import { readElement, patchStyle, patchAttr, applyLayerCommand } from '../studio
 import { effectToCss, type EffectParams } from '../../src/lib/textEffects'
 import { FONT_CATALOGUE, findFont, searchFonts, type FontFamily } from '../../src/lib/fontCatalogue'
 import { isLayerCommand, type LayerCommand } from '../../src/lib/layerOps'
+import { EFFECT_ATTR, isTextTag } from '../../src/lib/studioNode'
 
 /**
  * Studio's agent surface.
@@ -62,30 +63,6 @@ export const STUDIO_TOOL_NAMES = [
   'mcp__workers__studio_set_stroke',
   'mcp__workers__studio_layer_op',
 ]
-
-/**
- * Matches `EFFECT_ATTR` in `src/lib/studioBridge.ts` (Task 9's Ruling D2).
- * Duplicated as a plain string rather than imported: studioBridge.ts is
- * browser-bridge code, not part of the node-compiled surface listed in
- * tsconfig.node.json, and this is the one constant from it these tools need.
- */
-const EFFECT_ATTR = 'data-fd-effect'
-
-/**
- * Ruling D1 (StrokeSection.tsx / studioNode.ts): a text node's stroke is
- * `-webkit-text-stroke`, a box's is `border`. Duplicated here rather than
- * imported from src/lib/studioNode.ts, which is not part of the node-compiled
- * surface (only layerOps.ts, textEffects.ts and fontCatalogue.ts were judged
- * DOM-free and added there).
- */
-const TEXT_TAGS = new Set([
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'p', 'span', 'a', 'li', 'blockquote', 'figcaption', 'label',
-  'strong', 'em', 'b', 'i', 'small', 'caption', 'q', 'cite', 'mark',
-])
-function isTextTag(tag: string): boolean {
-  return TEXT_TAGS.has(tag.toLowerCase())
-}
 
 const GENERIC_FALLBACK: Record<FontFamily['category'], string> = {
   display: 'sans-serif',
