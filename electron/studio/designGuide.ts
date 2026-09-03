@@ -48,6 +48,25 @@ containing any NEVER item, is not following the reference system.
 - A subject placed flatly in front of or behind the hero type when the
   reference composition calls for interleaving (the subject in front of
   some letterforms, behind others).
+
+## Tooling — use these instead of improvising
+
+- **Fonts.** 129 families ship with the app and render offline. Call
+  \`studio_list_fonts\` (searchable by name and category) to pick one instead
+  of reaching for a Google Fonts \`<link>\` or any other CDN font — a past
+  generation did exactly that, and it broke offline rendering and PDF/PNG
+  export. Every font this system uses must come from the bundled catalogue.
+- **Text effects.** Seven effects — shadow, lift, hollow, splice, echo, neon,
+  glitch — are available as one call each via \`studio_set_effect\`. They
+  compute \`text-shadow\`/\`-webkit-text-stroke\` correctly and keep the effect
+  editable afterwards (by the panel too); do not hand-write those CSS
+  properties yourself through \`studio_set_text_style\` or
+  \`studio_update_styles\`.
+- **Per-element style reading.** \`studio_get_computed_styles\` reads one
+  element's tag, inline style, and applied effect. Read before you write —
+  \`studio_set_text_style\`, \`studio_set_effect\`, \`studio_set_fill\` and
+  \`studio_set_stroke\` only touch the fields you pass, so a read-modify-write
+  is more reliable than guessing the current value.
 `
 
 export function getDesignGuide(): string {

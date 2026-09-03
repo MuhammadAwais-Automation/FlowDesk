@@ -1,6 +1,14 @@
 {
   "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
-  "include": ["electron.vite.config.*", "electron/**/*", "src/types/**/*", "src/lib/agentCatchUp.ts"],
+  "include": [
+    "electron.vite.config.*",
+    "electron/**/*",
+    "src/types/**/*",
+    "src/lib/agentCatchUp.ts",
+    "src/lib/layerOps.ts",
+    "src/lib/textEffects.ts",
+    "src/lib/fontCatalogue.ts"
+  ],
   "compilerOptions": {
     "composite": true,
     "types": ["electron-vite/node"]
