@@ -1,0 +1,196 @@
+<title>Studio Design System Upgrade</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --ground: #F4F3F7; --surface: #FFFFFF; --surface-2: #EAE8F0;
+    --line: #D6D2E0; --line-soft: #E6E3EE;
+    --ink: #1A1721; --ink-2: #4A4458; --ink-3: #7B7389;
+    --accent: #0E7F97; --ok: #1E7A55; --warn: #96650B; --idle: #7B7389;
+    --ok-bg: #DDF0E7; --warn-bg: #F7ECD4; --run-bg: #DCEFF3; --idle-bg: #EAE8F0;
+    --shadow: 0 1px 2px rgba(26,23,33,.06), 0 8px 24px -12px rgba(26,23,33,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #14121A; --surface: #1D1A25; --surface-2: #262231;
+      --line: #322C40; --line-soft: #2A2534;
+      --ink: #EDE9F2; --ink-2: #B9B2C6; --ink-3: #857C94;
+      --accent: #3FC5DE; --ok: #5FD39A; --warn: #E8B04B; --idle: #857C94;
+      --ok-bg: #14342A; --warn-bg: #382C12; --run-bg: #10323A; --idle-bg: #262231;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #14121A; --surface: #1D1A25; --surface-2: #262231;
+    --line: #322C40; --line-soft: #2A2534;
+    --ink: #EDE9F2; --ink-2: #B9B2C6; --ink-3: #857C94;
+    --accent: #3FC5DE; --ok: #5FD39A; --warn: #E8B04B; --idle: #857C94;
+    --ok-bg: #14342A; --warn-bg: #382C12; --run-bg: #10323A; --idle-bg: #262231;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background: var(--ground); color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif; font-size:15px; line-height:1.6;
+    -webkit-font-smoothing: antialiased; }
+  .wrap { max-width:1060px; margin:0 auto; padding:40px 24px 96px; }
+  .eyebrow { font-family:"Oswald",sans-serif; font-size:12px; font-weight:500;
+    letter-spacing:.16em; text-transform:uppercase; color:var(--ink-3); }
+  h1 { font-family:"Oswald",sans-serif; font-weight:600; font-size:clamp(32px,6vw,52px);
+    line-height:1.02; text-transform:uppercase; margin:6px 0 12px; text-wrap:balance; }
+  h2 { font-family:"Oswald",sans-serif; font-weight:500; font-size:15px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-2); margin:0; }
+  .lede { color:var(--ink-2); max-width:64ch; margin:0; }
+  header { border-bottom:1px solid var(--line); padding-bottom:26px; }
+  .stamp { font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--ink-3);
+    margin-top:14px; display:flex; flex-wrap:wrap; gap:6px 18px; }
+  .stamp b { color:var(--ink-2); font-weight:500; }
+  section { margin-top:48px; }
+  .sechead { display:flex; align-items:baseline; gap:14px; border-bottom:1px solid var(--line-soft);
+    padding-bottom:10px; margin-bottom:20px; }
+  .sechead p { margin:0; font-size:13px; color:var(--ink-3); }
+  .pill { display:inline-flex; align-items:center; gap:6px; font-family:"IBM Plex Mono",monospace;
+    font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase;
+    padding:3px 8px; border-radius:3px; white-space:nowrap; }
+  .p-ok{background:var(--ok-bg);color:var(--ok)} .p-run{background:var(--run-bg);color:var(--accent)}
+  .p-warn{background:var(--warn-bg);color:var(--warn)} .p-idle{background:var(--idle-bg);color:var(--idle)}
+  ol.ladder { list-style:none; margin:0; padding:0; display:grid; gap:2px; }
+  ol.ladder li { display:grid; grid-template-columns:40px 1fr auto; gap:14px; align-items:start;
+    padding:13px 16px; background:var(--surface); border:1px solid var(--line); }
+  ol.ladder li:first-child{border-radius:6px 6px 0 0} ol.ladder li:last-child{border-radius:0 0 6px 6px}
+  ol.ladder li + li { border-top:none; }
+  .step { font-family:"Oswald",sans-serif; font-size:19px; font-weight:600; color:var(--ink-3);
+    font-variant-numeric:tabular-nums; line-height:1.35; }
+  li.done .step{color:var(--ok)} li.now .step{color:var(--accent)}
+  .ladder strong { font-weight:600; display:block; letter-spacing:-.01em; }
+  .ladder span.why { color:var(--ink-3); font-size:13.5px; }
+  .cards { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:6px;
+    padding:18px; box-shadow:var(--shadow); }
+  .card h3 { font-size:15px; font-weight:600; margin:10px 0 6px; letter-spacing:-.01em; }
+  .card p { margin:0; font-size:14px; color:var(--ink-2); }
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-family:"Oswald",sans-serif; font-weight:500; font-size:12px;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3);
+    padding:0 12px 8px 0; border-bottom:1px solid var(--line); }
+  td { padding:11px 12px 11px 0; border-bottom:1px solid var(--line-soft);
+    vertical-align:top; color:var(--ink-2); }
+  td:first-child { color:var(--ink); }
+  footer { margin-top:56px; padding-top:20px; border-top:1px solid var(--line);
+    font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--ink-3); }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">FlowDesk Studio · build log</p>
+  <h1>Design System Upgrade</h1>
+  <p class="lede">Typography, effects, fill, stroke and layers to the depth of Figma, Canva and Photoshop — every one of them reachable by the agent, plus three things a manual tool cannot have.</p>
+  <div class="stamp">
+    <span>branch <b>codex/design-system-upgrade</b></span>
+    <span>bar <b>Figma · Canva · Photoshop</b></span>
+    <span>tasks <b>13</b></span>
+  </div>
+</header>
+
+<section>
+  <div class="sechead">
+    <h2>What research settled</h2>
+    <p>Four decisions made before any code, each with the reason it went that way.</p>
+  </div>
+  <div class="cards">
+    <div class="card">
+      <span class="pill p-ok">Decided</span>
+      <h3>Fonts ship in the app, not from a CDN</h3>
+      <p>The poster generated during testing pulled Anton from Google's CDN — so it renders differently offline and the export silently loses the face. Fontsource packages, latin subset, ~15–25 MB for 100 families. The project already used this pattern for three fonts.</p>
+    </div>
+    <div class="card">
+      <span class="pill p-ok">Decided</span>
+      <h3>Seven text effects are one vocabulary</h3>
+      <p>Canva's Shadow, Lift, Hollow, Splice, Echo, Neon and Glitch all decompose into <code>text-shadow</code> and <code>-webkit-text-stroke</code>. So they are one parameterised primitive set, not seven implementations — which is what keeps them editable after the fact.</p>
+    </div>
+    <div class="card">
+      <span class="pill p-ok">Decided</span>
+      <h3>Photoshop's layer model fits the DOM</h3>
+      <p>Reorder is sibling order, group is a wrapper, hide is <code>display</code>, opacity and blend are CSS. Two things do not map — fill-versus-layer opacity, and clipping masks — and are deliberately out of scope rather than faked.</p>
+    </div>
+    <div class="card">
+      <span class="pill p-warn">Load-bearing</span>
+      <h3>OpenType features are not optional</h3>
+      <p>The reference posters' swash is a <em>separate glyph inside the font file</em>. No amount of CSS produces it. Without a <code>font-feature-settings</code> control, that look stays permanently out of reach.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sechead">
+    <h2>Three agent-native features</h2>
+    <p>Each is pointless without an agent, which is why no manual tool has them.</p>
+  </div>
+  <div class="cards">
+    <div class="card">
+      <span class="pill p-idle">Task 11</span>
+      <h3>Design Lint</h3>
+      <p>The guide made the rules readable; lint makes them enforced. The poster built during testing used one typeface and a texture at <code>opacity: 0.16</code> — the exact number the guide warns about — because advice a model reads is advice it can ignore. Each violation carries a one-click agent fix.</p>
+    </div>
+    <div class="card">
+      <span class="pill p-idle">Task 12</span>
+      <h3>Variant fan-out</h3>
+      <p>One command, N genuinely different design directions side by side — not N renders of one layout. A person cannot do this because their cost per variant is an hour. The agent's is one call.</p>
+    </div>
+    <div class="card">
+      <span class="pill p-idle">Task 13</span>
+      <h3>Design memory</h3>
+      <p>Every edit made right after the agent acts is a correction. Three of the same shape becomes a stated preference folded into the guide — so it stops being static advice and becomes the record of this user's taste, learned from what they change rather than what they say.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sechead">
+    <h2>Build ladder</h2>
+    <p>Models first, then their panels, then the shared bridge, then the agent surface.</p>
+  </div>
+  <ol class="ladder">
+    <li class="now"><span class="step">01</span><span><strong>Font catalogue</strong><span class="why">100+ Fontsource families, generated catalogue with category, weights and variable-axis metadata.</span></span><span class="pill p-run">Running</span></li>
+    <li><span class="step">02</span><span><strong>Lazy font loading</strong><span class="why">A face is injected the first time it is used — eager loading of 100 families would stall app and iframe alike.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">03</span><span><strong>Effects model</strong><span class="why">Shadow, lift, hollow, splice, echo, neon, glitch — parameterised, not fixed looks.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">04</span><span><strong>Layer operations</strong><span class="why">Reorder, group, lock, hide, rename, duplicate, delete — as one command union three surfaces share.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">05</span><span><strong>Font picker</strong><span class="why">Every row renders its own name in its own face — what makes 100 families usable rather than a wall of identical text.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">06</span><span><strong>Typography section</strong><span class="why">Family, weight, size, spacing, leading, case, alignment, decoration, and the family's real OpenType features.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">07</span><span><strong>Fill, stroke, effects sections</strong><span class="why">Gradients with stops and angle; stroke width and colour; effect parameters that follow the chosen kind.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">08</span><span><strong>Layers panel</strong><span class="why">Hide, lock, drag-reorder, rename, groups, per-layer opacity and blend.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">09</span><span><strong>Bridge and hook</strong><span class="why">Every new property and every layer command crossing into the document, through the existing persist-and-undo path.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">10</span><span><strong>Agent tools</strong><span class="why">Parity with the panel — a control the agent cannot reach is a control the conversation cannot use.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">11</span><span><strong>Design Lint</strong><span class="why">Rules checked continuously, each violation with a one-click agent fix.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">12</span><span><strong>Variant fan-out</strong><span class="why">N directions in parallel, keep one, discard the rest.</span></span><span class="pill p-idle">Queued</span></li>
+    <li><span class="step">13</span><span><strong>Design memory</strong><span class="why">Overrides aggregated into stated preferences the guide returns.</span></span><span class="pill p-idle">Queued</span></li>
+  </ol>
+</section>
+
+<section>
+  <div class="sechead">
+    <h2>The gap being closed</h2>
+    <p>What the panel exposes today against what the bar exposes.</p>
+  </div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Category</th><th>Today</th><th>Bar</th></tr></thead>
+    <tbody>
+      <tr><td>Typography</td><td>nothing</td><td>family, weight, size, letter-spacing, line-height, paragraph spacing, case, align, decoration, OpenType</td></tr>
+      <tr><td>Fonts</td><td>whatever the document's CSS names</td><td>searchable picker over 100+ bundled families</td></tr>
+      <tr><td>Fill</td><td>one solid colour</td><td>solid, linear and radial gradient, image</td></tr>
+      <tr><td>Stroke</td><td>nothing</td><td>width, colour, alignment</td></tr>
+      <tr><td>Effects</td><td>nothing</td><td>drop shadow, inner shadow, glow, outline, blur — stacked</td></tr>
+      <tr><td>Layers</td><td>a flat read-only tree</td><td>reorder, group, lock, hide, rename, per-layer opacity and blend</td></tr>
+      <tr><td>Agent tools</td><td>11, none per-element</td><td>enough to build and edit any design conversationally</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<footer>
+  Spec and plan live in docs/superpowers/ on branch codex/design-system-upgrade.
+  Every task ends with tests and a clean two-project typecheck before it counts as done.
+</footer>
+
+</div>
