@@ -374,6 +374,12 @@ export default function StudioCanvas({ isActive }: Props) {
           tree={node.tree}
           selected={node.selected}
           onSelectNode={selectNodeFromLayers}
+          // Task 9 wires this to the bridge (group/ungroup/reorder/hide/lock/
+          // rename/delete/duplicate all mutate through it); until then the
+          // panel is display- and selection-only for those operations.
+          onCommand={() => {}}
+          styles={node.styles}
+          onUpdateStyles={node.update}
         />
         <ToolRail tool={tool} onChange={setTool} />
         <div
