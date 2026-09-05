@@ -5,14 +5,21 @@ type SettingsRecord = Record<string, unknown> & {
   jarvisCredentialsMigrated?: boolean
 }
 
+export type CredentialHashAllowlist = {
+  geminiApiKey: ReadonlySet<string>
+  livekitUrl: ReadonlySet<string>
+  livekitApiKey: ReadonlySet<string>
+  livekitApiSecret: ReadonlySet<string>
+}
+
 const compromisedCredentialHashes = {
   geminiApiKey: new Set(['13ed2ad852f5775fafb308dbd001b9d095eace7727be0905e84809d322eb1eae']),
   livekitUrl: new Set(['bef89f10804d742b67b6a355f1ee69e5ba3dd3c69049396eee12bc63473ab05f']),
   livekitApiKey: new Set(['0560777eb5d82167b797eb7532714f6574c478390d7fbad5143a6a26249243cd']),
   livekitApiSecret: new Set(['6d5c41dc1f44f673c33853a193fdb3da6da29b6b82a071b102283fcf31584cee']),
-} as const
+} satisfies CredentialHashAllowlist
 
-function sha256(value: string) {
+export function sha256(value: string) {
   const input = new TextEncoder().encode(value)
   const paddedLength = Math.ceil((input.length + 9) / 64) * 64
   const bytes = new Uint8Array(paddedLength)
@@ -84,7 +91,10 @@ function shouldClear(value: string | undefined, compromisedHashes: ReadonlySet<s
   return compromisedHashes.has(sha256(value))
 }
 
-export function migrateJarvisSettings(input: SettingsRecord | null | undefined): {
+export function migrateJarvisSettings(
+  input: SettingsRecord | null | undefined,
+  compromisedHashes: CredentialHashAllowlist = compromisedCredentialHashes,
+): {
   settings: Partial<JarvisSettings>
   persisted: SettingsRecord
   changed: boolean
@@ -95,10 +105,10 @@ export function migrateJarvisSettings(input: SettingsRecord | null | undefined):
     return { settings: existing, persisted, changed: false }
   }
   const settings: Partial<JarvisSettings> = { ...existing }
-  if (shouldClear(existing.geminiApiKey, compromisedCredentialHashes.geminiApiKey)) settings.geminiApiKey = ''
-  if (shouldClear(existing.livekitUrl, compromisedCredentialHashes.livekitUrl)) settings.livekitUrl = ''
-  if (shouldClear(existing.livekitApiKey, compromisedCredentialHashes.livekitApiKey)) settings.livekitApiKey = ''
-  if (shouldClear(existing.livekitApiSecret, compromisedCredentialHashes.livekitApiSecret)) settings.livekitApiSecret = ''
+  if (shouldClear(existing.geminiApiKey, compromisedHashes.geminiApiKey)) settings.geminiApiKey = ''
+  if (shouldClear(existing.livekitUrl, compromisedHashes.livekitUrl)) settings.livekitUrl = ''
+  if (shouldClear(existing.livekitApiKey, compromisedHashes.livekitApiKey)) settings.livekitApiKey = ''
+  if (shouldClear(existing.livekitApiSecret, compromisedHashes.livekitApiSecret)) settings.livekitApiSecret = ''
   return {
     settings,
     persisted: { ...persisted, jarvisSettings: settings, jarvisCredentialsMigrated: true },
