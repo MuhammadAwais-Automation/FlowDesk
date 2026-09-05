@@ -160,4 +160,16 @@ describe('NotebookJobQueue', () => {
 
     expect(job).toMatchObject({ status: 'running', error: 'Timed out waiting for acknowledgement' })
   })
+
+  it('notifies a compatibility bridge whenever durable state changes', async () => {
+    const observed: NotebookJob[][] = []
+    const queue = new NotebookJobQueue(memoryStore(), capabilities({
+      startResearch: async () => ({ ok: true, exitCode: 0, data: { status: 'running', task_id: 'task-1' } }),
+    }), () => null, jobs => observed.push(jobs))
+
+    await queue.startResearch({ notebookId: 'n-1', query: 'topic', mode: 'deep' })
+
+    expect(observed.length).toBeGreaterThan(0)
+    expect(observed.at(-1)?.[0]).toMatchObject({ kind: 'research', status: 'running', providerTaskId: 'task-1' })
+  })
 })

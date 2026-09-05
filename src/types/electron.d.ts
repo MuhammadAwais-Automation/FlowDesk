@@ -1,5 +1,6 @@
 import type { CustomTool } from './browser'
 import type { ProjectSessionSnapshot } from './project'
+import type { BrainCandidate, BrainContextPack, BrainJob, BrainMemory, BrainQuery, BrainScope, BrainStatus, MemoryKind } from './brain'
 
 export interface GmailSession {
   email: string
@@ -173,6 +174,35 @@ export interface ElectronAPI {
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<void>
 
+  brainGetStatus: () => Promise<BrainStatus>
+  brainGetOverview: (scopeId?: string) => Promise<{ memories: number; candidates: number; jobs: number; activeJobs: number }>
+  brainEnsureScope: (input: { type: BrainScope['type']; externalRef: string; name: string; parentId?: string | null }) => Promise<BrainScope>
+  brainSearch: (input: BrainQuery) => Promise<BrainContextPack>
+  brainGetMemory: (id: string) => Promise<BrainMemory | null>
+  brainListMemories: (scopeId?: string) => Promise<BrainMemory[]>
+  brainRemember: (input: { scopeId: string; kind: MemoryKind; text: string; shareable?: boolean; importance?: number; subject?: string; predicate?: string; sourceRef?: string }) => Promise<BrainMemory>
+  brainForget: (id: string) => Promise<boolean>
+  brainListCandidates: (scopeId?: string) => Promise<BrainCandidate[]>
+  brainDecideCandidate: (input: { id: string; decision: 'accept' | 'reject'; editedText?: string }) => Promise<BrainMemory | null>
+  brainListJobs: () => Promise<BrainJob[]>
+  brainGetArtifactManifest: (jobId: string) => Promise<Record<string, unknown> | null>
+  brainRunRecipe: (input: unknown) => Promise<BrainJob>
+  brainCompleteJob: (input: { id: string; result: Record<string, unknown> }) => Promise<BrainJob>
+  brainControlJob: (input: { id: string; action: 'cancel' | 'retry' }) => Promise<boolean>
+  brainGetVaultStatus: () => Promise<{ root: string; watching: boolean; conflicts: number }>
+  brainSyncVault: () => Promise<{ files: string[]; reconciled: Array<{ path: string; status: string }> }>
+  brainListVaultConflicts: () => Promise<Array<Record<string, unknown>>>
+  brainResolveVaultConflict: (input: { id: string; resolution: 'database' | 'file' }) => Promise<BrainMemory | null>
+  brainGetConsent: (input: { scopeId: string; recipeId: string; provider: string }) => Promise<boolean>
+  brainGrantConsent: (input: { scopeId: string; recipeId: string; provider: string; fields: string[] }) => Promise<boolean>
+  brainRevokeConsent: (input: { scopeId: string; recipeId: string; provider: string }) => Promise<boolean>
+  brainExportBackup: () => Promise<{ outputPath: string; fileCount: number } | null>
+  brainImportBackup: () => Promise<{ manifest: Record<string, unknown>; rollbackDatabase: string } | null>
+  brainListEntities: (scopeId: string) => Promise<Array<{ id: string; scopeId: string; type: string; name: string; properties: Record<string, unknown>; createdAt: string; updatedAt: string }>>
+  brainGetGraph: (scopeId: string) => Promise<{ nodes: Array<{ id: string; type: string; name: string }>; edges: Array<{ id: string; from: string; to: string; relation: string; confidence: number; sourceRef: string }> }>
+  brainRunSocialRecipe: (input: unknown) => Promise<unknown>
+  onBrainEvent: (cb: (event: unknown) => void) => () => void
+
   // NotebookLM Research Studio
   notebooklmStatus: () => Promise<unknown>
   notebooklmServiceStatus: () => Promise<NotebookLMServiceState>
@@ -310,7 +340,7 @@ export interface ElectronAPI {
   offInlineDictationEvent: (cb: (e: unknown, data: unknown) => void) => void
 
   // Agent: selected lead SDK provider that can call the browser-driven worker tools
-  agentSendMessage: (input: { prompt: string; sessionId: string; runId: string }) => Promise<{ runId: string }>
+  agentSendMessage: (input: { prompt: string; sessionId: string; runId: string; brain?: { use: boolean; learn: boolean; temporary: boolean } }) => Promise<{ runId: string }>
   agentGetRunState: () => Promise<AgentRunSnapshot>
 
   // Studio canvas

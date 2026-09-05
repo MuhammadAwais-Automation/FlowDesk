@@ -5,6 +5,39 @@ contextBridge.exposeInMainWorld('electronAPI', {
   storeGet: (key: string) => ipcRenderer.invoke('store:get', key),
   storeSet: (key: string, value: unknown) => ipcRenderer.invoke('store:set', key, value),
 
+  brainGetStatus: () => ipcRenderer.invoke('brain:getStatus'),
+  brainGetOverview: (scopeId?: string) => ipcRenderer.invoke('brain:getOverview', scopeId),
+  brainEnsureScope: (input: unknown) => ipcRenderer.invoke('brain:ensureScope', input),
+  brainSearch: (input: unknown) => ipcRenderer.invoke('brain:search', input),
+  brainGetMemory: (id: string) => ipcRenderer.invoke('brain:getMemory', id),
+  brainListMemories: (scopeId?: string) => ipcRenderer.invoke('brain:listMemories', scopeId),
+  brainRemember: (input: unknown) => ipcRenderer.invoke('brain:remember', input),
+  brainForget: (id: string) => ipcRenderer.invoke('brain:forget', id),
+  brainListCandidates: (scopeId?: string) => ipcRenderer.invoke('brain:listCandidates', scopeId),
+  brainDecideCandidate: (input: unknown) => ipcRenderer.invoke('brain:decideCandidate', input),
+  brainListJobs: () => ipcRenderer.invoke('brain:listJobs'),
+  brainGetArtifactManifest: (jobId: string) => ipcRenderer.invoke('brain:getArtifactManifest', jobId),
+  brainRunRecipe: (input: unknown) => ipcRenderer.invoke('brain:runRecipe', input),
+  brainCompleteJob: (input: unknown) => ipcRenderer.invoke('brain:completeJob', input),
+  brainControlJob: (input: unknown) => ipcRenderer.invoke('brain:controlJob', input),
+  brainGetVaultStatus: () => ipcRenderer.invoke('brain:getVaultStatus'),
+  brainSyncVault: () => ipcRenderer.invoke('brain:syncVault'),
+  brainListVaultConflicts: () => ipcRenderer.invoke('brain:listVaultConflicts'),
+  brainResolveVaultConflict: (input: unknown) => ipcRenderer.invoke('brain:resolveVaultConflict', input),
+  brainGetConsent: (input: unknown) => ipcRenderer.invoke('brain:getConsent', input),
+  brainGrantConsent: (input: unknown) => ipcRenderer.invoke('brain:grantConsent', input),
+  brainRevokeConsent: (input: unknown) => ipcRenderer.invoke('brain:revokeConsent', input),
+  brainExportBackup: () => ipcRenderer.invoke('brain:exportBackup'),
+  brainImportBackup: () => ipcRenderer.invoke('brain:importBackup'),
+  brainListEntities: (scopeId: string) => ipcRenderer.invoke('brain:listEntities', scopeId),
+  brainGetGraph: (scopeId: string) => ipcRenderer.invoke('brain:getGraph', scopeId),
+  brainRunSocialRecipe: (input: unknown) => ipcRenderer.invoke('brain:runSocialRecipe', input),
+  onBrainEvent: (cb: (event: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => cb(payload)
+    ipcRenderer.on('brain:event', listener)
+    return () => ipcRenderer.removeListener('brain:event', listener)
+  },
+
   // NotebookLM Research Studio. The renderer receives results only; the local
   // notebooklm-py profile and Google session remain in the main process.
   notebooklmStatus: () => ipcRenderer.invoke('notebooklm:status'),
@@ -166,7 +199,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   offInlineDictationEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('inlineDictation:event', cb),
 
   // Agent: selected lead SDK provider that can call the browser-driven worker tools
-  agentSendMessage: (input: { prompt: string; sessionId: string; runId: string }) => ipcRenderer.invoke('agent:sendMessage', input),
+  agentSendMessage: (input: { prompt: string; sessionId: string; runId: string; brain?: { use: boolean; learn: boolean; temporary: boolean } }) => ipcRenderer.invoke('agent:sendMessage', input),
   agentGetRunState: () => ipcRenderer.invoke('agent:getRunState'),
 
   // Studio canvas

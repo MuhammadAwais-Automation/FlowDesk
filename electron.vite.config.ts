@@ -9,7 +9,10 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       lib: {
-        entry: resolve('electron/main.ts'),
+        entry: {
+          main: resolve('electron/main.ts'),
+          brainUtility: resolve('electron/brain/utility.ts'),
+        },
       }
     }
   },

@@ -213,6 +213,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "electron-store": "^8.2.0",
+    "fflate": "^0.8.3",
     "livekit-client": "^2.22.0",
     "livekit-server-sdk": "^2.18.0",
     "lucide-react": "^0.344.0",
@@ -226,7 +227,7 @@
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@testing-library/react": "^16.3.3",
-    "@types/node": "^20.19.43",
+    "@types/node": "^24.13.3",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.0.2",

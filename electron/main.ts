@@ -1,8 +1,15 @@
 import { app, BrowserWindow, ipcMain, globalShortcut, session, shell, Menu, Tray, nativeImage, crashReporter, nativeTheme, protocol, net, dialog } from 'electron'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { deflateSync } from 'zlib'
 import { mkdir, writeFile, copyFile } from 'fs/promises'
 import { pathToFileURL } from 'url'
+import { createElectronBrainClient } from './brain/electronClient'
+import type { BrainClient } from './brain/client'
+import { composePromptWithBrain } from './agent/brainContext'
+import type { BrainContextPack, BrainScope } from '../src/types/brain'
+import { configureBrainTools } from './agent/brainTools'
+import { brainModePolicy, normalizeAgentBrainMode } from './agent/brainMode'
+import { buildContinuationPrompt, groupContinuations } from './agent/continuations'
 
 // Initializes Crashpad so Windows dev runs are less likely to log "not connected" (harmless Chromium noise otherwise).
 crashReporter.start({ productName: 'FlowDesk', uploadToServer: false })
@@ -87,6 +94,7 @@ import { replaceArtboardHtml } from './studio/artboards'
 import { buildCatchUp } from '../src/lib/agentCatchUp'
 import { runAgentTurn, type AgentStreamEvent } from './agent/leadAgent'
 import { waStatus, waListChats, waListMessages, waSend } from './whatsapp'
+import { liFeed, liSearch } from './linkedin'
 import { runJarvisTurn } from './jarvis/jarvisService'
 import { createLivekitToken } from './jarvis/jarvisToken'
 import {
@@ -102,6 +110,7 @@ import { NotebookJobQueue, type NotebookJob } from './notebooklmJobs'
 import { configureNotebookJobRuntime } from './notebooklmJobRuntime'
 import { recordProviderUsage, type ProviderLimits } from './providerUsage'
 import { alwaysApprove, type RequestApproval } from './agent/approval'
+import { recordsFromConnectorResult, socialRecipeRequestSchema } from './brain/socialRecipes'
 
 // @anthropic-ai/claude-agent-sdk (electron/claudeSdkProvider.ts, currently
 // unused pending the multi-agent orchestrator section) auths via the local
@@ -110,6 +119,8 @@ import { alwaysApprove, type RequestApproval } from './agent/approval'
 // switching the SDK to billed API usage, unconditionally at startup so it's
 // never a race against whichever feature imports the SDK first.
 delete process.env.ANTHROPIC_API_KEY
+
+const captureDebugEnabled = () => !app.isPackaged && process.env.FD_CAPTURE_DEBUG === '1'
 
 const DEFAULT_TOOLS: CustomTool[] = [
   { id: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com', addedAt: '2024-01-01T00:00:00.000Z' },
@@ -174,6 +185,16 @@ if (!process.env.MCP_TOOL_TIMEOUT) process.env.MCP_TOOL_TIMEOUT = '90000'
 
 let mainWindow: BrowserWindow
 let tray: Tray | null = null
+let brainClient: BrainClient | null = null
+let activeBrainScopeId: string | null = null
+let activeBrainWritesAllowed = false
+let continuationTimer: ReturnType<typeof setInterval> | null = null
+let drainingContinuations = false
+
+async function brainRequest(method: Parameters<BrainClient['request']>[0], payload: unknown) {
+  if (!brainClient) throw new Error('Brain is starting')
+  return brainClient.request(method, payload)
+}
 
 // ── PNG icon builder (no external deps) ──────────────────────────
 function makePNG(r: number, g: number, b: number, size = 16): Buffer {
@@ -336,6 +357,117 @@ ipcMain.handle('store:set', (_e, key: string, value: unknown) => {
   } else if (key.includes('hotkeys')) {
     registerShortcuts()
   }
+})
+
+ipcMain.handle('brain:getStatus', () => brainRequest('status', {}))
+ipcMain.handle('brain:getOverview', (_e, scopeId?: string) => brainRequest('overview', { scopeId }))
+ipcMain.handle('brain:ensureScope', (_e, input: unknown) => brainRequest('ensureScope', input))
+ipcMain.handle('brain:search', (_e, input: unknown) => brainRequest('search', input))
+ipcMain.handle('brain:getMemory', (_e, id: string) => brainRequest('getMemory', { id }))
+ipcMain.handle('brain:listMemories', (_e, scopeId?: string) => brainRequest('listMemories', { scopeId }))
+ipcMain.handle('brain:remember', (_e, input: unknown) => brainRequest('remember', input))
+ipcMain.handle('brain:forget', async (_e, id: string) => {
+  const confirmation = await dialog.showMessageBox({
+    type: 'warning',
+    buttons: ['Cancel', 'Forget memory'],
+    defaultId: 0,
+    cancelId: 0,
+    title: 'Forget Brain memory?',
+    message: 'This creates a recoverable tombstone and removes the memory from retrieval.',
+  })
+  if (confirmation.response !== 1) return false
+  return brainRequest('forget', { id })
+})
+ipcMain.handle('brain:listCandidates', (_e, scopeId?: string) => brainRequest('listCandidates', { scopeId }))
+ipcMain.handle('brain:decideCandidate', (_e, input: unknown) => brainRequest('decideCandidate', input))
+ipcMain.handle('brain:listJobs', () => brainRequest('listJobs', {}))
+ipcMain.handle('brain:getArtifactManifest', (_e, jobId: string) => brainRequest('getArtifactManifest', { jobId }))
+ipcMain.handle('brain:runRecipe', (_e, input: unknown) => brainRequest('enqueueJob', input))
+ipcMain.handle('brain:completeJob', (_e, input: unknown) => brainRequest('completeJob', input))
+ipcMain.handle('brain:controlJob', (_e, input: unknown) => brainRequest('controlJob', input))
+ipcMain.handle('brain:getVaultStatus', () => brainRequest('vaultStatus', {}))
+ipcMain.handle('brain:syncVault', () => brainRequest('vaultSync', {}))
+ipcMain.handle('brain:listVaultConflicts', () => brainRequest('listVaultConflicts', {}))
+ipcMain.handle('brain:resolveVaultConflict', (_e, input: unknown) => brainRequest('resolveVaultConflict', input))
+ipcMain.handle('brain:getConsent', (_e, input: unknown) => brainRequest('getConsent', input))
+ipcMain.handle('brain:grantConsent', (_e, input: unknown) => brainRequest('grantConsent', input))
+ipcMain.handle('brain:revokeConsent', (_e, input: unknown) => brainRequest('revokeConsent', input))
+ipcMain.handle('brain:exportBackup', async () => {
+  const selected = await dialog.showSaveDialog({
+    title: 'Export FlowDesk Brain backup',
+    defaultPath: join(app.getPath('downloads'), `flowdesk-brain-${new Date().toISOString().slice(0, 10)}.flowdesk-brain.zip`),
+    filters: [{ name: 'FlowDesk Brain backup', extensions: ['zip'] }],
+  })
+  if (selected.canceled || !selected.filePath) return null
+  return brainRequest('exportBackup', { outputPath: selected.filePath })
+})
+ipcMain.handle('brain:importBackup', async () => {
+  const selected = await dialog.showOpenDialog({ title: 'Import FlowDesk Brain backup', properties: ['openFile'], filters: [{ name: 'FlowDesk Brain backup', extensions: ['zip'] }] })
+  const inputPath = selected.filePaths[0]
+  if (selected.canceled || !inputPath) return null
+  const confirmation = await dialog.showMessageBox({
+    type: 'warning',
+    buttons: ['Cancel', 'Import backup'],
+    defaultId: 0,
+    cancelId: 0,
+    title: 'Replace current Brain?',
+    message: 'FlowDesk will create a pre-import backup, validate the archive, and then replace the current Brain.',
+  })
+  if (confirmation.response !== 1) return null
+  return brainRequest('importBackup', { inputPath })
+})
+ipcMain.handle('brain:listEntities', (_e, scopeId: string) => brainRequest('listEntities', { scopeId }))
+ipcMain.handle('brain:getGraph', (_e, scopeId: string) => brainRequest('getGraph', { scopeId }))
+ipcMain.handle('brain:runSocialRecipe', async (_e, input: unknown) => {
+  const request = socialRecipeRequestSchema.parse(input)
+  const provider = 'local-brain'
+  const consent = await brainRequest('getConsent', { scopeId: request.scopeId, recipeId: request.recipeId, provider }) as boolean
+  if (!consent) {
+    return {
+      requiresConsent: true,
+      provider,
+      fields: request.recipeId.startsWith('whatsapp') ? ['message_text', 'sender', 'timestamp', 'chat_id'] : ['post_text', 'author', 'timestamp', 'url', 'engagement'],
+      retentionDays: request.parameters.retentionDays ?? 30,
+      destinationScopeId: request.scopeId,
+    }
+  }
+  const job = await brainRequest('enqueueJob', {
+    recipeId: request.recipeId,
+    recipeVersion: 1,
+    scopeId: request.scopeId,
+    accountId: request.accountId ?? null,
+    parameters: { query: request.parameters.query ?? '', limit: request.parameters.limit ?? 50, retentionDays: request.parameters.retentionDays ?? 30 },
+    ...(request.parameters.continuationSessionId ? { continuation: {
+      sessionId: request.parameters.continuationSessionId,
+      mode: request.parameters.mode ?? 'interactive',
+      contextBudget: 1200,
+    } } : {}),
+  }) as { id: string }
+  const limit = request.parameters.limit ?? 50
+  const connectorResult = request.recipeId === 'whatsapp.unread_intelligence'
+    ? await waListChats(limit, true)
+    : request.recipeId === 'linkedin.community_scan'
+      ? await liFeed(limit, 0, 'RECENT')
+      : await liSearch(request.parameters.query ?? 'hiring developer consultant recommendation', 'CONTENT', limit)
+  if (!connectorResult.ok) {
+    await brainRequest('failJob', { id: job.id, error: connectorResult.error ?? 'Connector read failed' })
+    throw new Error(connectorResult.error ?? 'Connector read failed')
+  }
+  const manifest = await brainRequest('ingestCaptureBatch', {
+    source: request.recipeId.startsWith('whatsapp') ? 'whatsapp' : 'linkedin',
+    jobId: job.id,
+    stepId: 'capture',
+    scopeId: request.scopeId,
+    accountId: request.accountId ?? null,
+    connectorVersion: 'flowdesk-read-v1',
+    retentionDays: request.parameters.retentionDays ?? 30,
+    records: recordsFromConnectorResult(connectorResult),
+  }) as Record<string, unknown>
+  const completed = await brainRequest('completeJob', {
+    id: job.id,
+    result: { ...manifest, actionable: request.recipeId === 'linkedin.opportunity_scan' && Number(manifest.recordCount ?? 0) > 0 },
+  })
+  return { requiresConsent: false, job: completed, manifest }
 })
 
 // IPC: get current login item settings (so renderer can display actual state)
@@ -955,7 +1087,7 @@ ipcMain.handle('universalChat:ensureView', async (_e, provider: string) => {
 // "Inject Prompt", where a human presses Enter/Send themselves), nobody is
 // watching Universal Chat's background tabs.
 ipcMain.handle('universalChat:send', async (_e, tabId: string, text: string, tool: string) => {
-  console.log(`[FlowDesk universalChat] send called tabId=${tabId} tool=${tool} textPreview="${text.slice(0, 40)}" at ${new Date().toISOString()}`)
+  console.log(`[FlowDesk universalChat] send called tabId=${tabId} tool=${tool} chars=${text.length} at ${new Date().toISOString()}`)
   const view = getViewById(tabId)
   if (!view) return false
   const ok = await injectPrompt(view.webContents, text, tool as AITool, true)
@@ -1201,8 +1333,46 @@ const notebookJobQueue = new NotebookJobQueue(
   },
   notebookCapabilities,
   () => (store.get('notebooklmAccount' as never) as string | null) ?? null,
+  jobs => void mirrorNotebookJobs(jobs),
 )
 configureNotebookJobRuntime(notebookJobQueue)
+
+async function mirrorNotebookJobs(jobs: NotebookJob[]) {
+  if (!brainClient) return
+  try {
+    const globalScope = await brainRequest('ensureScope', { type: 'global', externalRef: 'global', name: 'Global' }) as BrainScope
+    const runningSessionId = agentRunSnapshot().status === 'running' ? agentRunSnapshot().sessionId : null
+    for (const job of jobs) {
+      const brainJob = await brainRequest('enqueueJob', {
+        recipeId: job.kind === 'research' ? 'notebooklm.research' : 'notebooklm.artifact',
+        recipeVersion: 1,
+        scopeId: activeBrainScopeId ?? globalScope.id,
+        accountId: job.accountEmail ?? null,
+        parameters: { legacyJobId: job.id, notebookId: job.notebookId, kind: job.kind },
+        ...(runningSessionId ? { continuation: { sessionId: runningSessionId, mode: 'interactive', contextBudget: 1200 } } : {}),
+      }) as { id: string; status: string }
+      if (job.status === 'completed') {
+        await brainRequest('completeJob', {
+          id: brainJob.id,
+          result: {
+            recordCount: job.remote?.sourceCount ?? job.remote?.artifactCount ?? 0,
+            coverage: { sources: job.remote?.sourceCount, artifacts: job.remote?.artifactCount },
+            warnings: [],
+            failures: [],
+            artifactRefs: [`notebooklm://${job.notebookId}/jobs/${job.id}`],
+          },
+        })
+      } else if (job.status === 'failed') {
+        await brainRequest('failJob', { id: brainJob.id, error: job.error ?? 'NotebookLM job failed' })
+      } else if (job.status === 'cancelled') {
+        await brainRequest('controlJob', { id: brainJob.id, action: 'cancel' })
+      }
+    }
+    store.set('notebooklmJobsBrainImportedAt' as never, new Date().toISOString() as never)
+  } catch (error) {
+    console.log(`[FlowDesk brain] NotebookLM bridge skipped: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
 
 function flowDeskGoogleAccounts() {
   return (store.get('gmailSessions') as GmailSession[]).map(({ email, partition }) => ({ email, partition }))
@@ -1390,13 +1560,16 @@ ipcMain.handle('agent:approvalResponse', (_e, requestId: unknown, approved: unkn
   return true
 })
 
-ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessionId?: unknown; runId?: unknown } | string) => {
+async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; runId?: unknown; brain?: unknown } | string, mode: 'interactive' | 'continuation' = 'interactive') {
   const prompt = typeof input === 'string' ? input : typeof input?.prompt === 'string' ? input.prompt : ''
   const sessionId = typeof input === 'string' ? 'legacy-agent-session' : typeof input?.sessionId === 'string' ? input.sessionId : 'legacy-agent-session'
   const runId = typeof input === 'string' || typeof input?.runId !== 'string' ? randomUUID() : input.runId
+  const brainMode = normalizeAgentBrainMode(typeof input === 'string' ? undefined : input.brain)
+  const brainPolicy = brainModePolicy(brainMode)
   if (!prompt.trim() || !sessionId) {
     throw new Error('Agent run needs a prompt and session id.')
   }
+  if (mode === 'continuation' && currentAgentAbort) return false
   currentAgentAbort?.abort()
   denyAllPendingApprovals()
   const abortController = new AbortController()
@@ -1427,7 +1600,49 @@ ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessio
 
   // The renderer records nothing itself; the transcript is written here so
   // a turn is captured even if the window is closed mid-run.
-  await agentSessions.appendTurn(sessionId, { role: 'user', content: prompt, toolCalls: [] })
+  const userTurn = await agentSessions.appendTurn(sessionId, { role: 'user', content: prompt, toolCalls: [] })
+
+  let brainContext: BrainContextPack | null = null
+  let sessionBrainScope: BrainScope | null = null
+  if ((configuredSettings as Partial<AppSettings> & { brainEnabled?: boolean }).brainEnabled !== false && brainClient) {
+    try {
+      const globalScope = await brainRequest('ensureScope', { type: 'global', externalRef: 'global', name: 'Global' }) as BrainScope
+      const { projects: brainProjects, activeProjectId: brainProjectId } = projectSnapshot()
+      const brainProject = brainProjects.find(project => project.id === brainProjectId)
+      const parentScope = brainProject
+        ? await brainRequest('ensureScope', { type: 'project', externalRef: brainProject.id, name: brainProject.title, parentId: globalScope.id }) as BrainScope
+        : globalScope
+      const scope = brainMode.temporary
+        ? parentScope
+        : await brainRequest('ensureScope', { type: 'session', externalRef: sessionId, name: `Agent session ${sessionId}`, parentId: parentScope.id }) as BrainScope
+      activeBrainScopeId = scope.id
+      activeBrainWritesAllowed = brainPolicy.durableWrites
+      if (brainPolicy.durableWrites) {
+        sessionBrainScope = scope
+        await brainRequest('recordConversationTurn', {
+          turnId: userTurn.id,
+          sessionId,
+          scopeId: scope.id,
+          role: 'user',
+          sourceRef: `agent-session://${sessionId}/${userTurn.id}`,
+          contentHash: createHash('sha256').update(userTurn.content).digest('hex'),
+          characterCount: userTurn.content.length,
+          createdAt: userTurn.createdAt,
+        })
+      }
+      if (brainPolicy.automaticContext) {
+        brainContext = await brainRequest('search', {
+          text: prompt,
+          scopeId: scope.id,
+          includeParents: true,
+          tokenBudget: 1200,
+          limit: 12,
+        }) as BrainContextPack
+      }
+    } catch (error) {
+      console.log(`[FlowDesk brain] context unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
 
   const providerKey: 'claude' | 'codex' | null =
     leadAgentProvider === 'claude' ? 'claude' : leadAgentProvider === 'codex' ? 'codex' : null
@@ -1443,6 +1658,7 @@ ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessio
     const catchUp = buildCatchUp(turns.slice(0, -1), link?.syncedThroughTurn ?? 0)
     if (catchUp) promptToSend = `${catchUp}\n\n${prompt}`
   }
+  if (brainContext) promptToSend = composePromptWithBrain(promptToSend, brainContext)
 
   const bypassPermissions = configuredSettings.agentBypassPermissions === true
   const requestApproval = makeRequestApproval(runId, sessionId, bypassPermissions)
@@ -1481,7 +1697,7 @@ ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessio
       }
       publishAgentEvent(runId, sessionId, event)
     }
-    await agentSessions.appendTurn(sessionId, {
+    const assistantTurn = await agentSessions.appendTurn(sessionId, {
       role: 'assistant',
       content: finalText,
       // Recorded so a reopened session shows what the agent actually did,
@@ -1489,6 +1705,18 @@ ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessio
       toolCalls: [...pendingToolCalls.values()],
       ...(providerKey ? { provider: providerKey } : {}),
     })
+    if (sessionBrainScope) {
+      await brainRequest('recordConversationTurn', {
+        turnId: assistantTurn.id,
+        sessionId,
+        scopeId: sessionBrainScope.id,
+        role: 'assistant',
+        sourceRef: `agent-session://${sessionId}/${assistantTurn.id}`,
+        contentHash: createHash('sha256').update(assistantTurn.content).digest('hex'),
+        characterCount: assistantTurn.content.length,
+        createdAt: assistantTurn.createdAt,
+      }).catch(error => console.log(`[FlowDesk brain] turn reference unavailable: ${error instanceof Error ? error.message : String(error)}`))
+    }
     // Advanced only after the turn completed: an aborted run must not mark
     // a provider as caught up on turns it never actually received.
     if (providerKey && providerSessionId) {
@@ -1513,12 +1741,39 @@ ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessio
     })
     finishAgentRun(abortController.signal.aborted ? 'cancelled' : 'failed')
   } finally {
+    activeBrainScopeId = null
+    activeBrainWritesAllowed = false
     workerProgress.off('progress', onWorkerProgress)
     if (currentAgentAbort === abortController) currentAgentAbort = null
     denyAllPendingApprovals()
   }
   return true
-})
+}
+
+ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessionId?: unknown; runId?: unknown } | string) => runAgentMessage(input))
+
+async function drainBrainContinuations() {
+  if (drainingContinuations || currentAgentAbort || !brainClient) return
+  drainingContinuations = true
+  try {
+    const continuations = await brainRequest('listQueuedContinuations', {}) as Array<{ id: string; jobId: string; sessionId: string }>
+    if (continuations.length === 0) return
+    const jobs = await brainRequest('listJobs', {}) as Array<{ id: string; recipeId: string; status: string; result: Record<string, unknown> | null }>
+    for (const group of groupContinuations(continuations)) {
+      if (currentAgentAbort) break
+      const jobIds = new Set(group.items.map(item => item.jobId))
+      const prompt = buildContinuationPrompt(group.sessionId, jobs.filter(job => jobIds.has(job.id)))
+      const completed = await runAgentMessage({ prompt, sessionId: group.sessionId, runId: `brain-continuation-${group.items.map(item => item.id).join('-')}` }, 'continuation')
+      if (completed) {
+        for (const item of group.items) await brainRequest('consumeContinuation', { id: item.id })
+      }
+    }
+  } catch (error) {
+    console.log(`[FlowDesk brain] continuation drain skipped: ${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    drainingContinuations = false
+  }
+}
 
 ipcMain.handle('agent:abort', async () => {
   currentAgentAbort?.abort()
@@ -1706,7 +1961,7 @@ ipcMain.on('capture:sniff', (_e, entry: { tool: string; transport: string; metho
 // Grok happens client-side (buildWSCaptureInjectSrc), so unlike the other
 // providers there's no server-side raw-event log to inspect otherwise.
 ipcMain.on('capture:grokRaw', (_e, entry: { type: string; evt: unknown }) => {
-  if (process.env.FD_CAPTURE_DEBUG) {
+  if (captureDebugEnabled()) {
     console.log(`[FlowDesk capture][grok][raw event][${entry.type}]`, JSON.stringify(entry.evt).slice(0, 1500))
   }
 })
@@ -1730,7 +1985,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
       const events = entry.buf.split('\n\n')
       entry.buf = events.pop() ?? ''
       for (const evt of events) {
-        if (process.env.FD_CAPTURE_DEBUG) {
+        if (captureDebugEnabled()) {
           console.log(`[FlowDesk capture][perplexity][raw event]`, evt)
         }
         const { deltas, finalText } = extractPerplexitySSEEvent(evt)
@@ -1745,7 +2000,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
       // buffer first, same as the 'done' path below, since real content can
       // still be sitting there unprocessed when the abort lands.
       if (entry.buf) {
-        if (process.env.FD_CAPTURE_DEBUG) {
+        if (captureDebugEnabled()) {
           console.log(`[FlowDesk capture][perplexity][raw event][on-error flush]`, entry.buf)
         }
         const { deltas, finalText } = extractPerplexitySSEEvent(entry.buf)
@@ -1802,7 +2057,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
       const events = entry.buf.split('\n\n')
       entry.buf = events.pop() ?? ''
       for (const evt of events) {
-        if (process.env.FD_CAPTURE_DEBUG) {
+        if (captureDebugEnabled()) {
           console.log(`[FlowDesk capture][qwen][raw event]`, evt.slice(0, 500))
         }
         for (const found of extractQwenTextFromSSEEvent(evt)) entry.text += found
@@ -1859,7 +2114,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
       return
     }
     if (payload.done) {
-      if (process.env.FD_CAPTURE_DEBUG) {
+      if (captureDebugEnabled()) {
         console.log(`[FlowDesk capture][gemini][raw buffer]`, entry.buf.slice(0, 3000))
       }
       const latest = extractLatestGeminiText(entry.buf)
@@ -1915,7 +2170,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
     const events = entry.buf.split('\n\n')
     entry.buf = events.pop() ?? ''
     for (const evt of events) {
-      if (process.env.FD_CAPTURE_DEBUG) {
+      if (captureDebugEnabled()) {
         console.log(`[FlowDesk capture][${entry.tool}][raw event]`, evt.slice(0, 500))
       }
       for (const found of extractCaptureText(entry.tool, evt)) entry.text += found
@@ -2011,7 +2266,7 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
     // followed by a trailing blank line before the connection closes, so it
     // never gets processed by the '\n\n' splitter above.
     if (entry.buf) {
-      if (process.env.FD_CAPTURE_DEBUG) {
+      if (captureDebugEnabled()) {
         console.log(`[FlowDesk capture][${entry.tool}][raw event][final]`, entry.buf.slice(0, 500))
       }
       for (const found of extractCaptureText(entry.tool, entry.buf)) entry.text += found
@@ -2055,6 +2310,21 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  brainClient = createElectronBrainClient(app.getPath('userData'), join(__dirname, 'brainUtility.js'))
+  brainClient.on('status', status => mainWindow?.webContents.send('brain:event', {
+    type: 'status',
+    createdAt: new Date().toISOString(),
+    data: status,
+  }))
+  brainClient.start()
+  configureBrainTools({
+    request: (method, payload) => brainRequest(method, payload),
+    getScopeId: () => activeBrainScopeId,
+    allowWrites: () => activeBrainWritesAllowed,
+  })
+  continuationTimer = setInterval(() => void drainBrainContinuations(), 10_000)
+  continuationTimer.unref()
+  void mirrorNotebookJobs(notebookJobQueue.list())
   // A run cannot survive a restart, so one still marked running was
   // interrupted. Agent.tsx looks for exactly this to tell the user their
   // turn died rather than leaving a spinner up forever.
@@ -2179,6 +2449,10 @@ app.on('window-all-closed', () => {
   }
 })
 app.on('will-quit', () => {
+  if (continuationTimer) clearInterval(continuationTimer)
+  continuationTimer = null
+  brainClient?.stop()
+  brainClient = null
   globalShortcut.unregisterAll()
   destroyAllViews()
   if (tray) { tray.destroy(); tray = null }

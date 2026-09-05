@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import {
   Globe, Users,
   Settings, Zap, Youtube, Calendar,
-  ChevronLeft, ChevronRight, MessagesSquare, Bot, BookOpen, Share2, Sparkles, Clapperboard, LayoutTemplate,
+  ChevronLeft, ChevronRight, MessagesSquare, Bot, BookOpen, Share2, Sparkles, Clapperboard, LayoutTemplate, BrainCircuit, Radar,
 } from 'lucide-react'
 import type { Page } from '@/types/pages'
 
@@ -22,6 +22,8 @@ const items: NavItem[] = [
   { icon: Globe,           page: 'browser',   label: 'AI Browser' },
   { icon: MessagesSquare,  page: 'universalChat', label: 'Universal Chat' },
   { icon: Bot,             page: 'agent',     label: 'Agent'       },
+  { icon: BrainCircuit,    page: 'brain',     label: 'Brain'       },
+  { icon: Radar,           page: 'intelligence', label: 'Intelligence' },
   { icon: BookOpen,        page: 'notebooklm', label: 'NotebookLM' },
   { icon: Users,           page: 'accounts',  label: 'Accounts'   },
   { icon: Youtube,         page: 'youtube',   label: 'YT Studio'  },

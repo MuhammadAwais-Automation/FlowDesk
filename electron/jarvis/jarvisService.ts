@@ -216,7 +216,7 @@ When delegating a task to the workstation, immediately announce what you are doi
       projectRuntime,
       leadAgentProvider,
       requestApproval,
-      true,
+      false,
     )) {
       if (agentEvent.type === 'tool_call') {
         onProgress?.({

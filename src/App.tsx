@@ -15,6 +15,8 @@ const Social = lazy(() => import('@/pages/Social'))
 const Studio = lazy(() => import('@/pages/Studio'))
 const Jarvis = lazy(() => import('@/pages/Jarvis'))
 const StudioCanvas = lazy(() => import('@/pages/StudioCanvas'))
+const Brain = lazy(() => import('@/pages/Brain'))
+const Intelligence = lazy(() => import('@/pages/Intelligence'))
 
 // Safety check — if preload didn't load, show helpful error
 const api = window.electronAPI
@@ -67,6 +69,8 @@ export default function App() {
     switch (currentPage) {
       case 'universalChat': return <UniversalChat />
       case 'agent': return <Agent />
+      case 'brain': return <Brain />
+      case 'intelligence': return <Intelligence />
       case 'notebooklm': return <NotebookLM />
       case 'accounts': return <Accounts />
       case 'settings': return <Settings />

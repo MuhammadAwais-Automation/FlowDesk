@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Plus, Bot, Cpu, Workflow, Globe, ShieldOff, Wrench } from 'lucide-react'
+import { Plus, Bot, BrainCircuit, Cpu, Database, Ghost, Workflow, Globe, ShieldOff, Wrench } from 'lucide-react'
 import {
   createAgentSession,
   appendAgentTurn,
@@ -54,6 +54,18 @@ export default function Agent() {
   const [bypassPermissions, setBypassPermissions] = useState(false)
   const [showToolsPanel, setShowToolsPanel] = useState(false)
   const [hasActiveProject, setHasActiveProject] = useState(false)
+  const [brainMode, setBrainMode] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('agentBrainMode') ?? '{}') as Partial<{ use: boolean; learn: boolean; temporary: boolean }>
+      return { use: saved.use !== false, learn: saved.learn !== false, temporary: saved.temporary === true }
+    } catch {
+      return { use: true, learn: true, temporary: false }
+    }
+  })
+
+  useEffect(() => {
+    localStorage.setItem('agentBrainMode', JSON.stringify(brainMode))
+  }, [brainMode])
 
   const sendingRef = useRef(false)
   const sessionRef = useRef<AgentSession | null>(null)
@@ -408,7 +420,7 @@ export default function Agent() {
     resetWatchdog()
 
     try {
-      await api.agentSendMessage({ prompt: composed, sessionId: session.id, runId })
+      await api.agentSendMessage({ prompt: composed, sessionId: session.id, runId, brain: brainMode })
       // IPC events are live delivery, not the source of truth. The invoke
       // resolves only after the main-process run finishes, so replay its
       // journal here as a final acknowledgement in case a renderer event was
@@ -489,6 +501,36 @@ export default function Agent() {
 
         <div className="flex items-center gap-3">
           <ProviderStatusStrip status={toolStatus} />
+
+          <div className="flex items-center rounded-lg border-2 border-[#281E14] bg-white shadow-[2px_2px_0px_0px_rgba(40,30,20,0.22)] overflow-hidden" aria-label="Brain controls">
+            <button
+              type="button"
+              onClick={() => setBrainMode(value => ({ ...value, use: !value.use, temporary: false }))}
+              title="Use relevant saved Brain context in this Agent turn"
+              aria-pressed={brainMode.use && !brainMode.temporary}
+              className={`flex items-center gap-1 px-2 py-1.5 font-retro-mono text-[10px] font-bold uppercase ${brainMode.use && !brainMode.temporary ? 'bg-[#DBEAFE] text-[#1D4ED8]' : 'text-stone-500'}`}
+            >
+              <BrainCircuit size={12} /> Use
+            </button>
+            <button
+              type="button"
+              onClick={() => setBrainMode(value => ({ ...value, learn: !value.learn, temporary: false }))}
+              title="Allow this Agent turn to save explicit memories and durable research"
+              aria-pressed={brainMode.learn && !brainMode.temporary}
+              className={`flex items-center gap-1 px-2 py-1.5 border-l border-[#281E14] font-retro-mono text-[10px] font-bold uppercase ${brainMode.learn && !brainMode.temporary ? 'bg-[#DCFCE7] text-[#047857]' : 'text-stone-500'}`}
+            >
+              <Database size={12} /> Learn
+            </button>
+            <button
+              type="button"
+              onClick={() => setBrainMode(value => ({ ...value, temporary: !value.temporary }))}
+              title="Temporary mode: no automatic Brain context and no durable Brain writes"
+              aria-pressed={brainMode.temporary}
+              className={`flex items-center gap-1 px-2 py-1.5 border-l border-[#281E14] font-retro-mono text-[10px] font-bold uppercase ${brainMode.temporary ? 'bg-[#FEE2E2] text-[#B91C1C]' : 'text-stone-500'}`}
+            >
+              <Ghost size={12} /> Temp
+            </button>
+          </div>
 
           <div className="relative">
             <button

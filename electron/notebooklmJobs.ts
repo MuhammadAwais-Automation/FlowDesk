@@ -137,11 +137,13 @@ export class NotebookJobQueue {
   private readonly capabilities: NotebookCapabilities
   private readonly store: NotebookJobStore
   private readonly getAccountEmail: () => string | null
+  private readonly onChanged?: (jobs: NotebookJob[]) => void
 
-  constructor(store: NotebookJobStore, capabilities: NotebookCapabilities, getAccountEmail: () => string | null = () => null) {
+  constructor(store: NotebookJobStore, capabilities: NotebookCapabilities, getAccountEmail: () => string | null = () => null, onChanged?: (jobs: NotebookJob[]) => void) {
     this.store = store
     this.capabilities = capabilities
     this.getAccountEmail = getAccountEmail
+    this.onChanged = onChanged
     const accountEmail = getAccountEmail()
     this.jobs = (store.get('notebooklmJobs') ?? []).slice(-200).map(job =>
       !job.accountEmail && accountEmail ? { ...job, accountEmail } : job)
@@ -345,5 +347,9 @@ export class NotebookJobQueue {
     this.persist()
   }
 
-  private persist() { this.store.set('notebooklmJobs', this.jobs.slice(-200)) }
+  private persist() {
+    const snapshot = this.jobs.slice(-200)
+    this.store.set('notebooklmJobs', snapshot)
+    this.onChanged?.(snapshot.map(job => ({ ...job })))
+  }
 }

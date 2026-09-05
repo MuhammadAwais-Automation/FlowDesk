@@ -1,1 +1,1 @@
-export type Page = 'browser' | 'universalChat' | 'agent' | 'notebooklm' | 'accounts' | 'settings' | 'youtube' | 'workspace' | 'social' | 'studio' | 'jarvis' | 'design'
+export type Page = 'browser' | 'universalChat' | 'agent' | 'brain' | 'intelligence' | 'notebooklm' | 'accounts' | 'settings' | 'youtube' | 'workspace' | 'social' | 'studio' | 'jarvis' | 'design'

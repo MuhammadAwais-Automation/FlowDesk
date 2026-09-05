@@ -1,0 +1,83 @@
+import { z } from 'zod'
+
+const id = z.string().min(1).max(200)
+const text = z.string().trim().min(1).max(100_000)
+const scopeType = z.enum(['global', 'workspace', 'project', 'client', 'session'])
+const memoryKind = z.enum(['fact', 'preference', 'decision', 'goal', 'person', 'organization', 'opportunity', 'procedure', 'note'])
+
+const requestBase = { id }
+
+export const brainRequestSchema = z.discriminatedUnion('method', [
+  z.object({ ...requestBase, method: z.literal('status'), payload: z.object({}).strict() }),
+  z.object({ ...requestBase, method: z.literal('overview'), payload: z.object({ scopeId: id.optional() }).strict() }),
+  z.object({ ...requestBase, method: z.literal('ensureScope'), payload: z.object({ type: scopeType, externalRef: id, name: text, parentId: id.nullish() }).strict() }),
+  z.object({ ...requestBase, method: z.literal('search'), payload: z.object({
+    text, scopeId: id, includeParents: z.boolean(), kinds: z.array(memoryKind).max(9).optional(),
+    sourcePlatforms: z.array(id).max(20).optional(),
+    timeRange: z.object({ from: z.iso.datetime().optional(), to: z.iso.datetime().optional() }).optional(),
+    tokenBudget: z.number().int().min(1).max(2000).optional(), limit: z.number().int().min(1).max(12).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('remember'), payload: z.object({
+    scopeId: id, kind: memoryKind, text, shareable: z.boolean().optional(), importance: z.number().int().min(0).max(100).optional(),
+    subject: text.optional(), predicate: text.optional(), sourceRef: text.optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('ingestMemory'), payload: z.object({
+    scopeId: id, kind: memoryKind, text, origin: z.enum(['explicit_user', 'confirmed_user', 'inferred_user', 'external']),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('getMemory'), payload: z.object({ id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('forget'), payload: z.object({ id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('listMemories'), payload: z.object({ scopeId: id.optional() }).strict() }),
+  z.object({ ...requestBase, method: z.literal('listCandidates'), payload: z.object({ scopeId: id.optional() }).strict() }),
+  z.object({ ...requestBase, method: z.literal('decideCandidate'), payload: z.object({ id, decision: z.enum(['accept', 'reject']), editedText: text.optional() }).strict() }),
+  z.object({ ...requestBase, method: z.literal('listJobs'), payload: z.object({}).strict() }),
+  z.object({ ...requestBase, method: z.literal('getArtifactManifest'), payload: z.object({ jobId: id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('registerRecipe'), payload: z.object({ id, version: z.number().int().positive(), title: text, steps: z.array(id).min(1).max(100) }).strict() }),
+  z.object({ ...requestBase, method: z.literal('enqueueJob'), payload: z.object({
+    recipeId: id, recipeVersion: z.number().int().positive(), scopeId: id, accountId: id.nullish(),
+    parameters: z.record(z.string(), z.unknown()), continuation: z.object({
+      sessionId: id, providerSessionId: id.nullish(), mode: z.enum(['interactive', 'background', 'actionable_only']), contextBudget: z.number().int().min(1).max(2000),
+    }).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('completeJob'), payload: z.object({ id, result: z.record(z.string(), z.unknown()) }).strict() }),
+  z.object({ ...requestBase, method: z.literal('controlJob'), payload: z.object({ id, action: z.enum(['cancel', 'retry']) }).strict() }),
+  z.object({ ...requestBase, method: z.literal('failJob'), payload: z.object({ id, error: z.string().min(1).max(2000) }).strict() }),
+  z.object({ ...requestBase, method: z.literal('vaultStatus'), payload: z.object({}).strict() }),
+  z.object({ ...requestBase, method: z.literal('vaultSync'), payload: z.object({}).strict() }),
+  z.object({ ...requestBase, method: z.literal('listVaultConflicts'), payload: z.object({}).strict() }),
+  z.object({ ...requestBase, method: z.literal('resolveVaultConflict'), payload: z.object({ id, resolution: z.enum(['database', 'file']) }).strict() }),
+  z.object({ ...requestBase, method: z.literal('getConsent'), payload: z.object({ scopeId: id, recipeId: id, provider: id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('grantConsent'), payload: z.object({ scopeId: id, recipeId: id, provider: id, fields: z.array(id).min(1).max(100) }).strict() }),
+  z.object({ ...requestBase, method: z.literal('revokeConsent'), payload: z.object({ scopeId: id, recipeId: id, provider: id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('exportBackup'), payload: z.object({ outputPath: z.string().min(1).max(2000) }).strict() }),
+  z.object({ ...requestBase, method: z.literal('importBackup'), payload: z.object({ inputPath: z.string().min(1).max(2000) }).strict() }),
+  z.object({ ...requestBase, method: z.literal('recordConversationTurn'), payload: z.object({
+    turnId: id, sessionId: id, scopeId: id, role: z.enum(['user', 'assistant']), sourceRef: text,
+    contentHash: z.string().regex(/^[a-f0-9]{64}$/), characterCount: z.number().int().nonnegative(), createdAt: z.iso.datetime(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('listQueuedContinuations'), payload: z.object({}).strict() }),
+  z.object({ ...requestBase, method: z.literal('consumeContinuation'), payload: z.object({ id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('listEntities'), payload: z.object({ scopeId: id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('getGraph'), payload: z.object({ scopeId: id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('ingestCaptureBatch'), payload: z.object({
+    source: z.enum(['whatsapp', 'linkedin', 'reddit']), jobId: id, stepId: id, scopeId: id,
+    accountId: id.nullish(), connectorVersion: id, retentionDays: z.number().int().min(1).max(365).optional(),
+    records: z.array(z.record(z.string(), z.unknown())).max(5000),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('shutdown'), payload: z.object({}).strict() }),
+])
+
+export type BrainRequest = z.infer<typeof brainRequestSchema>
+
+export interface BrainResponse {
+  id: string
+  ok: boolean
+  result?: unknown
+  error?: { code: string; message: string }
+}
+
+export interface BrainEvent {
+  sequence: number
+  type: 'ready' | 'changed' | 'degraded'
+  createdAt: string
+  data?: Record<string, unknown>
+}
