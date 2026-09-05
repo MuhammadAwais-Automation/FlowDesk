@@ -2,7 +2,20 @@ import { describe, expect, it } from 'vitest'
 import { migrateJarvisSettings } from './jarvisSettingsMigration'
 
 describe('migrateJarvisSettings', () => {
-  it('clears credentials once while preserving non-secret preferences', () => {
+  it('preserves credentials entered by the user', () => {
+    const result = migrateJarvisSettings({
+      jarvisSettings: {
+        geminiApiKey: 'user-key',
+        livekitUrl: 'wss://user.example',
+        livekitApiKey: 'user-livekit-key',
+        livekitApiSecret: 'user-livekit-secret',
+      },
+    })
+    expect(result.settings.geminiApiKey).toBe('user-key')
+    expect(result.settings.livekitApiSecret).toBe('user-livekit-secret')
+  })
+
+  it('marks an initial migration while preserving unrecognized settings', () => {
     const result = migrateJarvisSettings({
       jarvisSettings: {
         geminiApiKey: 'old-secret',
@@ -15,10 +28,10 @@ describe('migrateJarvisSettings', () => {
     })
     expect(result.changed).toBe(true)
     expect(result.settings).toMatchObject({
-      geminiApiKey: '',
-      livekitUrl: '',
-      livekitApiKey: '',
-      livekitApiSecret: '',
+      geminiApiKey: 'old-secret',
+      livekitUrl: 'wss://old.example',
+      livekitApiKey: 'old-key',
+      livekitApiSecret: 'old-secret',
       voiceName: 'Puck',
       autoSpeak: false,
     })
