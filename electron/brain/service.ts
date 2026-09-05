@@ -55,6 +55,7 @@ export class BrainService {
         }
       }
       case 'ensureScope': return this.database.ensureScope(request.payload)
+      case 'listScopes': return this.database.listScopes(request.payload.types)
       case 'search': return this.database.search(request.payload)
       case 'remember': {
         const memory = this.database.remember(request.payload)

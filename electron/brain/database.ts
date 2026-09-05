@@ -217,6 +217,14 @@ export class BrainDatabase {
     return { id, type: input.type, externalRef: input.externalRef, name: input.name, parentId: input.parentId ?? null, createdAt }
   }
 
+  listScopes(types?: BrainScopeType[]): BrainScope[] {
+    if (!types?.length) {
+      return (this.db.prepare('SELECT * FROM scopes ORDER BY created_at, name').all() as SqlRow[]).map(mapScope)
+    }
+    const placeholders = types.map(() => '?').join(', ')
+    return (this.db.prepare(`SELECT * FROM scopes WHERE type IN (${placeholders}) ORDER BY created_at, name`).all(...types) as SqlRow[]).map(mapScope)
+  }
+
   remember(input: {
     scopeId: string
     kind: MemoryKind

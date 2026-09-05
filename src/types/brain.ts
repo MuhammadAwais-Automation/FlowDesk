@@ -35,6 +35,10 @@ export interface BrainScope {
   createdAt: string
 }
 
+export interface BrainScopeQuery {
+  types?: BrainScopeType[]
+}
+
 export interface BrainMemory {
   id: string
   scopeId: string

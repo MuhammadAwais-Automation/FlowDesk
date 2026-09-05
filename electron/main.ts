@@ -362,6 +362,7 @@ ipcMain.handle('store:set', (_e, key: string, value: unknown) => {
 ipcMain.handle('brain:getStatus', () => brainRequest('status', {}))
 ipcMain.handle('brain:getOverview', (_e, scopeId?: string) => brainRequest('overview', { scopeId }))
 ipcMain.handle('brain:ensureScope', (_e, input: unknown) => brainRequest('ensureScope', input))
+ipcMain.handle('brain:listScopes', (_e, input?: unknown) => brainRequest('listScopes', input ?? {}))
 ipcMain.handle('brain:search', (_e, input: unknown) => brainRequest('search', input))
 ipcMain.handle('brain:getMemory', (_e, id: string) => brainRequest('getMemory', { id }))
 ipcMain.handle('brain:listMemories', (_e, scopeId?: string) => brainRequest('listMemories', { scopeId }))

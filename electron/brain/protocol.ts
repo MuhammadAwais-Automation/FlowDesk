@@ -11,6 +11,7 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
   z.object({ ...requestBase, method: z.literal('status'), payload: z.object({}).strict() }),
   z.object({ ...requestBase, method: z.literal('overview'), payload: z.object({ scopeId: id.optional() }).strict() }),
   z.object({ ...requestBase, method: z.literal('ensureScope'), payload: z.object({ type: scopeType, externalRef: id, name: text, parentId: id.nullish() }).strict() }),
+  z.object({ ...requestBase, method: z.literal('listScopes'), payload: z.object({ types: z.array(scopeType).max(5).optional() }).strict() }),
   z.object({ ...requestBase, method: z.literal('search'), payload: z.object({
     text, scopeId: id, includeParents: z.boolean(), kinds: z.array(memoryKind).max(9).optional(),
     sourcePlatforms: z.array(id).max(20).optional(),

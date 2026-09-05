@@ -20,4 +20,13 @@ describe('brain utility protocol', () => {
       id: '1', method: 'search', payload: { text: 'x', scopeId: 'scope', includeParents: true, tokenBudget: 2001 },
     })).toThrow()
   })
+
+  it('accepts at most five known scope types', () => {
+    expect(brainRequestSchema.parse({
+      id: '1', method: 'listScopes', payload: { types: ['global', 'workspace', 'project', 'client', 'session'] },
+    })).toMatchObject({ method: 'listScopes' })
+    expect(() => brainRequestSchema.parse({
+      id: '2', method: 'listScopes', payload: { types: ['global', 'workspace', 'project', 'client', 'session', 'global'] },
+    })).toThrow()
+  })
 })

@@ -1,6 +1,6 @@
 import type { CustomTool } from './browser'
 import type { ProjectSessionSnapshot } from './project'
-import type { BrainCandidate, BrainContextPack, BrainJob, BrainMemory, BrainQuery, BrainScope, BrainStatus, MemoryKind } from './brain'
+import type { BrainCandidate, BrainContextPack, BrainJob, BrainMemory, BrainQuery, BrainScope, BrainScopeQuery, BrainStatus, MemoryKind } from './brain'
 
 export interface GmailSession {
   email: string
@@ -177,6 +177,7 @@ export interface ElectronAPI {
   brainGetStatus: () => Promise<BrainStatus>
   brainGetOverview: (scopeId?: string) => Promise<{ memories: number; candidates: number; jobs: number; activeJobs: number }>
   brainEnsureScope: (input: { type: BrainScope['type']; externalRef: string; name: string; parentId?: string | null }) => Promise<BrainScope>
+  brainListScopes: (input?: BrainScopeQuery) => Promise<BrainScope[]>
   brainSearch: (input: BrainQuery) => Promise<BrainContextPack>
   brainGetMemory: (id: string) => Promise<BrainMemory | null>
   brainListMemories: (scopeId?: string) => Promise<BrainMemory[]>

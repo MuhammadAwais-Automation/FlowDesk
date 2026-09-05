@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Ban, BrainCircuit, Check, Database, FileText, GitBranch, RotateCcw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
+import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
 import { BRAIN_TABS } from '@/lib/brainUi'
 import type { BrainCandidate, BrainContextPack, BrainJob, BrainMemory, BrainScope, BrainStatus, MemoryKind } from '@/types/brain'
 
@@ -11,7 +12,7 @@ function Card({ children }: { children: React.ReactNode }) {
 
 export default function Brain() {
   const [tab, setTab] = useState<(typeof BRAIN_TABS)[number]>('Overview')
-  const [scope, setScope] = useState<BrainScope | null>(null)
+  const { scopes, scope, selectScope, loading: scopeLoading, error: scopeError } = useBrainScope()
   const [status, setStatus] = useState<BrainStatus | null>(null)
   const [overview, setOverview] = useState({ memories: 0, candidates: 0, jobs: 0, activeJobs: 0 })
   const [memories, setMemories] = useState<BrainMemory[]>([])
@@ -27,38 +28,38 @@ export default function Brain() {
   const [vaultConflicts, setVaultConflicts] = useState<Array<Record<string, unknown>>>([])
   const [graph, setGraph] = useState<{ nodes: Array<{ id: string; type: string; name: string }>; edges: Array<{ id: string; from: string; to: string; relation: string; confidence: number; sourceRef: string }> }>({ nodes: [], edges: [] })
   const [artifact, setArtifact] = useState<Record<string, unknown> | null>(null)
+  const selectedScopeId = useRef<string | null>(null)
+  selectedScopeId.current = scope?.id ?? null
 
   const refresh = useCallback(async (activeScope: BrainScope) => {
     const [nextStatus, nextOverview, nextMemories, nextCandidates, nextJobs] = await Promise.all([
       api.brainGetStatus(), api.brainGetOverview(activeScope.id), api.brainListMemories(activeScope.id),
       api.brainListCandidates(activeScope.id), api.brainListJobs(),
     ])
+    if (selectedScopeId.current !== activeScope.id) return
     setStatus(nextStatus)
     setOverview(nextOverview)
     setMemories(nextMemories)
     setCandidates(nextCandidates)
-    setJobs(nextJobs)
+    setJobs(nextJobs.filter(job => job.scopeId === activeScope.id))
   }, [])
 
   useEffect(() => {
-    let active = true
-    api.brainEnsureScope({ type: 'global', externalRef: 'global', name: 'Global' })
-      .then(async created => {
-        if (!active) return
-        setScope(created)
-        await refresh(created)
-      })
-      .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))
-    const unsubscribe = api.onBrainEvent(() => void api.brainEnsureScope({ type: 'global', externalRef: 'global', name: 'Global' }).then(refresh))
-    return () => {
-      active = false
-      unsubscribe()
-    }
-  }, [refresh])
+    if (!scope) return
+    setAnswer(null)
+    setArtifact(null)
+    void refresh(scope).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))
+    return api.onBrainEvent(() => void refresh(scope).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))))
+  }, [refresh, scope])
 
   useEffect(() => {
     if (!scope || tab !== 'Graph') return
-    void api.brainGetGraph(scope.id).then(setGraph).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))
+    let active = true
+    setGraph({ nodes: [], edges: [] })
+    void api.brainGetGraph(scope.id).then(nextGraph => {
+      if (active) setGraph(nextGraph)
+    }).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))
+    return () => { active = false }
   }, [scope, tab])
 
   async function loadVault() {
@@ -109,9 +110,12 @@ export default function Brain() {
         <div className="flex items-center gap-3">
           <div className="rounded-xl bg-amber-100 p-2 text-amber-700"><BrainCircuit size={22} /></div>
           <div><h1 className="text-xl font-bold">FlowDesk Brain</h1><p className="text-xs text-stone-500">Local, persistent, cited knowledge</p></div>
-          <span className={`ml-auto rounded-full px-3 py-1 text-xs font-semibold ${status?.ready ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-            {status?.ready ? 'Ready · FTS5' : 'Degraded'}
-          </span>
+          <div className="ml-auto flex items-center gap-3">
+            <ScopePicker scopes={scopes} value={scope?.id ?? null} onChange={selectScope} disabled={scopeLoading} />
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${status?.ready ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+              {status?.ready ? 'Ready · FTS5' : 'Degraded'}
+            </span>
+          </div>
         </div>
         <nav className="mt-4 flex gap-2 overflow-x-auto pb-1">
           {BRAIN_TABS.map(item => <button key={item} onClick={() => setTab(item)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs ${tab === item ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600'}`}>{item}</button>)}
@@ -119,7 +123,7 @@ export default function Brain() {
       </header>
 
       <div className="flex-1 overflow-y-auto p-6">
-        {error && <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        {(scopeError || error) && <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{scopeError || error}</div>}
 
         {tab === 'Overview' && <div className="space-y-5">
           <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">{metricCards.map(([label, value]) => <Card key={label}><p className="text-xs text-stone-500">{label}</p><p className="mt-2 text-3xl font-bold">{value}</p></Card>)}</div>

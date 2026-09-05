@@ -62,6 +62,24 @@ describe('BrainDatabase', () => {
     brain.close()
   })
 
+  it('lists only requested project and client scopes', () => {
+    const brain = createBrain()
+    const project = brain.ensureScope({ type: 'project', externalRef: 'p1', name: 'Project' })
+    brain.ensureScope({ type: 'session', externalRef: 's1', name: 'Session', parentId: project.id })
+
+    expect(brain.listScopes(['project', 'client']).map(scope => scope.type)).toEqual(['project'])
+    brain.close()
+  })
+
+  it('lists all scopes when no type filter is requested', () => {
+    const brain = createBrain()
+    brain.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+    brain.ensureScope({ type: 'project', externalRef: 'p1', name: 'Project' })
+
+    expect(brain.listScopes().map(scope => scope.type)).toEqual(['global', 'project'])
+    brain.close()
+  })
+
   it('accepts explicit user memory but sends external content to review', () => {
     const brain = createBrain()
     const scope = brain.ensureScope({ type: 'workspace', externalRef: 'workspace', name: 'Workspace' })

@@ -1,13 +1,15 @@
 import { resolve } from 'path'
+import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  plugins: [react()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
     },
   },
   test: {
-    include: ['src/**/*.test.ts', 'electron/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'electron/**/*.test.ts'],
   },
 })
