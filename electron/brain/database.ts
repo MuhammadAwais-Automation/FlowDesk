@@ -13,6 +13,7 @@ import type {
   BrainQuery,
   BrainScope,
   BrainScopeType,
+  BrainSourceMetric,
   BrainStatus,
   CaptureEnvelope,
   MemoryKind,
@@ -293,6 +294,33 @@ export class BrainDatabase {
     return (this.db.prepare(`SELECT * FROM scopes WHERE type IN (${placeholders}) ORDER BY created_at, name`).all(...types) as SqlRow[]).map(mapScope)
   }
 
+  recordSourceMetric(input: Omit<BrainSourceMetric, 'id'>): BrainSourceMetric {
+    const id = randomUUID()
+    this.db.prepare(`
+      INSERT INTO source_metrics(id, scope_id, platform, metric, value, percentile, observed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(scope_id, platform, metric, observed_at) DO UPDATE SET
+        value = excluded.value, percentile = excluded.percentile
+    `).run(id, input.scopeId, input.platform, input.metric, input.value, clamp(input.percentile, 0, 1), input.observedAt)
+    const row = this.db.prepare(`
+      SELECT * FROM source_metrics WHERE scope_id = ? AND platform = ? AND metric = ? AND observed_at = ?
+    `).get(input.scopeId, input.platform, input.metric, input.observedAt) as SqlRow
+    return {
+      id: String(row.id), scopeId: String(row.scope_id), platform: String(row.platform), metric: String(row.metric),
+      value: Number(row.value), percentile: Number(row.percentile), observedAt: String(row.observed_at),
+    }
+  }
+
+  listSourceMetrics(input: { scopeId: string; platform?: string }): BrainSourceMetric[] {
+    const rows = input.platform
+      ? this.db.prepare('SELECT * FROM source_metrics WHERE scope_id = ? AND platform = ? ORDER BY observed_at DESC').all(input.scopeId, input.platform)
+      : this.db.prepare('SELECT * FROM source_metrics WHERE scope_id = ? ORDER BY observed_at DESC').all(input.scopeId)
+    return (rows as SqlRow[]).map(row => ({
+      id: String(row.id), scopeId: String(row.scope_id), platform: String(row.platform), metric: String(row.metric),
+      value: Number(row.value), percentile: Number(row.percentile), observedAt: String(row.observed_at),
+    }))
+  }
+
   upsertOpportunity(input: {
     scopeId: string
     fingerprint: string
@@ -352,6 +380,14 @@ export class BrainDatabase {
         ORDER BY o.score DESC, o.updated_at DESC LIMIT ?
       `).all(input.scopeId, limit) as SqlRow[]
     return rows.map(mapOpportunity)
+  }
+
+  getOpportunityByFingerprint(scopeId: string, fingerprint: string): BrainOpportunity | null {
+    const row = this.db.prepare(`
+      SELECT o.*, (SELECT count(*) FROM opportunity_evidence oe WHERE oe.opportunity_id = o.id) AS evidence_count
+      FROM opportunities o WHERE o.scope_id = ? AND o.fingerprint = ?
+    `).get(scopeId, fingerprint) as SqlRow | undefined
+    return row ? mapOpportunity(row) : null
   }
 
   reviewOpportunity(input: { id: string; scopeId: string; decision: 'qualify' | 'dismiss' | 'convert' }): BrainOpportunity {
@@ -803,7 +839,7 @@ export class BrainDatabase {
   }
 
   getArtifactManifest(jobId: string) {
-    const row = this.db.prepare('SELECT manifest_json FROM job_artifacts WHERE job_id = ? ORDER BY created_at DESC LIMIT 1').get(jobId) as SqlRow | undefined
+    const row = this.db.prepare("SELECT manifest_json FROM job_artifacts WHERE job_id = ? ORDER BY (kind = 'intelligence') DESC, created_at DESC LIMIT 1").get(jobId) as SqlRow | undefined
     if (row) return JSON.parse(String(row.manifest_json)) as Record<string, unknown>
     return this.getJob(jobId)?.result ?? null
   }
@@ -1021,25 +1057,45 @@ export class BrainDatabase {
 
   storeCaptureEnvelope(envelope: CaptureEnvelope, retentionDays = 30) {
     const expiresAt = new Date(new Date(envelope.capturedAt).getTime() + Math.max(1, retentionDays) * 86_400_000).toISOString()
+    // The legacy table has a global UNIQUE content_hash. Scope-keying the stored
+    // value preserves hard client isolation without changing the provenance hash
+    // retained inside the envelope itself.
+    const storageHash = createHash('sha256').update(`${envelope.scopeId}\u0000${envelope.contentHash}`).digest('hex')
     const sourceId = randomUUID()
     const envelopeId = randomUUID()
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      const existing = this.db.prepare('SELECT id FROM capture_envelopes WHERE content_hash = ?').get(envelope.contentHash)
+      const existing = this.db.prepare('SELECT id FROM capture_envelopes WHERE content_hash = ?').get(storageHash)
       if (existing) {
         this.db.exec('COMMIT')
         return false
       }
       this.db.prepare('INSERT INTO sources(id, scope_id, platform, external_id, canonical_url, content_hash, captured_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(sourceId, envelope.scopeId, envelope.source, envelope.externalId, envelope.canonicalUrl, envelope.contentHash, envelope.capturedAt, stableJson({ connectorId: envelope.connectorId, connectorVersion: envelope.connectorVersion }))
+        .run(sourceId, envelope.scopeId, envelope.source, envelope.externalId, envelope.canonicalUrl, storageHash, envelope.capturedAt, stableJson({ connectorId: envelope.connectorId, connectorVersion: envelope.connectorVersion }))
       this.db.prepare('INSERT INTO capture_envelopes(id, source_id, job_id, envelope_json, content_hash, captured_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(envelopeId, sourceId, envelope.jobId, stableJson(envelope), envelope.contentHash, envelope.capturedAt, expiresAt)
+        .run(envelopeId, sourceId, envelope.jobId, stableJson(envelope), storageHash, envelope.capturedAt, expiresAt)
       this.db.exec('COMMIT')
       return true
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  findCaptureSource(input: { scopeId: string; jobId: string; platform: string; externalId: string | null; canonicalUrl: string | null }): string | null {
+    const row = this.db.prepare(`
+      SELECT s.id
+      FROM sources s
+      JOIN capture_envelopes c ON c.source_id = s.id
+      WHERE s.scope_id = ? AND s.platform = ?
+        AND ((? IS NOT NULL AND s.external_id = ?) OR (? IS NOT NULL AND s.canonical_url = ?))
+      ORDER BY (c.job_id = ?) DESC, c.captured_at DESC
+      LIMIT 1
+    `).get(
+      input.scopeId, input.platform,
+      input.externalId, input.externalId, input.canonicalUrl, input.canonicalUrl, input.jobId,
+    ) as SqlRow | undefined
+    return row ? String(row.id) : null
   }
 
   purgeExpiredCaptures(at = now()) {
@@ -1052,6 +1108,11 @@ export class BrainDatabase {
     try {
       for (const row of rows) {
         this.db.prepare('DELETE FROM capture_envelopes WHERE id = ?').run(String(row.id))
+        this.db.prepare(`
+          UPDATE opportunity_evidence SET stale = 1
+          WHERE evidence_id IN (SELECT id FROM evidence WHERE source_id = ?)
+        `).run(String(row.source_id))
+        this.db.prepare('UPDATE evidence SET source_id = NULL WHERE source_id = ?').run(String(row.source_id))
         this.db.prepare('DELETE FROM sources WHERE id = ? AND NOT EXISTS (SELECT 1 FROM capture_envelopes WHERE source_id = ?)').run(String(row.source_id), String(row.source_id))
       }
       this.db.exec('COMMIT')

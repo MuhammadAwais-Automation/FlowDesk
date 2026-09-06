@@ -14,7 +14,7 @@ export class BrainJobRunner {
   private readonly handlers: RecipeStepHandlers
 
   constructor(private readonly database: BrainDatabase, artifacts: ArtifactStore, brainRoot: string, private readonly execute: BrainCapabilityExecutor) {
-    this.handlers = new RecipeStepHandlers(artifacts, brainRoot)
+    this.handlers = new RecipeStepHandlers(artifacts, brainRoot, database)
   }
 
   start() {

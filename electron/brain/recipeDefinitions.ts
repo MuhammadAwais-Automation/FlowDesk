@@ -5,7 +5,8 @@ import { gzipSync, gunzipSync } from 'node:zlib'
 import { z } from 'zod'
 import type { BrainJob } from '../../src/types/brain'
 import type { ArtifactStore } from './artifactStore'
-import { scoreOpportunity } from './intelligence'
+import type { BrainDatabase } from './database'
+import { parseIntelligenceResult, persistIntelligence, processIntelligence, type IntelligenceRecord } from './intelligenceProcessor'
 import { socialRecipeRequestSchema } from './socialRecipes'
 import { capabilityFailure, type BrainCapabilityErrorCode, type BrainCapabilityRequest, type BrainCapabilityResult } from './capabilityProtocol'
 
@@ -15,6 +16,10 @@ export const socialRecipeDefinitions = [
   { id: 'linkedin.opportunity_scan', version: 1, title: 'LinkedIn Opportunity Scan', steps: ['capture', 'normalize', 'classify', 'score', 'summarize'] },
 ]
 
+export const socialIntelligenceKeywordConfig = {
+  icpTerms: ['developer', 'react', 'typescript', 'software', 'dashboard', 'support', 'backlog', 'automation', 'integration', 'migration', 'consulting'],
+} as const
+
 export class RecipeStepError extends Error {
   constructor(readonly code: BrainCapabilityErrorCode) {
     const result = capabilityFailure('error', code)
@@ -22,27 +27,29 @@ export class RecipeStepError extends Error {
   }
 }
 
-const itemSchema = z.object({
-  id: z.string(), sourceRef: z.string(),
-  buyerIntent: z.number().min(0).max(1),
-  painSeverity: z.number().min(0).max(1),
-  icpFit: z.number().min(0).max(1),
-  evidenceQuality: z.number().min(0).max(1),
-  category: z.enum(['direct_lead', 'market_signal']).optional(),
-  score: z.number().min(0).max(100).optional(),
-})
-const itemsSchema = z.array(itemSchema).max(500)
-type Item = z.infer<typeof itemSchema>
-
 function field(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) if (typeof record[key] === 'string') return String(record[key])
   return ''
 }
 
+function numberField(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) if (typeof record[key] === 'number' && Number.isFinite(record[key])) return Math.max(0, Number(record[key]))
+  return 0
+}
+
+function observedAt(record: Record<string, unknown>) {
+  for (const key of ['createdAt', 'observedAt', 'timestamp', 'sentAt']) {
+    const value = record[key]
+    if (typeof value === 'string' && Number.isFinite(Date.parse(value))) return new Date(value).toISOString()
+    if (typeof value === 'number' && Number.isFinite(value)) return new Date(value < 10_000_000_000 ? value * 1000 : value).toISOString()
+  }
+  return null
+}
+
 // Checkpoints contain counts and local references. Text remains in utility-owned
 // artifacts; Task 5 can consume these deterministic per-stage artifacts directly.
 export class RecipeStepHandlers {
-  constructor(private readonly artifacts: ArtifactStore, private readonly brainRoot: string) {}
+  constructor(private readonly artifacts: ArtifactStore, private readonly brainRoot: string, private readonly database: BrainDatabase) {}
 
   private write(job: BrainJob, stage: string, items: unknown) {
     const directory = join(this.brainRoot, 'artifacts', job.id, 'derived')
@@ -92,40 +99,61 @@ export class RecipeStepHandlers {
   execute(job: BrainJob, stage: string, prior: Record<string, unknown> | undefined): Record<string, unknown> {
     if (stage === 'normalize') {
       const records = z.array(z.record(z.string(), z.unknown())).max(500).parse(this.readCapture(job, prior))
-      const items: Item[] = records.map((record, index) => {
+      const source = job.recipeId.startsWith('whatsapp') ? 'whatsapp' : 'linkedin'
+      const intelligenceRecords: IntelligenceRecord[] = records.map((record, index) => {
         const last = record.last && typeof record.last === 'object' && !Array.isArray(record.last) ? record.last as Record<string, unknown> : {}
         const text = (field(record, ['text', 'body', 'lastMessage', 'title']) || field(last, ['body', 'caption'])).replace(/\s+/g, ' ').trim().slice(0, 4000)
+        const externalId = field(record, ['id', 'urn', 'externalId', 'messageId', 'chatId']) || String(index)
+        const canonicalUrl = field(record, ['url', 'canonicalUrl', 'permalink']) || null
         return {
-          id: field(record, ['id', 'urn', 'externalId']) || String(index),
+          platform: source,
+          externalId,
           sourceRef: field(record, ['url', 'canonicalUrl', 'permalink']) || `${String(prior?.sourceRef)}#${index}`,
-          buyerIntent: /\b(hiring|hire|looking for|need|seeking|recommend)\b/i.test(text) ? 1 : 0,
-          painSeverity: /\b(urgent|blocked|broken|struggling)\b/i.test(text) ? 1 : 0,
-          icpFit: /\b(developer|consultant|software|project)\b/i.test(text) ? 1 : 0,
-          evidenceQuality: text ? 1 : 0,
+          sourceId: this.database.findCaptureSource({ scopeId: job.scopeId, jobId: job.id, platform: source, externalId, canonicalUrl }),
+          canonicalUrl,
+          text,
+          observedAt: observedAt(record),
+          engagement: numberField(record, ['reactions', 'reactionCount', 'likes', 'likeCount', 'comments', 'commentCount', 'unread', 'unreadCount']),
+          author: field(record, ['authorName', 'name']) ? {
+            name: field(record, ['authorName', 'name']),
+            verifiedHandle: field(record, ['verifiedHandle']) || null,
+          } : null,
         }
       })
-      return { stage, count: items.length, dataRef: this.write(job, stage, items) }
+      const queryTerms = typeof job.parameters.query === 'string' ? job.parameters.query.toLowerCase().match(/[a-z0-9]+/g) ?? [] : []
+      const result = processIntelligence({ scopeId: job.scopeId, records: intelligenceRecords, icpTerms: [...socialIntelligenceKeywordConfig.icpTerms, ...queryTerms], now: job.createdAt })
+      // Display names are not required by later recipe stages, so keep them out of
+      // durable derived artifacts. Raw provider content remains retention-governed.
+      const safe = { ...result, entities: [] }
+      return { stage, count: records.length, dataRef: this.write(job, stage, safe) }
     }
-    const items = itemsSchema.parse(this.read(job, prior))
+    const result = parseIntelligenceResult(this.read(job, prior))
     if (stage === 'classify') {
-      const classified = items.map(item => ({ ...item, category: item.buyerIntent > 0 ? 'direct_lead' : 'market_signal' }))
-      return { stage, count: items.length, dataRef: this.write(job, stage, classified) }
+      const categoryCounts = Object.fromEntries(result.opportunities.map(item => item.category).map(category => [category, result.opportunities.filter(item => item.category === category).length]))
+      return { stage, count: result.opportunities.length, dataRef: this.write(job, stage, result), categoryCounts }
     }
     if (stage === 'score') {
-      const scored = items.map(item => ({ ...item, ...scoreOpportunity({
-        buyerIntent: item.buyerIntent,
-        painSeverity: item.painSeverity,
-        icpFit: item.icpFit,
-        recency: 0, repetition: 0, crossSourceSupport: 0, evidenceQuality: item.evidenceQuality, risk: 0,
-      }, item.category ?? 'market_signal') }))
-      return { stage, count: items.length, dataRef: this.write(job, stage, scored) }
+      const scoreBands = {
+        qualified: result.opportunities.filter(item => item.score >= 70).length,
+        review: result.opportunities.filter(item => item.score >= 50 && item.score < 70).length,
+        low: result.opportunities.filter(item => item.score < 50).length,
+      }
+      return { stage, count: result.opportunities.length, dataRef: this.write(job, stage, result), scoreBands }
     }
     if (stage === 'summarize') {
-      const actionableCount = items.filter(item => item.category === 'direct_lead' && (item.score ?? 0) >= 50).length
+      const persisted = persistIntelligence(this.database, result)
+      const citations = [...new Set(result.opportunities.flatMap(item => item.evidence.map(evidence => evidence.sourceRef)))]
+      const intelligenceHash = createHash('sha256').update(JSON.stringify(result)).digest('hex')
+      const manifest = this.artifacts.writeIntelligenceManifest(job.id, {
+        records: result.records, deduplicated: result.deduplicated, opportunities: persisted.opportunities,
+        qualifiedCandidates: result.qualifiedCandidates, coverage: result.coverage, warnings: result.warnings,
+        failures: result.failures, citations, hashes: { intelligence: intelligenceHash },
+      })
+      const actionableCount = result.opportunities.filter(item => item.score >= 50).length
       return {
-        stage, recordCount: items.length, actionableCount, actionable: actionableCount > 0,
-        summary: `Reviewed ${items.length} records; ${actionableCount} potential opportunities.`,
-        extractorVersion: 'deterministic-v1',
+        stage, recordCount: result.records, actionableCount, actionable: actionableCount > 0,
+        summary: `Reviewed ${result.records} records; ${actionableCount} potential opportunities.`,
+        extractorVersion: 'deterministic-v2', ...manifest,
       }
     }
     throw new RecipeStepError('permanent')

@@ -61,4 +61,42 @@ describe('ArtifactStore', () => {
     expect(gunzipSync(readFileSync(manifest.artifactRefs[0].replace('file://', ''))).toString()).toContain('private customer sentence')
     database.close()
   })
+
+  it('writes a compact cited intelligence manifest without raw payload content', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-artifacts-'))
+    roots.push(root)
+    const database = new BrainDatabase(join(root, 'brain.sqlite'))
+    const scope = database.ensureScope({ type: 'workspace', externalRef: 'workspace', name: 'Workspace' })
+    database.registerRecipe({ id: 'test.recipe', version: 1, title: 'Test', steps: ['capture'] })
+    const job = database.enqueueJob({ recipeId: 'test.recipe', recipeVersion: 1, scopeId: scope.id, parameters: {} })
+    const store = new ArtifactStore(database, join(root, 'artifacts'))
+    const manifest = store.writeIntelligenceManifest(job.id, {
+      records: 3, deduplicated: 1, opportunities: 1, qualifiedCandidates: 1,
+      coverage: { platforms: ['linkedin'], observedFrom: null, observedTo: null }, warnings: [], failures: [],
+      citations: ['https://linkedin.test/posts/1'], hashes: { intelligence: 'abc123' },
+    })
+    expect(manifest).toMatchObject({ records: 3, deduplicated: 1, opportunities: 1, qualifiedCandidates: 1 })
+    expect(JSON.stringify(manifest)).not.toContain('private customer sentence')
+    expect(database.getArtifactManifest(job.id)).toEqual(manifest)
+    database.close()
+  })
+
+  it('deduplicates captures within a scope without dropping the same content from another client', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-artifacts-'))
+    roots.push(root)
+    const database = new BrainDatabase(join(root, 'brain.sqlite'))
+    const clientA = database.ensureScope({ type: 'client', externalRef: 'client-a', name: 'Client A' })
+    const clientB = database.ensureScope({ type: 'client', externalRef: 'client-b', name: 'Client B' })
+    const store = new ArtifactStore(database, join(root, 'artifacts'))
+    const record = { id: 'same-id', text: 'Same captured content', url: 'https://linkedin.test/posts/same' }
+    for (const [jobId, scopeId] of [['job-a', clientA.id], ['job-b', clientB.id]] as const) {
+      store.ingestBatch({ source: 'linkedin', jobId, stepId: 'capture', scopeId, accountId: null, connectorVersion: '1', records: [record] })
+    }
+    const sourceA = database.findCaptureSource({ scopeId: clientA.id, jobId: 'job-a', platform: 'linkedin', externalId: 'same-id', canonicalUrl: record.url })
+    const sourceB = database.findCaptureSource({ scopeId: clientB.id, jobId: 'job-b', platform: 'linkedin', externalId: 'same-id', canonicalUrl: record.url })
+    expect(sourceA).toEqual(expect.any(String))
+    expect(sourceB).toEqual(expect.any(String))
+    expect(sourceA).not.toBe(sourceB)
+    database.close()
+  })
 })

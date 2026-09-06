@@ -193,13 +193,64 @@ describe('BrainJobRunner', () => {
     ] }), 'whatsapp.unread_intelligence')
     for (let i = 0; i < 5; i++) await runner.runOnce()
     const normalize = JSON.parse(String(db.listCheckpoints(job.id)[1].checkpoint_json))
-    expect(JSON.parse(gunzipSync(readFileSync(normalize.dataRef)).toString())).toEqual([
-      { id: 'chat', sourceRef: expect.stringMatching(new RegExp(`^artifact://${job.id}/raw/[^/]+-[a-f0-9]{64}\\.jsonl\\.gz#0$`)), buyerIntent: 1, painSeverity: 0, icpFit: 1, evidenceQuality: 1 },
-    ])
+    expect(JSON.parse(gunzipSync(readFileSync(normalize.dataRef)).toString())).toMatchObject({
+      records: 1,
+      opportunities: [{
+        category: 'direct_lead',
+        topicTokens: ['developer'],
+        evidence: [{ sourceRef: expect.stringMatching(new RegExp(`^artifact://${job.id}/raw/[^/]+-[a-f0-9]{64}\\.jsonl\\.gz#0$`)) }],
+      }],
+    })
     for (const name of readdirSync(join(root, 'artifacts', job.id, 'derived'))) {
       expect(gunzipSync(readFileSync(join(root, 'artifacts', job.id, 'derived', name))).toString()).not.toContain('Hiring a developer')
     }
     expect(db.getJob(job.id)?.result).toMatchObject({ actionableCount: 1 })
+  })
+
+  it('persists cited opportunities and completes with a compact intelligence manifest', async () => {
+    const { runner, db, job } = setup(async ({ request }) => ({ id: request.id, ok: true, records: [
+      { id: 'lead', text: 'Looking for a React developer for our urgent dashboard.', url: 'https://linkedin.test/posts/lead', createdAt: '2026-09-05T00:00:00.000Z', reactions: 12 },
+      { id: 'noise', text: 'React is a JavaScript library.', url: 'https://linkedin.test/posts/noise', createdAt: '2026-09-05T00:00:00.000Z', reactions: 50 },
+    ] }))
+    for (let i = 0; i < 5; i++) await runner.runOnce()
+    const opportunities = db.listOpportunities({ scopeId: job.scopeId })
+    expect(opportunities).toHaveLength(1)
+    expect(opportunities[0]).toMatchObject({ category: 'direct_lead', evidenceCount: 1 })
+    expect(db.getOpportunityEvidence({ id: opportunities[0].id, scopeId: job.scopeId })[0]).toMatchObject({
+      sourceId: expect.any(String), sourceRef: 'https://linkedin.test/posts/lead',
+    })
+    expect(db.getArtifactManifest(job.id)).toMatchObject({
+      records: 2, deduplicated: 0, opportunities: 1, qualifiedCandidates: expect.any(Number),
+      coverage: { platforms: ['linkedin'] }, hashes: { intelligence: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      citations: ['https://linkedin.test/posts/lead'],
+    })
+    expect(JSON.stringify(db.getArtifactManifest(job.id))).not.toContain('Looking for a React developer')
+  })
+
+  it('correlates the same scoped pain across completed LinkedIn and WhatsApp jobs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-runner-correlation-'))
+    const service = new BrainService(join(root, 'brain.sqlite'))
+    cleanups.push(() => { service.close(); rmSync(root, { recursive: true, force: true }) })
+    const scope = service.database.ensureScope({ type: 'client', externalRef: 'correlation', name: 'Correlation' })
+    for (const recipeId of ['linkedin.opportunity_scan', 'whatsapp.unread_intelligence']) {
+      service.database.grantConsent({ scopeId: scope.id, recipeId, provider: 'local-brain', fields: ['message_text'] })
+      service.database.enqueueJob({ recipeId, recipeVersion: 1, scopeId: scope.id, parameters: { query: recipeId } })
+    }
+    const runner = new BrainJobRunner(service.database, service.artifacts, root, async envelope => ({
+      id: envelope.request.id, ok: true, records: [{
+        id: envelope.recipeId, text: envelope.recipeId.startsWith('linkedin')
+          ? 'Our support backlog is blocking the team.'
+          : 'The support backlog keeps us blocked.',
+        url: envelope.recipeId.startsWith('linkedin') ? 'https://linkedin.test/posts/support' : undefined,
+      }],
+    }))
+    cleanups.push(() => runner.stop())
+    for (let i = 0; i < 10; i++) await runner.runOnce()
+    const opportunities = service.database.listOpportunities({ scopeId: scope.id })
+    expect(opportunities).toHaveLength(1)
+    expect(opportunities[0].evidenceCount).toBe(2)
+    expect(service.database.getOpportunityEvidence({ id: opportunities[0].id, scopeId: scope.id }).map(item => item.platform).sort()).toEqual(['linkedin', 'whatsapp'])
+    expect(opportunities[0].summary).toContain('2 cited signals across 2 platforms')
   })
 
   it('fails permanent connector errors without scheduling another attempt', async () => {

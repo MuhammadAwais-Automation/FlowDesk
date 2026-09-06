@@ -98,4 +98,26 @@ export class ArtifactStore {
     }
     return manifest
   }
+
+  writeIntelligenceManifest(jobId: string, input: {
+    records: number
+    deduplicated: number
+    opportunities: number
+    qualifiedCandidates: number
+    coverage: { platforms: string[]; observedFrom: string | null; observedTo: string | null }
+    warnings: string[]
+    failures: string[]
+    citations: string[]
+    hashes: { intelligence: string }
+  }) {
+    const jobRoot = resolve(this.root, jobId)
+    mkdirSync(jobRoot, { recursive: true })
+    const manifest = { version: 1, jobId, ...input }
+    const json = JSON.stringify(manifest, null, 2)
+    const contentHash = createHash('sha256').update(json).digest('hex')
+    const path = join(jobRoot, 'intelligence-manifest.json')
+    writeFileSync(path, json, 'utf8')
+    this.database.registerJobArtifact({ jobId, kind: 'intelligence', uri: `file://${path}`, contentHash, manifest })
+    return manifest
+  }
 }
