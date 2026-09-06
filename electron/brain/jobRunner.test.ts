@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
@@ -188,14 +188,17 @@ describe('BrainJobRunner', () => {
   })
 
   it('normalizes real WhatsApp last-message previews and scores their evidence', async () => {
-    const { runner, db, job } = setup(async ({ request }) => ({ id: request.id, ok: true, records: [
+    const { runner, db, job, root } = setup(async ({ request }) => ({ id: request.id, ok: true, records: [
       { id: 'chat', name: 'Client', unread: 2, last: { body: ' Hiring   a developer ', type: 'chat' } },
     ] }), 'whatsapp.unread_intelligence')
     for (let i = 0; i < 5; i++) await runner.runOnce()
     const normalize = JSON.parse(String(db.listCheckpoints(job.id)[1].checkpoint_json))
     expect(JSON.parse(gunzipSync(readFileSync(normalize.dataRef)).toString())).toEqual([
-      { id: 'chat', text: 'Hiring a developer', sourceRef: `artifact://${job.id}/derived/normalize.json.gz#0` },
+      { id: 'chat', sourceRef: expect.stringMatching(new RegExp(`^artifact://${job.id}/raw/[^/]+-[a-f0-9]{64}\\.jsonl\\.gz#0$`)), buyerIntent: 1, painSeverity: 0, icpFit: 1, evidenceQuality: 1 },
     ])
+    for (const name of readdirSync(join(root, 'artifacts', job.id, 'derived'))) {
+      expect(gunzipSync(readFileSync(join(root, 'artifacts', job.id, 'derived', name))).toString()).not.toContain('Hiring a developer')
+    }
     expect(db.getJob(job.id)?.result).toMatchObject({ actionableCount: 1 })
   })
 

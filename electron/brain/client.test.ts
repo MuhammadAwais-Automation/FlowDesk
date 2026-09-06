@@ -10,6 +10,16 @@ class FakeChild extends EventEmitter implements BrainUtilityChild {
   kill() {}
 }
 
+class ExitedChild extends FakeChild {
+  override postMessage(message: unknown) {
+    if (message && typeof message === 'object' && 'type' in message && message.type === 'capability:result') {
+      this.emit('exit', 1)
+      throw new Error('utility port closed')
+    }
+    super.postMessage(message)
+  }
+}
+
 describe('BrainClient', () => {
   it('routes validated capability requests without forwarding raw records as events', async () => {
     const child = new FakeChild()
@@ -41,6 +51,20 @@ describe('BrainClient', () => {
     finish({ id: 'read', ok: true, records: [] })
     await Promise.resolve()
     expect(child.sent).toEqual([])
+  })
+
+  it('contains a utility-exit race while posting a capability result', async () => {
+    const child = new ExitedChild()
+    const client = new BrainClient(() => child, {
+      restartDelaysMs: [],
+      capabilityHandler: async envelope => ({ id: envelope.request.id, ok: true, records: [] }),
+    })
+    client.start()
+    child.emit('message', { type: 'capability:request', jobId: 'job', scopeId: 'scope', recipeId: 'linkedin.opportunity_scan', accountId: null,
+      request: { id: 'read', capability: 'linkedin.search', input: { query: 'hiring', limit: 10 } } })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(client.getRuntimeStatus().state).toBe('degraded')
+    client.stop()
   })
 
   it('matches utility responses to requests', async () => {

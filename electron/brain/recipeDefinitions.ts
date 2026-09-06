@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { gzipSync, gunzipSync } from 'node:zlib'
 import { z } from 'zod'
@@ -22,7 +23,11 @@ export class RecipeStepError extends Error {
 }
 
 const itemSchema = z.object({
-  id: z.string(), text: z.string().max(4000), sourceRef: z.string(),
+  id: z.string(), sourceRef: z.string(),
+  buyerIntent: z.number().min(0).max(1),
+  painSeverity: z.number().min(0).max(1),
+  icpFit: z.number().min(0).max(1),
+  evidenceQuality: z.number().min(0).max(1),
   category: z.enum(['direct_lead', 'market_signal']).optional(),
   score: z.number().min(0).max(100).optional(),
 })
@@ -42,8 +47,10 @@ export class RecipeStepHandlers {
   private write(job: BrainJob, stage: string, items: unknown) {
     const directory = join(this.brainRoot, 'artifacts', job.id, 'derived')
     mkdirSync(directory, { recursive: true })
-    const path = join(directory, `${stage}.json.gz`)
-    writeFileSync(path, gzipSync(JSON.stringify(items)))
+    const json = JSON.stringify(items)
+    const hash = createHash('sha256').update(json).digest('hex')
+    const path = join(directory, `${stage}-${hash}.json.gz`)
+    if (!existsSync(path)) writeFileSync(path, gzipSync(json), { flag: 'wx' })
     return path
   }
 
@@ -53,6 +60,15 @@ export class RecipeStepHandlers {
     const path = resolve(prior.dataRef)
     if (!path.startsWith(`${root}${sep}`)) throw new RecipeStepError('permanent')
     return JSON.parse(gunzipSync(readFileSync(path)).toString('utf8')) as unknown
+  }
+
+  private readCapture(job: BrainJob, prior: Record<string, unknown> | undefined) {
+    if (!prior || prior.stage !== 'capture' || typeof prior.dataRef !== 'string' || !prior.dataRef.startsWith('file://')) throw new RecipeStepError('permanent')
+    const root = resolve(this.brainRoot, 'artifacts', job.id, 'raw')
+    const path = resolve(prior.dataRef.slice('file://'.length))
+    if (!path.startsWith(`${root}${sep}`)) throw new RecipeStepError('permanent')
+    const content = gunzipSync(readFileSync(path)).toString('utf8')
+    return content ? content.split('\n').map(line => z.record(z.string(), z.unknown()).parse(JSON.parse(line) as unknown)) : []
   }
 
   captureRequest(job: BrainJob, id: string): BrainCapabilityRequest {
@@ -70,33 +86,37 @@ export class RecipeStepHandlers {
       scopeId: job.scopeId, accountId: job.accountId, connectorVersion: 'flowdesk-read-v1',
       records: result.records, retentionDays: Number(job.parameters.retentionDays ?? 30),
     })
-    return { stage: 'capture', count: result.records.length, dataRef: this.write(job, 'capture', result.records), manifestJobId: manifest.jobId }
+    return { stage: 'capture', count: result.records.length, dataRef: manifest.artifactRefs[0], sourceRef: manifest.rawPayloadRef, manifestJobId: manifest.jobId }
   }
 
   execute(job: BrainJob, stage: string, prior: Record<string, unknown> | undefined): Record<string, unknown> {
     if (stage === 'normalize') {
-      const records = z.array(z.record(z.string(), z.unknown())).max(500).parse(this.read(job, prior))
+      const records = z.array(z.record(z.string(), z.unknown())).max(500).parse(this.readCapture(job, prior))
       const items: Item[] = records.map((record, index) => {
         const last = record.last && typeof record.last === 'object' && !Array.isArray(record.last) ? record.last as Record<string, unknown> : {}
+        const text = (field(record, ['text', 'body', 'lastMessage', 'title']) || field(last, ['body', 'caption'])).replace(/\s+/g, ' ').trim().slice(0, 4000)
         return {
           id: field(record, ['id', 'urn', 'externalId']) || String(index),
-          text: (field(record, ['text', 'body', 'lastMessage', 'title']) || field(last, ['body', 'caption'])).replace(/\s+/g, ' ').trim().slice(0, 4000),
-          sourceRef: field(record, ['url', 'canonicalUrl', 'permalink']) || `artifact://${job.id}/derived/normalize.json.gz#${index}`,
+          sourceRef: field(record, ['url', 'canonicalUrl', 'permalink']) || `${String(prior?.sourceRef)}#${index}`,
+          buyerIntent: /\b(hiring|hire|looking for|need|seeking|recommend)\b/i.test(text) ? 1 : 0,
+          painSeverity: /\b(urgent|blocked|broken|struggling)\b/i.test(text) ? 1 : 0,
+          icpFit: /\b(developer|consultant|software|project)\b/i.test(text) ? 1 : 0,
+          evidenceQuality: text ? 1 : 0,
         }
       })
       return { stage, count: items.length, dataRef: this.write(job, stage, items) }
     }
     const items = itemsSchema.parse(this.read(job, prior))
     if (stage === 'classify') {
-      const classified = items.map(item => ({ ...item, category: /\b(hiring|hire|looking for|need|seeking|recommend)\b/i.test(item.text) ? 'direct_lead' : 'market_signal' }))
+      const classified = items.map(item => ({ ...item, category: item.buyerIntent > 0 ? 'direct_lead' : 'market_signal' }))
       return { stage, count: items.length, dataRef: this.write(job, stage, classified) }
     }
     if (stage === 'score') {
       const scored = items.map(item => ({ ...item, ...scoreOpportunity({
-        buyerIntent: item.category === 'direct_lead' ? 1 : 0,
-        painSeverity: /\b(urgent|blocked|broken|struggling)\b/i.test(item.text) ? 1 : 0,
-        icpFit: /\b(developer|consultant|software|project)\b/i.test(item.text) ? 1 : 0,
-        recency: 0, repetition: 0, crossSourceSupport: 0, evidenceQuality: item.text ? 1 : 0, risk: 0,
+        buyerIntent: item.buyerIntent,
+        painSeverity: item.painSeverity,
+        icpFit: item.icpFit,
+        recency: 0, repetition: 0, crossSourceSupport: 0, evidenceQuality: item.evidenceQuality, risk: 0,
       }, item.category ?? 'market_signal') }))
       return { stage, count: items.length, dataRef: this.write(job, stage, scored) }
     }

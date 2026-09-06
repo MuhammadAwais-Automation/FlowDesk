@@ -168,17 +168,25 @@ describe('Brain scope transitions', () => {
 
 describe('Intelligence scope transitions', () => {
   it('grants and completes a capture when the originating scope remains selected', async () => {
-    api.brainRunSocialRecipe.mockResolvedValueOnce(consent).mockResolvedValueOnce({ requiresConsent: false, manifest: { recordCount: 3 } })
+    api.brainRunSocialRecipe.mockResolvedValueOnce(consent).mockResolvedValueOnce({ requiresConsent: false, job: { id: 'job-queued', status: 'queued' } })
     api.brainGrantConsent.mockResolvedValue({ granted: true })
     await mount(Intelligence)
     fireEvent.click(screen.getByRole('button', { name: 'Scan unread' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Grant consent & run once' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Grant consent & run once' }))
-    await waitFor(() => expect(screen.getByText('Capture complete: 3 records')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Job queued: job-queued · queued')).toBeTruthy())
     expect(api.brainGrantConsent).toHaveBeenCalledWith({ scopeId: 'a', recipeId: 'whatsapp.unread_intelligence', provider: 'whatsapp', fields: ['body'] })
     expect(api.brainRunSocialRecipe).toHaveBeenLastCalledWith(expect.objectContaining({ scopeId: 'a' }))
     switchScope()
-    expect(screen.queryByText('Capture complete: 3 records')).toBeNull()
+    expect(screen.queryByText('Job queued: job-queued · queued')).toBeNull()
+  })
+
+  it('reports enqueue status and never claims a zero-record capture completed', async () => {
+    api.brainRunSocialRecipe.mockResolvedValue({ requiresConsent: false, job: { id: 'job-42', status: 'queued' } })
+    await mount(Intelligence)
+    fireEvent.click(screen.getByRole('button', { name: 'Scan unread' }))
+    await waitFor(() => expect(screen.getByText('Job queued: job-42 · queued')).toBeTruthy())
+    expect(screen.queryByText(/Capture complete/)).toBeNull()
   })
 
   it('ignores an old capture even after switching away and back to its scope', async () => {

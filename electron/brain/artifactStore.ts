@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { BrainDatabase } from './database'
@@ -34,11 +34,11 @@ export class ArtifactStore {
     mkdirSync(rawDir, { recursive: true })
     mkdirSync(normalizedDir, { recursive: true })
     mkdirSync(reportDir, { recursive: true })
-    const rawPath = join(rawDir, `${input.stepId}.jsonl.gz`)
-    const normalizedPath = join(normalizedDir, `${input.stepId}.jsonl.gz`)
-    const reportPath = join(reportDir, 'manifest.md')
     const rawLines = input.records.map(record => JSON.stringify(record)).join('\n')
-    writeFileSync(rawPath, gzipSync(rawLines))
+    const rawHash = createHash('sha256').update(rawLines).digest('hex')
+    const rawPath = join(rawDir, `${input.stepId}-${rawHash}.jsonl.gz`)
+    const rawPayloadRef = `artifact://${input.jobId}/raw/${input.stepId}-${rawHash}.jsonl.gz`
+    if (!existsSync(rawPath)) writeFileSync(rawPath, gzipSync(rawLines), { flag: 'wx' })
 
     const normalized = input.records.map((record, index) => {
       const item = normalizeCapture({
@@ -55,14 +55,24 @@ export class ArtifactStore {
         accountId: input.accountId,
         connectorVersion: input.connectorVersion,
       })
-      item.envelope.rawPayloadRef = `artifact://${input.jobId}/raw/${input.stepId}.jsonl.gz`
+      item.envelope.rawPayloadRef = rawPayloadRef
+      item.evidence.sourceRef = item.envelope.canonicalUrl ?? `${rawPayloadRef}#${index}`
       this.database.storeCaptureEnvelope(item.envelope, input.retentionDays ?? 30)
-      return item
+      return {
+        source: item.envelope.source,
+        externalId: item.envelope.externalId,
+        parentExternalId: item.envelope.parentExternalId,
+        canonicalUrl: item.envelope.canonicalUrl,
+        observedAt: item.envelope.observedAt,
+        contentHash: item.envelope.contentHash,
+        sourceRef: item.evidence.sourceRef,
+      }
     })
     const normalizedLines = normalized.map(item => JSON.stringify(item)).join('\n')
-    writeFileSync(normalizedPath, gzipSync(normalizedLines))
-    const rawHash = createHash('sha256').update(rawLines).digest('hex')
     const normalizedHash = createHash('sha256').update(normalizedLines).digest('hex')
+    const normalizedPath = join(normalizedDir, `${input.stepId}-${normalizedHash}.jsonl.gz`)
+    const reportPath = join(reportDir, `${input.stepId}-${rawHash}.md`)
+    if (!existsSync(normalizedPath)) writeFileSync(normalizedPath, gzipSync(normalizedLines), { flag: 'wx' })
     const artifactRefs = [`file://${rawPath}`, `file://${normalizedPath}`, `file://${reportPath}`]
     const manifest = {
       version: 1,
@@ -75,10 +85,11 @@ export class ArtifactStore {
       failures: [],
       schemas: [`${input.source}.capture.v1`],
       hashes: { raw: rawHash, normalized: normalizedHash },
-      citations: normalized.map(item => item.evidence.sourceRef),
+      citations: normalized.map(item => item.sourceRef),
+      rawPayloadRef,
       artifactRefs,
     }
-    writeFileSync(reportPath, `# ${input.source} capture\n\n- Records: ${input.records.length}\n- Raw hash: ${rawHash}\n- Normalized hash: ${normalizedHash}\n`, 'utf8')
+    if (!existsSync(reportPath)) writeFileSync(reportPath, `# ${input.source} capture\n\n- Records: ${input.records.length}\n- Raw hash: ${rawHash}\n- Normalized hash: ${normalizedHash}\n`, { encoding: 'utf8', flag: 'wx' })
     writeFileSync(join(jobRoot, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8')
     if (this.database.getJob(input.jobId)) {
       this.database.registerJobArtifact({ jobId: input.jobId, kind: 'raw', uri: artifactRefs[0], contentHash: rawHash, manifest })

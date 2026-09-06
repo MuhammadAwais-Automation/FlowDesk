@@ -28,7 +28,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
     const request = ++captureRequest.current
     setPendingConsent(null)
     setNotice('')
-    const response = await window.electronAPI.brainRunSocialRecipe({ recipeId, scopeId: scope.id, accountId: null, parameters: { limit: 50, retentionDays: 30, mode: 'background' } }) as { requiresConsent: boolean; provider?: string; fields?: string[]; retentionDays?: number; destinationScopeId?: string; manifest?: { recordCount?: number } }
+    const response = await window.electronAPI.brainRunSocialRecipe({ recipeId, scopeId: scope.id, accountId: null, parameters: { limit: 50, retentionDays: 30, mode: 'background' } }) as { requiresConsent: boolean; provider?: string; fields?: string[]; retentionDays?: number; destinationScopeId?: string; job?: { id: string; status: string } }
     if (!active.current || request !== captureRequest.current) return
     if (response.requiresConsent) {
       if (!response.provider || !response.fields || response.destinationScopeId !== scope.id) return
@@ -36,7 +36,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
       return
     }
     setPendingConsent(null)
-    setNotice(`Capture complete: ${response.manifest?.recordCount ?? 0} records`)
+    setNotice(response.job ? `Job queued: ${response.job.id} · ${response.job.status}` : 'Unable to queue capture job')
   }
 
   async function grantAndRun() {

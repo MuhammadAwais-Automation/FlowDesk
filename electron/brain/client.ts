@@ -80,7 +80,14 @@ export class BrainClient extends EventEmitter {
         : capabilityFailure(envelope.request.id, 'permanent')
       if (result.id !== envelope.request.id) result = capabilityFailure(envelope.request.id, 'permanent')
     } catch { result = capabilityFailure(envelope.request.id, 'transient') }
-    if (this.child === child && !this.stopped) child.postMessage({ type: 'capability:result', result })
+    if (this.child !== child || this.stopped) return
+    try {
+      child.postMessage({ type: 'capability:result', result })
+    } catch {
+      // The utility can exit between the identity fence and Electron's native
+      // port send. Its exit handler owns restart/degraded state; never surface
+      // this expected race as an unhandled async rejection.
+    }
   }
 
   private onExit(code: number) {
