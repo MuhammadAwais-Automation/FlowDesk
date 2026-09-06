@@ -18,6 +18,35 @@ afterEach(() => {
 })
 
 describe('BrainDatabase', () => {
+  it('lists vault conflicts only for the requested client', () => {
+    const brain = createBrain()
+    try {
+      const a = brain.ensureScope({ type: 'client', externalRef: 'a', name: 'A' })
+      const b = brain.ensureScope({ type: 'client', externalRef: 'b', name: 'B' })
+      for (const scope of [a, b]) {
+        const memory = brain.remember({ scopeId: scope.id, kind: 'fact', text: scope.name })
+        brain.addVaultConflict({ memoryId: memory.id, filePath: `${scope.name}.md`, baseRevision: 1, databaseText: scope.name, fileText: `File ${scope.name}` })
+      }
+      expect(brain.listVaultConflicts(a.id).map(row => row.file_path)).toEqual(['A.md'])
+      expect(brain.listVaultConflicts(b.id).map(row => row.file_path)).toEqual(['B.md'])
+    } finally { brain.close() }
+  })
+
+  it.each(['database', 'file'] as const)('refuses cross-client vault resolution using %s', resolution => {
+    const brain = createBrain()
+    try {
+      const a = brain.ensureScope({ type: 'client', externalRef: 'a', name: 'A' })
+      const b = brain.ensureScope({ type: 'client', externalRef: 'b', name: 'B' })
+      const memory = brain.remember({ scopeId: a.id, kind: 'fact', text: 'Private A' })
+      const id = brain.addVaultConflict({ memoryId: memory.id, filePath: 'A.md', baseRevision: 1, databaseText: 'Private A', fileText: 'Changed A' })
+      expect(brain.resolveVaultConflict(id, resolution, b.id)).toBeNull()
+      expect(brain.getMemory(memory.id)?.text).toBe('Private A')
+      expect(brain.listVaultConflicts(a.id)).toHaveLength(1)
+      expect(brain.resolveVaultConflict(id, resolution, a.id)?.text).toBe(resolution === 'file' ? 'Changed A' : 'Private A')
+      expect(brain.listVaultConflicts(a.id)).toHaveLength(0)
+    } finally { brain.close() }
+  })
+
   it('creates the complete v1 schema with WAL, foreign keys and FTS5', () => {
     const brain = createBrain()
     expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 1 })
@@ -218,7 +247,7 @@ describe('BrainDatabase', () => {
     const scope = brain.ensureScope({ type: 'workspace', externalRef: 'vault-conflict', name: 'Vault' })
     const memory = brain.remember({ scopeId: scope.id, kind: 'note', text: 'Database copy' })
     const conflictId = brain.addVaultConflict({ memoryId: memory.id, filePath: 'memory.md', baseRevision: 1, databaseText: 'Database copy', fileText: 'File copy' })
-    expect(brain.resolveVaultConflict(conflictId, 'file')?.text).toBe('File copy')
+    expect(brain.resolveVaultConflict(conflictId, 'file', scope.id)?.text).toBe('File copy')
     expect(brain.listVaultConflicts()).toHaveLength(0)
     brain.close()
   })

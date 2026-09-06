@@ -81,9 +81,9 @@ export class BrainService {
       case 'failJob': return this.database.failJob(request.payload.id, request.payload.error)
       case 'vaultStatus': return this.vault.getStatus()
       case 'vaultSync': return { files: this.vault.writeAll(), reconciled: this.vault.reconcileAll() }
-      case 'listVaultConflicts': return this.database.listVaultConflicts()
+      case 'listVaultConflicts': return this.database.listVaultConflicts(request.payload.scopeId)
       case 'resolveVaultConflict': {
-        const memory = this.database.resolveVaultConflict(request.payload.id, request.payload.resolution)
+        const memory = this.database.resolveVaultConflict(request.payload.id, request.payload.resolution, request.payload.scopeId)
         if (memory) this.vault.writeMemory(memory.id)
         return memory
       }

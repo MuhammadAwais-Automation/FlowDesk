@@ -1,22 +1,37 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Activity, LockKeyhole, Radar, Radio } from 'lucide-react'
 import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
 import { INTELLIGENCE_SOURCES, INTELLIGENCE_TABS } from '@/lib/brainUi'
 
 export default function Intelligence() {
   const [tab, setTab] = useState<(typeof INTELLIGENCE_TABS)[number]>('Overview')
-  const { scopes, scope, selectScope, loading: scopeLoading, error: scopeError } = useBrainScope()
+  const scopeState = useBrainScope()
+  return <IntelligenceScopeView key={scopeState.scope?.id ?? 'loading'} {...scopeState} tab={tab} setTab={setTab} />
+}
+
+function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoading, error: scopeError, tab, setTab }: ReturnType<typeof useBrainScope> & {
+  tab: (typeof INTELLIGENCE_TABS)[number]
+  setTab: (tab: (typeof INTELLIGENCE_TABS)[number]) => void
+}) {
   const [notice, setNotice] = useState('')
   const [pendingConsent, setPendingConsent] = useState<{ recipeId: string; provider: string; fields: string[]; retentionDays: number; destinationScopeId: string } | null>(null)
+  const active = useRef(true)
+  const captureRequest = useRef(0)
 
   useEffect(() => {
-    setPendingConsent(null)
-  }, [scope?.id])
+    active.current = true
+    return () => { active.current = false }
+  }, [])
 
   async function runRecipe(recipeId: 'whatsapp.unread_intelligence' | 'linkedin.opportunity_scan') {
-    if (!scope) return
+    if (!scope || !active.current) return
+    const request = ++captureRequest.current
+    setPendingConsent(null)
+    setNotice('')
     const response = await window.electronAPI.brainRunSocialRecipe({ recipeId, scopeId: scope.id, accountId: null, parameters: { limit: 50, retentionDays: 30, mode: 'background' } }) as { requiresConsent: boolean; provider?: string; fields?: string[]; retentionDays?: number; destinationScopeId?: string; manifest?: { recordCount?: number } }
-    if (response.requiresConsent && response.provider && response.fields && response.destinationScopeId) {
+    if (!active.current || request !== captureRequest.current) return
+    if (response.requiresConsent) {
+      if (!response.provider || !response.fields || response.destinationScopeId !== scope.id) return
       setPendingConsent({ recipeId, provider: response.provider, fields: response.fields, retentionDays: response.retentionDays ?? 30, destinationScopeId: response.destinationScopeId })
       return
     }
@@ -25,8 +40,10 @@ export default function Intelligence() {
   }
 
   async function grantAndRun() {
-    if (!pendingConsent) return
+    if (!scope || !active.current || !pendingConsent || pendingConsent.destinationScopeId !== scope.id) return
+    const request = captureRequest.current
     await window.electronAPI.brainGrantConsent({ scopeId: pendingConsent.destinationScopeId, recipeId: pendingConsent.recipeId, provider: pendingConsent.provider, fields: pendingConsent.fields })
+    if (!active.current || request !== captureRequest.current) return
     const recipeId = pendingConsent.recipeId as 'whatsapp.unread_intelligence' | 'linkedin.opportunity_scan'
     setPendingConsent(null)
     await runRecipe(recipeId)

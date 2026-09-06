@@ -192,8 +192,8 @@ export interface ElectronAPI {
   brainControlJob: (input: { id: string; action: 'cancel' | 'retry' }) => Promise<boolean>
   brainGetVaultStatus: () => Promise<{ root: string; watching: boolean; conflicts: number }>
   brainSyncVault: () => Promise<{ files: string[]; reconciled: Array<{ path: string; status: string }> }>
-  brainListVaultConflicts: () => Promise<Array<Record<string, unknown>>>
-  brainResolveVaultConflict: (input: { id: string; resolution: 'database' | 'file' }) => Promise<BrainMemory | null>
+  brainListVaultConflicts: (scopeId: string) => Promise<Array<Record<string, unknown>>>
+  brainResolveVaultConflict: (input: { id: string; scopeId: string; resolution: 'database' | 'file' }) => Promise<BrainMemory | null>
   brainGetConsent: (input: { scopeId: string; recipeId: string; provider: string }) => Promise<boolean>
   brainGrantConsent: (input: { scopeId: string; recipeId: string; provider: string; fields: string[] }) => Promise<boolean>
   brainRevokeConsent: (input: { scopeId: string; recipeId: string; provider: string }) => Promise<boolean>

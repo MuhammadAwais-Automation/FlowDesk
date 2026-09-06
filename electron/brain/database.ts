@@ -320,12 +320,15 @@ export class BrainDatabase {
     return id
   }
 
-  listVaultConflicts() {
+  listVaultConflicts(scopeId?: string) {
+    if (scopeId !== undefined) {
+      return this.db.prepare("SELECT c.* FROM vault_conflicts c JOIN memories m ON m.id = c.memory_id WHERE c.status = 'pending' AND m.scope_id = ? ORDER BY c.created_at DESC").all(scopeId) as SqlRow[]
+    }
     return this.db.prepare("SELECT * FROM vault_conflicts WHERE status = 'pending' ORDER BY created_at DESC").all() as SqlRow[]
   }
 
-  resolveVaultConflict(id: string, resolution: 'database' | 'file') {
-    const conflict = this.db.prepare("SELECT * FROM vault_conflicts WHERE id = ? AND status = 'pending'").get(id) as SqlRow | undefined
+  resolveVaultConflict(id: string, resolution: 'database' | 'file', scopeId: string) {
+    const conflict = this.db.prepare("SELECT c.* FROM vault_conflicts c JOIN memories m ON m.id = c.memory_id WHERE c.id = ? AND c.status = 'pending' AND m.scope_id = ?").get(id, scopeId) as SqlRow | undefined
     if (!conflict) return null
     const memoryId = String(conflict.memory_id)
     if (resolution === 'file') this.reviseMemory(memoryId, String(conflict.file_text), `vault://${memoryId}`)

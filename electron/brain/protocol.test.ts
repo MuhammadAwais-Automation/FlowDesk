@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { brainRequestSchema } from './protocol'
 
 describe('brain utility protocol', () => {
+  it.each(['listVaultConflicts', 'resolveVaultConflict'])('requires a selected scope for %s', method => {
+    const payload = method === 'listVaultConflicts' ? {} : { id: 'conflict', resolution: 'file' }
+    expect(brainRequestSchema.safeParse({ id: '1', method, payload: { ...payload, scopeId: 'client-a' } }).success).toBe(true)
+    for (const invalid of [payload, { ...payload, scopeId: '' }, { ...payload, scopeId: 3 }, { ...payload, scopeId: 'a', arbitrary: true }]) {
+      expect(brainRequestSchema.safeParse({ id: '1', method, payload: invalid }).success).toBe(false)
+    }
+  })
+
   it('accepts a narrow search request', () => {
     expect(brainRequestSchema.parse({
       id: 'request-1',

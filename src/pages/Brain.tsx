@@ -12,7 +12,15 @@ function Card({ children }: { children: React.ReactNode }) {
 
 export default function Brain() {
   const [tab, setTab] = useState<(typeof BRAIN_TABS)[number]>('Overview')
-  const { scopes, scope, selectScope, loading: scopeLoading, error: scopeError } = useBrainScope()
+  const scopeState = useBrainScope()
+  // Scope-owned state is discarded synchronously, including when the next load fails.
+  return <BrainScopeView key={scopeState.scope?.id ?? 'loading'} {...scopeState} tab={tab} setTab={setTab} />
+}
+
+function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, error: scopeError, tab, setTab }: ReturnType<typeof useBrainScope> & {
+  tab: (typeof BRAIN_TABS)[number]
+  setTab: (tab: (typeof BRAIN_TABS)[number]) => void
+}) {
   const [status, setStatus] = useState<BrainStatus | null>(null)
   const [overview, setOverview] = useState({ memories: 0, candidates: 0, jobs: 0, activeJobs: 0 })
   const [memories, setMemories] = useState<BrainMemory[]>([])
@@ -30,6 +38,9 @@ export default function Brain() {
   const [artifact, setArtifact] = useState<Record<string, unknown> | null>(null)
   const selectedScopeId = useRef<string | null>(null)
   selectedScopeId.current = scope?.id ?? null
+  const searchRequest = useRef(0)
+  const artifactRequest = useRef(0)
+  const vaultRequest = useRef(0)
 
   const refresh = useCallback(async (activeScope: BrainScope) => {
     const [nextStatus, nextOverview, nextMemories, nextCandidates, nextJobs] = await Promise.all([
@@ -46,10 +57,16 @@ export default function Brain() {
 
   useEffect(() => {
     if (!scope) return
-    setAnswer(null)
-    setArtifact(null)
-    void refresh(scope).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))
-    return api.onBrainEvent(() => void refresh(scope).catch(reason => setError(reason instanceof Error ? reason.message : String(reason))))
+    selectedScopeId.current = scope.id
+    const reload = () => void refresh(scope).catch(reason => {
+      if (selectedScopeId.current === scope.id) setError(reason instanceof Error ? reason.message : String(reason))
+    })
+    reload()
+    const unsubscribe = api.onBrainEvent(reload)
+    return () => {
+      selectedScopeId.current = null
+      unsubscribe()
+    }
   }, [refresh, scope])
 
   useEffect(() => {
@@ -63,21 +80,40 @@ export default function Brain() {
   }, [scope, tab])
 
   async function loadVault() {
-    const [nextVault, conflicts] = await Promise.all([api.brainGetVaultStatus(), api.brainListVaultConflicts()])
+    if (!scope || selectedScopeId.current !== scope.id) return
+    const request = ++vaultRequest.current
+    const [nextVault, conflicts] = await Promise.all([api.brainGetVaultStatus(), api.brainListVaultConflicts(scope.id)])
+    if (selectedScopeId.current !== scope.id || request !== vaultRequest.current) return
     setVault(nextVault)
     setVaultConflicts(conflicts)
   }
 
+  async function resolveVaultConflict(id: string, resolution: 'database' | 'file') {
+    if (!scope || selectedScopeId.current !== scope.id) return
+    await api.brainResolveVaultConflict({ id, scopeId: scope.id, resolution })
+    await loadVault()
+  }
+
+  async function loadArtifact(jobId: string) {
+    if (!scope || selectedScopeId.current !== scope.id) return
+    const request = ++artifactRequest.current
+    const nextArtifact = await api.brainGetArtifactManifest(jobId)
+    if (selectedScopeId.current === scope.id && request === artifactRequest.current) setArtifact(nextArtifact)
+  }
+
   async function askBrain() {
     if (!scope || !query.trim()) return
+    const request = ++searchRequest.current
+    const isCurrent = () => selectedScopeId.current === scope.id && request === searchRequest.current
     setBusy(true)
     setError('')
     try {
-      setAnswer(await api.brainSearch({ text: query, scopeId: scope.id, includeParents: true, tokenBudget: 1200, limit: 12 }))
+      const nextAnswer = await api.brainSearch({ text: query, scopeId: scope.id, includeParents: true, tokenBudget: 1200, limit: 12 })
+      if (isCurrent()) setAnswer(nextAnswer)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
+      if (isCurrent()) setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setBusy(false)
+      if (isCurrent()) setBusy(false)
     }
   }
 
@@ -142,11 +178,11 @@ export default function Brain() {
 
         {tab === 'Review Inbox' && <div className="space-y-3">{candidates.length === 0 ? <Card><p className="text-sm text-stone-500">Review Inbox empty hai.</p></Card> : candidates.map(candidate => <Card key={candidate.id}><div className="flex items-start gap-3"><div className="flex-1"><p className="text-xs text-stone-500">{candidate.origin} · {candidate.kind}</p><p className="mt-1 text-sm">{candidate.text}</p></div><button onClick={() => void review(candidate.id, 'accept')} className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Check size={16} /></button><button onClick={() => void review(candidate.id, 'reject')} className="rounded-lg bg-red-100 p-2 text-red-700"><X size={16} /></button></div></Card>)}</div>}
 
-        {tab === 'Jobs' && <div className="space-y-3">{jobs.length === 0 ? <Card><p className="text-sm text-stone-500">Abhi koi durable job nahi.</p></Card> : jobs.map(job => <Card key={job.id}><div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="font-semibold">{job.recipeId}</p><p className="truncate text-xs text-stone-500">{job.id}</p></div><div className="flex items-center gap-2"><span className="rounded-full bg-stone-100 px-3 py-1 text-xs">{job.status}</span><button title="Artifact manifest" onClick={() => void api.brainGetArtifactManifest(job.id).then(setArtifact)} className="rounded-lg bg-blue-50 p-2 text-blue-700"><FileText size={15} /></button>{!['completed', 'failed', 'cancelled'].includes(job.status) && <button title="Cancel" onClick={async () => { await api.brainControlJob({ id: job.id, action: 'cancel' }); if (scope) await refresh(scope) }} className="rounded-lg bg-red-50 p-2 text-red-700"><Ban size={15} /></button>}{['failed', 'cancelled'].includes(job.status) && <button title="Retry" onClick={async () => { await api.brainControlJob({ id: job.id, action: 'retry' }); if (scope) await refresh(scope) }} className="rounded-lg bg-amber-50 p-2 text-amber-700"><RotateCcw size={15} /></button>}</div></div></Card>)}{artifact && <Card><div className="flex items-center justify-between"><h2 className="font-semibold">Artifact manifest</h2><button onClick={() => setArtifact(null)}><X size={16} /></button></div><pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs text-stone-600">{JSON.stringify(artifact, null, 2)}</pre></Card>}</div>}
+        {tab === 'Jobs' && <div className="space-y-3">{jobs.length === 0 ? <Card><p className="text-sm text-stone-500">Abhi koi durable job nahi.</p></Card> : jobs.map(job => <Card key={job.id}><div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="font-semibold">{job.recipeId}</p><p className="truncate text-xs text-stone-500">{job.id}</p></div><div className="flex items-center gap-2"><span className="rounded-full bg-stone-100 px-3 py-1 text-xs">{job.status}</span><button title="Artifact manifest" onClick={() => void loadArtifact(job.id)} className="rounded-lg bg-blue-50 p-2 text-blue-700"><FileText size={15} /></button>{!['completed', 'failed', 'cancelled'].includes(job.status) && <button title="Cancel" onClick={async () => { await api.brainControlJob({ id: job.id, action: 'cancel' }); if (scope) await refresh(scope) }} className="rounded-lg bg-red-50 p-2 text-red-700"><Ban size={15} /></button>}{['failed', 'cancelled'].includes(job.status) && <button title="Retry" onClick={async () => { await api.brainControlJob({ id: job.id, action: 'retry' }); if (scope) await refresh(scope) }} className="rounded-lg bg-amber-50 p-2 text-amber-700"><RotateCcw size={15} /></button>}</div></div></Card>)}{artifact && <Card><div className="flex items-center justify-between"><h2 className="font-semibold">Artifact manifest</h2><button onClick={() => setArtifact(null)}><X size={16} /></button></div><pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs text-stone-600">{JSON.stringify(artifact, null, 2)}</pre></Card>}</div>}
 
         {tab === 'Graph' && <div className="grid gap-4 xl:grid-cols-2"><Card><div className="flex items-center gap-2"><GitBranch size={17} /><h2 className="font-semibold">Curated nodes</h2></div><div className="mt-3 space-y-2">{graph.nodes.length === 0 ? <p className="text-sm text-stone-500">Abhi curated entities nahi hain.</p> : graph.nodes.map(node => <div key={node.id} className="rounded-lg bg-stone-50 p-3"><p className="text-sm font-medium">{node.name}</p><p className="text-xs text-stone-500">{node.type}</p></div>)}</div></Card><Card><h2 className="font-semibold">Evidence-backed edges</h2><div className="mt-3 space-y-2">{graph.edges.length === 0 ? <p className="text-sm text-stone-500">Abhi verified relations nahi hain.</p> : graph.edges.map(edge => <div key={edge.id} className="rounded-lg bg-stone-50 p-3 text-xs"><p>{edge.from} → {edge.relation} → {edge.to}</p><p className="mt-1 text-stone-500">Confidence {Math.round(edge.confidence * 100)}% · {edge.sourceRef}</p></div>)}</div></Card></div>}
 
-        {tab === 'Vault' && <div className="space-y-4"><Card><h2 className="font-semibold">Obsidian-compatible Vault</h2><p className="mt-2 break-all text-sm text-stone-500">{vault?.root ?? 'Status load karein'}</p><div className="mt-4 flex gap-2"><button onClick={() => void loadVault()} className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">Check status</button><button onClick={async () => { await api.brainSyncVault(); await loadVault() }} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white">Reconcile now</button></div>{vault && <p className="mt-3 text-xs text-stone-600">Watcher: {vault.watching ? 'on' : 'off'} · Conflicts: {vault.conflicts}</p>}</Card>{vaultConflicts.map(conflict => <Card key={String(conflict.id)}><p className="text-sm font-semibold">Vault conflict</p><p className="mt-1 break-all text-xs text-stone-500">{String(conflict.file_path)}</p><div className="mt-3 grid gap-3 md:grid-cols-2"><div className="rounded-lg bg-blue-50 p-3 text-xs"><p className="mb-1 font-semibold">Brain version</p>{String(conflict.database_text)}</div><div className="rounded-lg bg-amber-50 p-3 text-xs"><p className="mb-1 font-semibold">File version</p>{String(conflict.file_text)}</div></div><div className="mt-3 flex gap-2"><button onClick={async () => { await api.brainResolveVaultConflict({ id: String(conflict.id), resolution: 'database' }); await loadVault() }} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white">Keep Brain</button><button onClick={async () => { await api.brainResolveVaultConflict({ id: String(conflict.id), resolution: 'file' }); await loadVault() }} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white">Keep file</button></div></Card>)}</div>}
+        {tab === 'Vault' && <div className="space-y-4"><Card><h2 className="font-semibold">Obsidian-compatible Vault</h2><p className="mt-2 break-all text-sm text-stone-500">{vault?.root ?? 'Status load karein'}</p><div className="mt-4 flex gap-2"><button onClick={() => void loadVault()} className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">Check status</button><button onClick={async () => { await api.brainSyncVault(); await loadVault() }} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white">Reconcile now</button></div>{vault && <p className="mt-3 text-xs text-stone-600">Watcher: {vault.watching ? 'on' : 'off'} · Conflicts: {vaultConflicts.length}</p>}</Card>{vaultConflicts.map(conflict => <Card key={String(conflict.id)}><p className="text-sm font-semibold">Vault conflict</p><p className="mt-1 break-all text-xs text-stone-500">{String(conflict.file_path)}</p><div className="mt-3 grid gap-3 md:grid-cols-2"><div className="rounded-lg bg-blue-50 p-3 text-xs"><p className="mb-1 font-semibold">Brain version</p>{String(conflict.database_text)}</div><div className="rounded-lg bg-amber-50 p-3 text-xs"><p className="mb-1 font-semibold">File version</p>{String(conflict.file_text)}</div></div><div className="mt-3 flex gap-2"><button onClick={() => void resolveVaultConflict(String(conflict.id), 'database')} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white">Keep Brain</button><button onClick={() => void resolveVaultConflict(String(conflict.id), 'file')} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white">Keep file</button></div></Card>)}</div>}
 
         {tab === 'Settings' && <Card><h2 className="font-semibold">Backup & portability</h2><p className="mt-2 text-sm text-stone-500">Export mein consistent SQLite snapshot aur curated vault hota hai. Credentials, cookies aur raw artifacts include nahi hote.</p><div className="mt-4 flex gap-2"><button onClick={() => void api.brainExportBackup()} className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">Export backup</button><button onClick={() => void api.brainImportBackup()} className="rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold text-red-700">Import backup</button></div></Card>}
 

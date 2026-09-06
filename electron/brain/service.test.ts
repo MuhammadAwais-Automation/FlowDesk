@@ -11,6 +11,23 @@ afterEach(() => {
 })
 
 describe('BrainService', () => {
+  it('enforces the selected scope through vault conflict dispatch', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain.sqlite'))
+    try {
+      const a = service.database.ensureScope({ type: 'client', externalRef: 'a', name: 'A' })
+      const b = service.database.ensureScope({ type: 'client', externalRef: 'b', name: 'B' })
+      const memory = service.database.remember({ scopeId: a.id, kind: 'fact', text: 'Private A' })
+      const id = service.database.addVaultConflict({ memoryId: memory.id, filePath: 'A.md', baseRevision: 1, databaseText: 'Private A', fileText: 'Changed A' })
+      expect(service.handle({ id: '1', method: 'listVaultConflicts', payload: { scopeId: b.id } })).toEqual([])
+      expect(service.handle({ id: '2', method: 'resolveVaultConflict', payload: { id, scopeId: b.id, resolution: 'file' } })).toBeNull()
+      expect(service.database.getMemory(memory.id)?.text).toBe('Private A')
+      expect(service.handle({ id: '3', method: 'listVaultConflicts', payload: { scopeId: a.id } })).toHaveLength(1)
+      expect(service.handle({ id: '4', method: 'resolveVaultConflict', payload: { id, scopeId: a.id, resolution: 'file' } })).toMatchObject({ text: 'Changed A' })
+    } finally { service.close() }
+  })
+
   it('validates and dispatches requests without exposing SQL', () => {
     const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
     roots.push(root)

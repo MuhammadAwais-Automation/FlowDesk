@@ -23,7 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   brainControlJob: (input: unknown) => ipcRenderer.invoke('brain:controlJob', input),
   brainGetVaultStatus: () => ipcRenderer.invoke('brain:getVaultStatus'),
   brainSyncVault: () => ipcRenderer.invoke('brain:syncVault'),
-  brainListVaultConflicts: () => ipcRenderer.invoke('brain:listVaultConflicts'),
+  brainListVaultConflicts: (scopeId: unknown) => ipcRenderer.invoke('brain:listVaultConflicts', scopeId),
   brainResolveVaultConflict: (input: unknown) => ipcRenderer.invoke('brain:resolveVaultConflict', input),
   brainGetConsent: (input: unknown) => ipcRenderer.invoke('brain:getConsent', input),
   brainGrantConsent: (input: unknown) => ipcRenderer.invoke('brain:grantConsent', input),
