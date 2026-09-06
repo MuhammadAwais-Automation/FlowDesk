@@ -168,6 +168,53 @@ describe('BrainDatabase', () => {
     brain.close()
   })
 
+  it('rejects source-less claim evidence from another client scope', () => {
+    const brain = createBrain()
+    const database = (brain as unknown as { db: DatabaseSync }).db
+    const a = brain.ensureScope({ type: 'client', externalRef: 'claim-evidence-a', name: 'Claim Evidence A' })
+    const b = brain.ensureScope({ type: 'client', externalRef: 'claim-evidence-b', name: 'Claim Evidence B' })
+    const global = brain.ensureScope({ type: 'global', externalRef: 'claim-evidence-global', name: 'Global' })
+    const createOpportunity = (scopeId: string, fingerprint: string) => brain.upsertOpportunity({
+      scopeId, fingerprint, category: 'market_signal', title: fingerprint, summary: fingerprint,
+      score: 50, confidence: 0.5, freshness: '2026-09-05T00:00:00.000Z',
+    })
+    const timestamp = '2026-09-05T00:00:00.000Z'
+    database.prepare(`
+      INSERT INTO claims(id, scope_id, subject, predicate, value_json, status, created_at)
+      VALUES (?, ?, 'buyer', 'needs', '"developer"', 'accepted', ?)
+    `).run('claim-a', a.id, timestamp)
+    database.prepare(`
+      INSERT INTO evidence(id, claim_id, source_id, excerpt, confidence, extractor_version, created_at)
+      VALUES (?, ?, NULL, 'Client A private claim', 0.8, 'test', ?)
+    `).run('claim-evidence-a', 'claim-a', timestamp)
+    database.prepare(`
+      INSERT INTO claims(id, scope_id, subject, predicate, value_json, status, created_at)
+      VALUES (?, ?, 'market', 'trend', '"global"', 'accepted', ?)
+    `).run('claim-global', global.id, timestamp)
+    database.prepare(`
+      INSERT INTO evidence(id, claim_id, source_id, excerpt, confidence, extractor_version, created_at)
+      VALUES (?, ?, NULL, 'Global evidence', 0.8, 'test', ?)
+    `).run('claim-evidence-global', 'claim-global', timestamp)
+
+    const opportunityA = createOpportunity(a.id, 'claim-signal-a')
+    const opportunityB = createOpportunity(b.id, 'claim-signal-b')
+    const opportunityGlobal = createOpportunity(global.id, 'claim-signal-global')
+    expect(() => brain.recordOpportunityEvidence({
+      opportunityId: opportunityB.id, scopeId: b.id, evidenceId: 'claim-evidence-a', sourceId: null,
+      excerpt: 'Client A private claim', confidence: 0.8, sourceRef: 'brain://claim/a', platform: 'whatsapp',
+    })).toThrow('Evidence belongs to another scope')
+    expect(brain.getOpportunityEvidence({ id: opportunityB.id, scopeId: b.id })).toEqual([])
+    expect(brain.recordOpportunityEvidence({
+      opportunityId: opportunityA.id, scopeId: a.id, evidenceId: 'claim-evidence-a', sourceId: null,
+      excerpt: 'Client A private claim', confidence: 0.8, sourceRef: 'brain://claim/a', platform: 'whatsapp',
+    })).toMatchObject({ opportunityId: opportunityA.id, evidenceId: 'claim-evidence-a' })
+    expect(brain.recordOpportunityEvidence({
+      opportunityId: opportunityGlobal.id, scopeId: global.id, evidenceId: 'claim-evidence-global', sourceId: null,
+      excerpt: 'Global evidence', confidence: 0.8, sourceRef: 'brain://claim/global', platform: 'brain',
+    })).toMatchObject({ opportunityId: opportunityGlobal.id, evidenceId: 'claim-evidence-global' })
+    brain.close()
+  })
+
   it('lists vault conflicts only for the requested client', () => {
     const brain = createBrain()
     try {

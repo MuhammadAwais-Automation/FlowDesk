@@ -396,6 +396,15 @@ export class BrainDatabase {
     if (evidenceScope && String(evidenceScope.scope_id) !== input.scopeId) {
       throw new Error('Evidence belongs to another scope')
     }
+    const claimScope = this.db.prepare(`
+      SELECT c.scope_id
+      FROM evidence e
+      JOIN claims c ON c.id = e.claim_id
+      WHERE e.id = ?
+    `).get(input.evidenceId) as SqlRow | undefined
+    if (claimScope && String(claimScope.scope_id) !== input.scopeId) {
+      throw new Error('Evidence belongs to another scope')
+    }
     const sourceScope = this.db.prepare(`
       SELECT s.scope_id
       FROM evidence e
