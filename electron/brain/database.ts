@@ -567,7 +567,7 @@ export class BrainDatabase {
     return (this.db.prepare('SELECT * FROM jobs ORDER BY created_at DESC').all() as SqlRow[]).map(mapJob)
   }
 
-  claimNextJob(at = now(), leaseSeconds = 30) {
+  claimNextJob(at = now(), leaseSeconds = 30, recipeIds?: string[]) {
     const leaseExpiresAt = new Date(new Date(at).getTime() + leaseSeconds * 1000).toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -575,9 +575,11 @@ export class BrainDatabase {
         SELECT s.*, j.id AS job_id
         FROM jobs j JOIN job_steps s ON s.job_id = j.id
         WHERE j.status IN ('queued', 'retry_scheduled') AND s.status IN ('queued', 'retry_scheduled')
+          AND (j.lease_expires_at IS NULL OR j.lease_expires_at <= ?)
+          ${recipeIds ? `AND j.recipe_id IN (${recipeIds.map(() => '?').join(',')}) AND j.recipe_version = 1` : ''}
           AND NOT EXISTS (SELECT 1 FROM job_steps earlier WHERE earlier.job_id = j.id AND earlier.step_index < s.step_index AND earlier.status != 'completed')
         ORDER BY j.created_at, s.step_index LIMIT 1
-      `).get() as SqlRow | undefined
+      `).get(at, ...(recipeIds ?? [])) as SqlRow | undefined
       if (!row) {
         this.db.exec('COMMIT')
         return null
@@ -592,6 +594,7 @@ export class BrainDatabase {
         jobId: String(row.job_id),
         name: String(row.name),
         stepIndex: Number(row.step_index),
+        attempts: Number(row.attempts) + 1,
         status: 'running' as const,
         leaseExpiresAt,
       }
@@ -610,6 +613,26 @@ export class BrainDatabase {
     return true
   }
 
+  ownsJobStep(jobId: string, stepId: string, attempts: number, at = now()) {
+    return Boolean(this.db.prepare(`SELECT 1 FROM jobs j JOIN job_steps s ON s.job_id = j.id
+      WHERE j.id = ? AND s.id = ? AND s.attempts = ? AND j.status = 'running' AND s.status = 'running' AND s.lease_expires_at > ?`)
+      .get(jobId, stepId, attempts, at))
+  }
+
+  deferJobStep(jobId: string, stepId: string, attempts: number, status: 'retry_scheduled' | 'waiting_for_login' | 'waiting_for_approval', dueAt: string | null, error: string) {
+    if (!this.ownsJobStep(jobId, stepId, attempts)) return false
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare('UPDATE job_steps SET status = ?, lease_expires_at = NULL, error = ? WHERE id = ? AND job_id = ?').run(status, error, stepId, jobId)
+      this.db.prepare('UPDATE jobs SET status = ?, lease_expires_at = ?, retry_count = retry_count + 1, updated_at = ? WHERE id = ?').run(status, dueAt, now(), jobId)
+      this.db.exec('COMMIT')
+      return true
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   saveCheckpoint(jobId: string, stepId: string, checkpoint: Record<string, unknown>) {
     const json = stableJson(checkpoint)
     const hash = createHash('sha256').update(json).digest('hex')
@@ -623,6 +646,10 @@ export class BrainDatabase {
 
   listCheckpoints(jobId: string) {
     return this.db.prepare('SELECT * FROM job_checkpoints WHERE job_id = ? ORDER BY created_at').all(jobId) as SqlRow[]
+  }
+
+  getJobStepNames(jobId: string) {
+    return (this.db.prepare('SELECT name FROM job_steps WHERE job_id = ? ORDER BY step_index').all(jobId) as SqlRow[]).map(row => String(row.name))
   }
 
   completeJobStep(jobId: string, stepId: string, checkpoint?: Record<string, unknown>) {
@@ -671,7 +698,7 @@ export class BrainDatabase {
 
   retryJob(id: string) {
     const timestamp = now()
-    const result = this.db.prepare("UPDATE jobs SET status = 'retry_scheduled', lease_expires_at = NULL, updated_at = ? WHERE id = ? AND status IN ('failed', 'partially_completed', 'cancelled')")
+    const result = this.db.prepare("UPDATE jobs SET status = 'retry_scheduled', lease_expires_at = NULL, updated_at = ? WHERE id = ? AND status IN ('failed', 'partially_completed', 'cancelled', 'waiting_for_login', 'waiting_for_approval')")
       .run(timestamp, id)
     if (Number(result.changes) === 0) return false
     this.db.prepare("UPDATE job_steps SET status = 'retry_scheduled', lease_expires_at = NULL, error = NULL WHERE job_id = ? AND status != 'completed'").run(id)

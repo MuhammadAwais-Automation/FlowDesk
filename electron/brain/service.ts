@@ -5,6 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { mkdirSync, rmSync } from 'node:fs'
 import { BrainBackupManager } from './backup'
 import { ArtifactStore } from './artifactStore'
+import { socialRecipeDefinitions } from './recipeDefinitions'
 
 export class BrainService {
   readonly database: BrainDatabase
@@ -20,9 +21,7 @@ export class BrainService {
     this.vault.start()
     this.database.registerRecipe({ id: 'notebooklm.research', version: 1, title: 'NotebookLM Research', steps: ['capture', 'normalize', 'summarize'] })
     this.database.registerRecipe({ id: 'notebooklm.artifact', version: 1, title: 'NotebookLM Artifact', steps: ['generate', 'capture_manifest'] })
-    this.database.registerRecipe({ id: 'whatsapp.unread_intelligence', version: 1, title: 'WhatsApp Unread Intelligence', steps: ['capture', 'normalize', 'classify', 'summarize'] })
-    this.database.registerRecipe({ id: 'linkedin.community_scan', version: 1, title: 'LinkedIn Community Scan', steps: ['capture', 'normalize', 'classify', 'summarize'] })
-    this.database.registerRecipe({ id: 'linkedin.opportunity_scan', version: 1, title: 'LinkedIn Opportunity Scan', steps: ['capture', 'normalize', 'score', 'summarize'] })
+    for (const recipe of socialRecipeDefinitions) this.database.registerRecipe(recipe)
     this.database.recoverExpiredLeases()
     this.maintenanceTimer = setInterval(() => this.runMaintenance(), 24 * 60 * 60 * 1000)
     this.maintenanceTimer.unref()
@@ -36,6 +35,13 @@ export class BrainService {
       const url = new URL(reference)
       const target = resolve(artifactRoot, url.hostname, url.pathname.replace(/^\/+/, ''))
       if (target.startsWith(`${artifactRoot}${sep}`)) rmSync(target, { force: true })
+    }
+  }
+
+  private assertProtocolMayMutateJob(jobId: string) {
+    const job = this.database.getJob(jobId)
+    if (job && socialRecipeDefinitions.some(recipe => recipe.id === job.recipeId)) {
+      throw new Error('Social recipe lifecycle is runner-owned')
     }
   }
 
@@ -76,9 +82,15 @@ export class BrainService {
       case 'getArtifactManifest': return this.database.getArtifactManifest(request.payload.jobId)
       case 'registerRecipe': return this.database.registerRecipe(request.payload)
       case 'enqueueJob': return this.database.enqueueJob(request.payload)
-      case 'completeJob': return this.database.completeJob(request.payload.id, request.payload.result)
+      case 'completeJob': {
+        this.assertProtocolMayMutateJob(request.payload.id)
+        return this.database.completeJob(request.payload.id, request.payload.result)
+      }
       case 'controlJob': return request.payload.action === 'cancel' ? this.database.cancelJob(request.payload.id) : this.database.retryJob(request.payload.id)
-      case 'failJob': return this.database.failJob(request.payload.id, request.payload.error)
+      case 'failJob': {
+        this.assertProtocolMayMutateJob(request.payload.id)
+        return this.database.failJob(request.payload.id, request.payload.error)
+      }
       case 'vaultStatus': return this.vault.getStatus()
       case 'vaultSync': return { files: this.vault.writeAll(), reconciled: this.vault.reconcileAll() }
       case 'listVaultConflicts': return this.database.listVaultConflicts(request.payload.scopeId)
@@ -108,7 +120,10 @@ export class BrainService {
       case 'consumeContinuation': return this.database.consumeContinuation(request.payload.id)
       case 'listEntities': return this.database.listEntities(request.payload.scopeId)
       case 'getGraph': return this.database.getGraph(request.payload.scopeId)
-      case 'ingestCaptureBatch': return this.artifacts.ingestBatch({ ...request.payload, accountId: request.payload.accountId ?? null })
+      case 'ingestCaptureBatch': {
+        this.assertProtocolMayMutateJob(request.payload.jobId)
+        return this.artifacts.ingestBatch({ ...request.payload, accountId: request.payload.accountId ?? null })
+      }
       case 'shutdown': {
         this.close()
         return { closed: true }

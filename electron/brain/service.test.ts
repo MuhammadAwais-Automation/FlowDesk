@@ -11,6 +11,30 @@ afterEach(() => {
 })
 
 describe('BrainService', () => {
+  it('reserves social capture and lifecycle mutations for the utility runner', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain.sqlite'))
+    try {
+      const scope = service.database.ensureScope({ type: 'client', externalRef: 'a', name: 'A' })
+      const social = service.database.enqueueJob({
+        recipeId: 'linkedin.opportunity_scan', recipeVersion: 1, scopeId: scope.id, parameters: {},
+      })
+      expect(() => service.handle({ id: '1', method: 'completeJob', payload: { id: social.id, result: { raw: 'private' } } })).toThrow('runner-owned')
+      expect(() => service.handle({ id: '2', method: 'failJob', payload: { id: social.id, error: 'external failure' } })).toThrow('runner-owned')
+      expect(() => service.handle({ id: '3', method: 'ingestCaptureBatch', payload: {
+        source: 'linkedin', jobId: social.id, stepId: 'capture', scopeId: scope.id,
+        connectorVersion: 'external', records: [{ text: 'private' }],
+      } })).toThrow('runner-owned')
+      expect(service.database.getJob(social.id)?.status).toBe('queued')
+
+      const notebook = service.database.enqueueJob({
+        recipeId: 'notebooklm.research', recipeVersion: 1, scopeId: scope.id, parameters: {},
+      })
+      expect(service.handle({ id: '4', method: 'completeJob', payload: { id: notebook.id, result: { recordCount: 1 } } })).toMatchObject({ status: 'completed' })
+    } finally { service.close() }
+  })
+
   it('enforces the selected scope through vault conflict dispatch', () => {
     const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
     roots.push(root)

@@ -11,6 +11,38 @@ class FakeChild extends EventEmitter implements BrainUtilityChild {
 }
 
 describe('BrainClient', () => {
+  it('routes validated capability requests without forwarding raw records as events', async () => {
+    const child = new FakeChild()
+    const client = new BrainClient(() => child, { capabilityHandler: async envelope => ({ id: envelope.request.id, ok: true, records: [{ text: 'private' }] }) })
+    const events: unknown[] = []
+    client.on('event', value => events.push(value))
+    client.start()
+    child.emit('message', { type: 'capability:request', jobId: 'job', scopeId: 'scope', recipeId: 'linkedin.opportunity_scan', accountId: null,
+      request: { id: 'read', capability: 'linkedin.search', input: { query: 'hiring', limit: 10 } } })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(child.sent).toEqual([{ type: 'capability:result', result: { id: 'read', ok: true, records: [{ text: 'private' }] } }])
+    expect(events).toEqual([])
+    child.emit('message', { type: 'capability:request', request: { id: 'bad', capability: 'shell', input: {} } })
+    await Promise.resolve()
+    expect(child.sent).toHaveLength(1)
+    expect(events).toEqual([])
+    client.stop()
+  })
+
+  it('discards a capability result when its requesting utility has exited', async () => {
+    let finish!: (value: { id: string; ok: true; records: [] }) => void
+    const child = new FakeChild()
+    const client = new BrainClient(() => child, { capabilityHandler: () => new Promise(resolve => { finish = resolve }) })
+    client.start()
+    child.emit('message', { type: 'capability:request', jobId: 'job', scopeId: 'scope', recipeId: 'linkedin.opportunity_scan', accountId: null,
+      request: { id: 'read', capability: 'linkedin.search', input: { query: 'hiring', limit: 10 } } })
+    client.stop()
+    finish({ id: 'read', ok: true, records: [] })
+    await Promise.resolve()
+    expect(child.sent).toEqual([])
+  })
+
   it('matches utility responses to requests', async () => {
     const child = new FakeChild()
     const client = new BrainClient(() => child, { requestTimeoutMs: 1000, restartDelaysMs: [5, 30, 120] })

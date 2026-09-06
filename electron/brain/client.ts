@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { brainRequestSchema, type BrainRequest, type BrainResponse } from './protocol'
+import { capabilityEnvelopeSchema, capabilityFailure, capabilityResultSchema, type BrainCapabilityExecutor } from './capabilityProtocol'
 
 export interface BrainUtilityChild extends EventEmitter {
   postMessage(message: unknown): void
@@ -10,6 +11,7 @@ export interface BrainUtilityChild extends EventEmitter {
 interface BrainClientOptions {
   requestTimeoutMs?: number
   restartDelaysMs?: number[]
+  capabilityHandler?: BrainCapabilityExecutor
 }
 
 interface PendingRequest {
@@ -26,11 +28,13 @@ export class BrainClient extends EventEmitter {
   private restartAttempts = 0
   private stopped = true
   private state: 'stopped' | 'starting' | 'ready' | 'restarting' | 'degraded' = 'stopped'
+  private readonly capabilityHandler?: BrainCapabilityExecutor
 
   constructor(private readonly launch: () => BrainUtilityChild, options: BrainClientOptions = {}) {
     super()
     this.requestTimeoutMs = options.requestTimeoutMs ?? 15_000
     this.restartDelaysMs = options.restartDelaysMs ?? [5_000, 30_000, 120_000]
+    this.capabilityHandler = options.capabilityHandler
   }
 
   start() {
@@ -43,13 +47,18 @@ export class BrainClient extends EventEmitter {
     this.state = state
     const child = this.launch()
     this.child = child
-    child.on('message', message => this.onMessage(message))
+    child.on('message', message => { if (this.child === child) this.onMessage(message, child) })
     child.once('exit', code => this.onExit(typeof code === 'number' ? code : 1))
     this.state = 'ready'
     this.emit('status', this.getRuntimeStatus())
   }
 
-  private onMessage(message: unknown) {
+  private onMessage(message: unknown, child: BrainUtilityChild) {
+    if (message && typeof message === 'object' && 'type' in message && message.type === 'capability:request') {
+      const parsed = capabilityEnvelopeSchema.safeParse(message)
+      if (parsed.success) void this.handleCapability(parsed.data, child)
+      return
+    }
     const response = message as Partial<BrainResponse>
     if (!response || typeof response.id !== 'string') {
       this.emit('event', message)
@@ -61,6 +70,17 @@ export class BrainClient extends EventEmitter {
     this.pending.delete(response.id)
     if (response.ok) pending.resolve(response.result)
     else pending.reject(new Error(response.error?.message ?? 'Brain utility request failed'))
+  }
+
+  private async handleCapability(envelope: Parameters<BrainCapabilityExecutor>[0], child: BrainUtilityChild) {
+    let result
+    try {
+      result = this.capabilityHandler
+        ? capabilityResultSchema.parse(await this.capabilityHandler(envelope))
+        : capabilityFailure(envelope.request.id, 'permanent')
+      if (result.id !== envelope.request.id) result = capabilityFailure(envelope.request.id, 'permanent')
+    } catch { result = capabilityFailure(envelope.request.id, 'transient') }
+    if (this.child === child && !this.stopped) child.postMessage({ type: 'capability:result', result })
   }
 
   private onExit(code: number) {

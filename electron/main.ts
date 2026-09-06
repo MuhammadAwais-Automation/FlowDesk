@@ -110,7 +110,8 @@ import { NotebookJobQueue, type NotebookJob } from './notebooklmJobs'
 import { configureNotebookJobRuntime } from './notebooklmJobRuntime'
 import { recordProviderUsage, type ProviderLimits } from './providerUsage'
 import { alwaysApprove, type RequestApproval } from './agent/approval'
-import { recordsFromConnectorResult, socialRecipeRequestSchema } from './brain/socialRecipes'
+import { socialRecipeRequestSchema } from './brain/socialRecipes'
+import { executeBrainCapability } from './brain/capabilityProtocol'
 
 // @anthropic-ai/claude-agent-sdk (electron/claudeSdkProvider.ts, currently
 // unused pending the multi-agent orchestrator section) auths via the local
@@ -444,31 +445,7 @@ ipcMain.handle('brain:runSocialRecipe', async (_e, input: unknown) => {
       contextBudget: 1200,
     } } : {}),
   }) as { id: string }
-  const limit = request.parameters.limit ?? 50
-  const connectorResult = request.recipeId === 'whatsapp.unread_intelligence'
-    ? await waListChats(limit, true)
-    : request.recipeId === 'linkedin.community_scan'
-      ? await liFeed(limit, 0, 'RECENT')
-      : await liSearch(request.parameters.query ?? 'hiring developer consultant recommendation', 'CONTENT', limit)
-  if (!connectorResult.ok) {
-    await brainRequest('failJob', { id: job.id, error: connectorResult.error ?? 'Connector read failed' })
-    throw new Error(connectorResult.error ?? 'Connector read failed')
-  }
-  const manifest = await brainRequest('ingestCaptureBatch', {
-    source: request.recipeId.startsWith('whatsapp') ? 'whatsapp' : 'linkedin',
-    jobId: job.id,
-    stepId: 'capture',
-    scopeId: request.scopeId,
-    accountId: request.accountId ?? null,
-    connectorVersion: 'flowdesk-read-v1',
-    retentionDays: request.parameters.retentionDays ?? 30,
-    records: recordsFromConnectorResult(connectorResult),
-  }) as Record<string, unknown>
-  const completed = await brainRequest('completeJob', {
-    id: job.id,
-    result: { ...manifest, actionable: request.recipeId === 'linkedin.opportunity_scan' && Number(manifest.recordCount ?? 0) > 0 },
-  })
-  return { requiresConsent: false, job: completed, manifest }
+  return { requiresConsent: false, job }
 })
 
 // IPC: get current login item settings (so renderer can display actual state)
@@ -2311,7 +2288,16 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
-  brainClient = createElectronBrainClient(app.getPath('userData'), join(__dirname, 'brainUtility.js'))
+  brainClient = createElectronBrainClient(app.getPath('userData'), join(__dirname, 'brainUtility.js'), envelope => executeBrainCapability(envelope, {
+    hasConsent: async (scopeId, recipeId, provider) => await brainRequest('getConsent', { scopeId, recipeId, provider }) === true,
+    read: request => {
+      switch (request.capability) {
+        case 'whatsapp.list_unread': return waListChats(request.input.limit, true)
+        case 'linkedin.feed': return liFeed(request.input.limit, 0, request.input.sort)
+        case 'linkedin.search': return liSearch(request.input.query, 'CONTENT', request.input.limit)
+      }
+    },
+  }))
   brainClient.on('status', status => mainWindow?.webContents.send('brain:event', {
     type: 'status',
     createdAt: new Date().toISOString(),
