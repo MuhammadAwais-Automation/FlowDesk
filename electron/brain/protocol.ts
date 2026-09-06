@@ -4,6 +4,7 @@ const id = z.string().min(1).max(200)
 const text = z.string().trim().min(1).max(100_000)
 const scopeType = z.enum(['global', 'workspace', 'project', 'client', 'session'])
 const memoryKind = z.enum(['fact', 'preference', 'decision', 'goal', 'person', 'organization', 'opportunity', 'procedure', 'note'])
+const opportunityStatus = z.enum(['new', 'reviewing', 'qualified', 'dismissed', 'converted'])
 
 const requestBase = { id }
 
@@ -31,6 +32,13 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
   z.object({ ...requestBase, method: z.literal('listCandidates'), payload: z.object({ scopeId: id.optional() }).strict() }),
   z.object({ ...requestBase, method: z.literal('decideCandidate'), payload: z.object({ id, decision: z.enum(['accept', 'reject']), editedText: text.optional() }).strict() }),
   z.object({ ...requestBase, method: z.literal('listJobs'), payload: z.object({}).strict() }),
+  z.object({ ...requestBase, method: z.literal('listOpportunities'), payload: z.object({
+    scopeId: id, status: opportunityStatus.optional(), limit: z.number().int().min(1).max(100).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('getOpportunityEvidence'), payload: z.object({ id, scopeId: id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('reviewOpportunity'), payload: z.object({
+    id, scopeId: id, decision: z.enum(['qualify', 'dismiss', 'convert']),
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('getArtifactManifest'), payload: z.object({ jobId: id }).strict() }),
   z.object({ ...requestBase, method: z.literal('registerRecipe'), payload: z.object({ id, version: z.number().int().positive(), title: text, steps: z.array(id).min(1).max(100) }).strict() }),
   z.object({ ...requestBase, method: z.literal('enqueueJob'), payload: z.object({

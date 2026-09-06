@@ -8,15 +8,19 @@ import type {
   BrainContextPack,
   BrainJob,
   BrainMemory,
+  BrainOpportunity,
+  BrainOpportunityStatus,
   BrainQuery,
   BrainScope,
   BrainScopeType,
   BrainStatus,
   CaptureEnvelope,
   MemoryKind,
+  OpportunityCategory,
+  OpportunityEvidence,
 } from '../../src/types/brain'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 const TABLES = [
   'scopes', 'scope_links', 'memories', 'memory_revisions', 'memory_candidates',
@@ -25,6 +29,7 @@ const TABLES = [
   'summaries', 'recipes', 'jobs', 'job_steps', 'job_checkpoints', 'job_artifacts',
   'agent_continuations', 'outbox_events', 'consents', 'audit_events',
   'vault_conflicts', 'processing_cache', 'schema_migrations',
+  'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
 ] as const
 
 type SqlRow = Record<string, unknown>
@@ -84,6 +89,43 @@ function mapJob(row: SqlRow): BrainJob {
     result: row.result_json ? JSON.parse(String(row.result_json)) as Record<string, unknown> : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  }
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  if (!Number.isFinite(value)) return minimum
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
+function mapOpportunity(row: SqlRow): BrainOpportunity {
+  return {
+    id: String(row.id),
+    scopeId: String(row.scope_id),
+    category: String(row.category) as OpportunityCategory,
+    title: String(row.title),
+    summary: String(row.summary),
+    score: Number(row.score),
+    confidence: Number(row.confidence),
+    freshness: String(row.freshness),
+    status: String(row.status) as BrainOpportunityStatus,
+    evidenceCount: Number(row.evidence_count ?? 0),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  }
+}
+
+function mapOpportunityEvidence(row: SqlRow): OpportunityEvidence {
+  return {
+    opportunityId: String(row.opportunity_id),
+    evidenceId: String(row.evidence_id),
+    sourceId: row.source_id ? String(row.source_id) : null,
+    excerpt: String(row.excerpt),
+    confidence: Number(row.confidence),
+    sourceRef: String(row.source_ref),
+    platform: String(row.platform),
+    observedAt: row.observed_at ? String(row.observed_at) : null,
+    stale: Number(row.stale) === 1,
+    createdAt: String(row.created_at),
   }
 }
 
@@ -152,9 +194,35 @@ export class BrainDatabase {
         CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, scope_id TEXT, action TEXT NOT NULL, target_id TEXT, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS vault_conflicts (id TEXT PRIMARY KEY, memory_id TEXT REFERENCES memories(id), file_path TEXT NOT NULL, base_revision INTEGER NOT NULL, database_text TEXT NOT NULL, file_text TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT);
         CREATE TABLE IF NOT EXISTS processing_cache (cache_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT);
+        CREATE TABLE IF NOT EXISTS opportunities (
+          id TEXT PRIMARY KEY, scope_id TEXT NOT NULL REFERENCES scopes(id), fingerprint TEXT NOT NULL,
+          category TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, score REAL NOT NULL,
+          confidence REAL NOT NULL, freshness TEXT NOT NULL, status TEXT NOT NULL,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(scope_id, fingerprint)
+        );
+        CREATE TABLE IF NOT EXISTS opportunity_evidence (
+          opportunity_id TEXT NOT NULL REFERENCES opportunities(id) ON DELETE CASCADE,
+          evidence_id TEXT NOT NULL REFERENCES evidence(id), source_ref TEXT NOT NULL,
+          platform TEXT NOT NULL, observed_at TEXT, stale INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL, PRIMARY KEY(opportunity_id, evidence_id)
+        );
+        CREATE TABLE IF NOT EXISTS monitors (
+          id TEXT PRIMARY KEY, scope_id TEXT NOT NULL REFERENCES scopes(id), recipe_id TEXT NOT NULL,
+          interval_minutes INTEGER NOT NULL, minimum_score REAL NOT NULL DEFAULT 70, status TEXT NOT NULL,
+          last_run_at TEXT, next_run_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS source_metrics (
+          id TEXT PRIMARY KEY, scope_id TEXT NOT NULL REFERENCES scopes(id), platform TEXT NOT NULL,
+          metric TEXT NOT NULL, value REAL NOT NULL, percentile REAL NOT NULL,
+          observed_at TEXT NOT NULL, UNIQUE(scope_id, platform, metric, observed_at)
+        );
         CREATE INDEX IF NOT EXISTS idx_memories_scope_status ON memories(scope_id, status);
         CREATE INDEX IF NOT EXISTS idx_candidates_scope_status ON memory_candidates(scope_id, status);
         CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_opportunities_scope_status_score ON opportunities(scope_id, status, score DESC);
+        CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_opportunity ON opportunity_evidence(opportunity_id);
+        CREATE INDEX IF NOT EXISTS idx_monitors_due ON monitors(status, next_run_at);
+        CREATE INDEX IF NOT EXISTS idx_source_metrics_scope_platform ON source_metrics(scope_id, platform, observed_at);
       `)
       this.db.prepare('INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, now())
       this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
@@ -223,6 +291,174 @@ export class BrainDatabase {
     }
     const placeholders = types.map(() => '?').join(', ')
     return (this.db.prepare(`SELECT * FROM scopes WHERE type IN (${placeholders}) ORDER BY created_at, name`).all(...types) as SqlRow[]).map(mapScope)
+  }
+
+  upsertOpportunity(input: {
+    scopeId: string
+    fingerprint: string
+    category: OpportunityCategory
+    title: string
+    summary: string
+    score: number
+    confidence: number
+    freshness: string
+  }): BrainOpportunity {
+    const id = randomUUID()
+    const timestamp = now()
+    this.db.prepare(`
+      INSERT INTO opportunities(
+        id, scope_id, fingerprint, category, title, summary, score, confidence,
+        freshness, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
+      ON CONFLICT(scope_id, fingerprint) DO UPDATE SET
+        category = excluded.category,
+        title = excluded.title,
+        summary = excluded.summary,
+        score = excluded.score,
+        confidence = excluded.confidence,
+        freshness = excluded.freshness,
+        updated_at = excluded.updated_at
+    `).run(
+      id,
+      input.scopeId,
+      input.fingerprint.trim(),
+      input.category,
+      input.title.trim(),
+      input.summary.trim(),
+      clamp(input.score, 0, 100),
+      clamp(input.confidence, 0, 1),
+      input.freshness,
+      timestamp,
+      timestamp,
+    )
+    const opportunity = this.db.prepare(`
+      SELECT o.*, (SELECT count(*) FROM opportunity_evidence oe WHERE oe.opportunity_id = o.id) AS evidence_count
+      FROM opportunities o WHERE o.scope_id = ? AND o.fingerprint = ?
+    `).get(input.scopeId, input.fingerprint.trim()) as SqlRow
+    return mapOpportunity(opportunity)
+  }
+
+  listOpportunities(input: { scopeId: string; status?: BrainOpportunityStatus; limit?: number }): BrainOpportunity[] {
+    const limit = Math.min(100, Math.max(1, Math.trunc(input.limit ?? 50)))
+    const rows = input.status
+      ? this.db.prepare(`
+        SELECT o.*, (SELECT count(*) FROM opportunity_evidence oe WHERE oe.opportunity_id = o.id) AS evidence_count
+        FROM opportunities o WHERE o.scope_id = ? AND o.status = ?
+        ORDER BY o.score DESC, o.updated_at DESC LIMIT ?
+      `).all(input.scopeId, input.status, limit) as SqlRow[]
+      : this.db.prepare(`
+        SELECT o.*, (SELECT count(*) FROM opportunity_evidence oe WHERE oe.opportunity_id = o.id) AS evidence_count
+        FROM opportunities o WHERE o.scope_id = ?
+        ORDER BY o.score DESC, o.updated_at DESC LIMIT ?
+      `).all(input.scopeId, limit) as SqlRow[]
+    return rows.map(mapOpportunity)
+  }
+
+  reviewOpportunity(input: { id: string; scopeId: string; decision: 'qualify' | 'dismiss' | 'convert' }): BrainOpportunity {
+    const statusByDecision = {
+      qualify: 'qualified',
+      dismiss: 'dismissed',
+      convert: 'converted',
+    } as const
+    const result = this.db.prepare('UPDATE opportunities SET status = ?, updated_at = ? WHERE id = ? AND scope_id = ?')
+      .run(statusByDecision[input.decision], now(), input.id, input.scopeId)
+    if (Number(result.changes) !== 1) throw new Error('Opportunity not found')
+    const row = this.db.prepare(`
+      SELECT o.*, (SELECT count(*) FROM opportunity_evidence oe WHERE oe.opportunity_id = o.id) AS evidence_count
+      FROM opportunities o WHERE o.id = ? AND o.scope_id = ?
+    `).get(input.id, input.scopeId) as SqlRow
+    return mapOpportunity(row)
+  }
+
+  recordOpportunityEvidence(input: {
+    opportunityId: string
+    scopeId: string
+    evidenceId: string
+    sourceId: string | null
+    excerpt: string
+    confidence: number
+    sourceRef: string
+    platform: string
+    observedAt?: string | null
+    stale?: boolean
+    extractorVersion?: string
+  }): OpportunityEvidence {
+    const opportunity = this.db.prepare('SELECT id FROM opportunities WHERE id = ? AND scope_id = ?')
+      .get(input.opportunityId, input.scopeId) as SqlRow | undefined
+    if (!opportunity) throw new Error('Opportunity not found')
+    const evidenceScope = this.db.prepare(`
+      SELECT o.scope_id
+      FROM opportunity_evidence oe
+      JOIN opportunities o ON o.id = oe.opportunity_id
+      WHERE oe.evidence_id = ?
+      LIMIT 1
+    `).get(input.evidenceId) as SqlRow | undefined
+    if (evidenceScope && String(evidenceScope.scope_id) !== input.scopeId) {
+      throw new Error('Evidence belongs to another scope')
+    }
+    const sourceScope = this.db.prepare(`
+      SELECT s.scope_id
+      FROM evidence e
+      JOIN sources s ON s.id = e.source_id
+      WHERE e.id = ?
+    `).get(input.evidenceId) as SqlRow | undefined
+    if (sourceScope && String(sourceScope.scope_id) !== input.scopeId) {
+      throw new Error('Evidence belongs to another scope')
+    }
+    if (input.sourceId) {
+      const source = this.db.prepare('SELECT id FROM sources WHERE id = ? AND scope_id = ?')
+        .get(input.sourceId, input.scopeId) as SqlRow | undefined
+      if (!source) throw new Error('Source not found')
+    }
+    const timestamp = now()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare(`
+        INSERT OR IGNORE INTO evidence(id, claim_id, source_id, excerpt, confidence, extractor_version, created_at)
+        VALUES (?, NULL, ?, ?, ?, ?, ?)
+      `).run(
+        input.evidenceId,
+        input.sourceId,
+        input.excerpt.trim(),
+        clamp(input.confidence, 0, 1),
+        input.extractorVersion ?? 'brain-opportunity-v1',
+        timestamp,
+      )
+      this.db.prepare(`
+        INSERT OR IGNORE INTO opportunity_evidence(
+          opportunity_id, evidence_id, source_ref, platform, observed_at, stale, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.opportunityId,
+        input.evidenceId,
+        input.sourceRef,
+        input.platform,
+        input.observedAt ?? null,
+        input.stale ? 1 : 0,
+        timestamp,
+      )
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    return this.getOpportunityEvidence({ id: input.opportunityId, scopeId: input.scopeId })
+      .find(item => item.evidenceId === input.evidenceId) as OpportunityEvidence
+  }
+
+  getOpportunityEvidence(input: { id: string; scopeId: string }): OpportunityEvidence[] {
+    const opportunity = this.db.prepare('SELECT id FROM opportunities WHERE id = ? AND scope_id = ?')
+      .get(input.id, input.scopeId) as SqlRow | undefined
+    if (!opportunity) throw new Error('Opportunity not found')
+    const rows = this.db.prepare(`
+      SELECT oe.opportunity_id, oe.evidence_id, e.source_id, e.excerpt, e.confidence,
+        oe.source_ref, oe.platform, oe.observed_at, oe.stale, oe.created_at
+      FROM opportunity_evidence oe
+      JOIN evidence e ON e.id = oe.evidence_id
+      WHERE oe.opportunity_id = ?
+      ORDER BY oe.created_at, oe.evidence_id
+    `).all(input.id) as SqlRow[]
+    return rows.map(mapOpportunityEvidence)
   }
 
   remember(input: {

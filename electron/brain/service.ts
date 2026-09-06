@@ -79,6 +79,9 @@ export class BrainService {
         return memory
       }
       case 'listJobs': return this.database.listJobs()
+      case 'listOpportunities': return this.database.listOpportunities(request.payload)
+      case 'getOpportunityEvidence': return this.database.getOpportunityEvidence(request.payload)
+      case 'reviewOpportunity': return this.database.reviewOpportunity(request.payload)
       case 'getArtifactManifest': return this.database.getArtifactManifest(request.payload.jobId)
       case 'registerRecipe': return this.database.registerRecipe(request.payload)
       case 'enqueueJob': return this.database.enqueueJob(request.payload)

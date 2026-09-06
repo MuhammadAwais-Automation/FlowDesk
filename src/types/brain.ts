@@ -142,6 +142,67 @@ export interface BrainJob {
   updatedAt: string
 }
 
+export type OpportunityCategory =
+  | 'direct_lead'
+  | 'warm_opportunity'
+  | 'market_signal'
+  | 'content_opportunity'
+  | 'product_opportunity'
+  | 'partnership_opportunity'
+
+export type BrainOpportunityStatus = 'new' | 'reviewing' | 'qualified' | 'dismissed' | 'converted'
+
+export interface BrainOpportunity {
+  id: string
+  scopeId: string
+  category: OpportunityCategory
+  title: string
+  summary: string
+  score: number
+  confidence: number
+  freshness: string
+  status: BrainOpportunityStatus
+  evidenceCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OpportunityEvidence {
+  opportunityId: string
+  evidenceId: string
+  sourceId: string | null
+  excerpt: string
+  confidence: number
+  sourceRef: string
+  platform: string
+  observedAt: string | null
+  stale: boolean
+  createdAt: string
+}
+
+export interface BrainMonitor {
+  id: string
+  scopeId: string
+  recipeId: string
+  intervalMinutes: number
+  minimumScore: number
+  status: 'active' | 'paused'
+  lastRunAt: string | null
+  nextRunAt: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BrainSourceMetric {
+  id: string
+  scopeId: string
+  platform: string
+  metric: string
+  value: number
+  percentile: number
+  observedAt: string
+}
+
 export interface BrainStatus {
   ready: boolean
   degraded: boolean

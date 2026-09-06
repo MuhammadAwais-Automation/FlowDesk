@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { brainRequestSchema } from './protocol'
 
 describe('brain utility protocol', () => {
+  it('accepts only narrow scoped opportunity list, evidence and review requests', () => {
+    expect(brainRequestSchema.parse({ id: '1', method: 'listOpportunities', payload: { scopeId: 'client-a', status: 'qualified', limit: 25 } })).toMatchObject({ method: 'listOpportunities' })
+    expect(brainRequestSchema.parse({ id: '2', method: 'getOpportunityEvidence', payload: { id: 'opportunity-a', scopeId: 'client-a' } })).toMatchObject({ method: 'getOpportunityEvidence' })
+    expect(brainRequestSchema.parse({ id: '3', method: 'reviewOpportunity', payload: { id: 'opportunity-a', scopeId: 'client-a', decision: 'qualify' } })).toMatchObject({ method: 'reviewOpportunity' })
+    expect(() => brainRequestSchema.parse({ id: '4', method: 'createOpportunity', payload: { scopeId: 'client-a' } })).toThrow()
+    expect(() => brainRequestSchema.parse({ id: '5', method: 'listOpportunities', payload: { scopeId: 'client-a', limit: 101 } })).toThrow()
+    expect(() => brainRequestSchema.parse({ id: '6', method: 'reviewOpportunity', payload: { id: 'opportunity-a', scopeId: 'client-a', decision: 'delete' } })).toThrow()
+  })
+
   it.each(['listVaultConflicts', 'resolveVaultConflict'])('requires a selected scope for %s', method => {
     const payload = method === 'listVaultConflicts' ? {} : { id: 'conflict', resolution: 'file' }
     expect(brainRequestSchema.safeParse({ id: '1', method, payload: { ...payload, scopeId: 'client-a' } }).success).toBe(true)

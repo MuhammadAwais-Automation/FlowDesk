@@ -11,6 +11,30 @@ afterEach(() => {
 })
 
 describe('BrainService', () => {
+  it('exposes scoped opportunity list, evidence and review without public creation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain.sqlite'))
+    try {
+      const a = service.database.ensureScope({ type: 'client', externalRef: 'service-a', name: 'A' })
+      const b = service.database.ensureScope({ type: 'client', externalRef: 'service-b', name: 'B' })
+      const opportunity = service.database.upsertOpportunity({
+        scopeId: a.id, fingerprint: 'service-lead', category: 'warm_opportunity', title: 'Workflow pain',
+        summary: 'A repeated workflow problem.', score: 74, confidence: 0.7, freshness: '2026-09-05T00:00:00.000Z',
+      })
+      service.database.recordOpportunityEvidence({
+        opportunityId: opportunity.id, scopeId: a.id, evidenceId: 'service-evidence', sourceId: null,
+        excerpt: 'Our workflow is slow', confidence: 0.7, sourceRef: 'https://example.test/service', platform: 'linkedin',
+      })
+
+      expect(service.handle({ id: '1', method: 'listOpportunities', payload: { scopeId: b.id } })).toEqual([])
+      expect(() => service.handle({ id: '2', method: 'getOpportunityEvidence', payload: { id: opportunity.id, scopeId: b.id } })).toThrow('Opportunity not found')
+      expect(service.handle({ id: '3', method: 'getOpportunityEvidence', payload: { id: opportunity.id, scopeId: a.id } })).toHaveLength(1)
+      expect(service.handle({ id: '4', method: 'reviewOpportunity', payload: { id: opportunity.id, scopeId: a.id, decision: 'dismiss' } })).toMatchObject({ status: 'dismissed' })
+      expect(() => service.handle({ id: '5', method: 'upsertOpportunity', payload: {} })).toThrow()
+    } finally { service.close() }
+  })
+
   it('reserves social capture and lifecycle mutations for the utility runner', () => {
     const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
     roots.push(root)

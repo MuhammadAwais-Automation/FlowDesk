@@ -18,6 +18,156 @@ afterEach(() => {
 })
 
 describe('BrainDatabase', () => {
+  it('creates the complete v2 intelligence schema from an empty database', () => {
+    const brain = createBrain()
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 2 })
+    expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
+      'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
+    ]))
+    brain.close()
+  })
+
+  it('migrates an existing v1 database to v2 without losing scopes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-v1-'))
+    roots.push(root)
+    const path = join(root, 'brain.sqlite')
+    const legacy = new DatabaseSync(path)
+    legacy.exec(`
+      PRAGMA user_version=1;
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE scopes (
+        id TEXT PRIMARY KEY, type TEXT NOT NULL, external_ref TEXT NOT NULL,
+        name TEXT NOT NULL, parent_id TEXT REFERENCES scopes(id), created_at TEXT NOT NULL,
+        UNIQUE(type, external_ref)
+      );
+      INSERT INTO scopes VALUES ('client-a', 'client', 'legacy-a', 'Legacy A', NULL, '2026-01-01T00:00:00.000Z');
+    `)
+    legacy.close()
+
+    const brain = new BrainDatabase(path)
+    expect(brain.getStatus().schemaVersion).toBe(2)
+    expect(brain.listScopes(['client'])).toMatchObject([{ id: 'client-a', name: 'Legacy A' }])
+    expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
+      'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
+    ]))
+    brain.close()
+  })
+
+  it('finishes a half-created v2 migration idempotently and records version 2 exactly', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-v2-partial-'))
+    roots.push(root)
+    const path = join(root, 'brain.sqlite')
+    const partial = new DatabaseSync(path)
+    partial.exec(`
+      PRAGMA user_version=1;
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE scopes (
+        id TEXT PRIMARY KEY, type TEXT NOT NULL, external_ref TEXT NOT NULL,
+        name TEXT NOT NULL, parent_id TEXT REFERENCES scopes(id), created_at TEXT NOT NULL,
+        UNIQUE(type, external_ref)
+      );
+      CREATE TABLE opportunities (
+        id TEXT PRIMARY KEY, scope_id TEXT NOT NULL REFERENCES scopes(id), fingerprint TEXT NOT NULL,
+        category TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, score REAL NOT NULL,
+        confidence REAL NOT NULL, freshness TEXT NOT NULL, status TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(scope_id, fingerprint)
+      );
+    `)
+    partial.close()
+
+    const first = new BrainDatabase(path)
+    expect(first.getStatus().schemaVersion).toBe(2)
+    expect(first.listSchemaTables()).toEqual(expect.arrayContaining(['opportunity_evidence', 'monitors', 'source_metrics']))
+    first.close()
+    const versionCheck = new DatabaseSync(path)
+    expect((versionCheck.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2)
+    versionCheck.close()
+    const reopened = new BrainDatabase(path)
+    expect(reopened.getStatus().schemaVersion).toBe(2)
+    reopened.close()
+  })
+
+  it('clamps opportunity scores and deduplicates fingerprints at the repository boundary', () => {
+    const brain = createBrain()
+    const scope = brain.ensureScope({ type: 'client', externalRef: 'client-score', name: 'Client Score' })
+    const first = brain.upsertOpportunity({
+      scopeId: scope.id, fingerprint: 'react-hiring', category: 'direct_lead', title: 'React developer needed',
+      summary: 'A buyer is actively hiring.', score: 140, confidence: -0.2, freshness: '2026-09-05T00:00:00.000Z',
+    })
+    const updated = brain.upsertOpportunity({
+      scopeId: scope.id, fingerprint: 'react-hiring', category: 'direct_lead', title: 'Senior React developer needed',
+      summary: 'The same buyer clarified seniority.', score: -10, confidence: 2, freshness: '2026-09-05T01:00:00.000Z',
+    })
+    expect(first).toMatchObject({ score: 100, confidence: 0 })
+    expect(updated).toMatchObject({ id: first.id, score: 0, confidence: 1, title: 'Senior React developer needed' })
+    expect(brain.listOpportunities({ scopeId: scope.id })).toHaveLength(1)
+    brain.close()
+  })
+
+  it('lists, reviews and resolves evidence only inside the selected scope', () => {
+    const brain = createBrain()
+    const a = brain.ensureScope({ type: 'client', externalRef: 'opportunity-a', name: 'Opportunity A' })
+    const b = brain.ensureScope({ type: 'client', externalRef: 'opportunity-b', name: 'Opportunity B' })
+    const opportunity = brain.upsertOpportunity({
+      scopeId: a.id, fingerprint: 'lead-a', category: 'direct_lead', title: 'Need an Electron developer',
+      summary: 'Client A has a direct requirement.', score: 88, confidence: 0.9, freshness: '2026-09-05T00:00:00.000Z',
+    })
+    const evidence = brain.recordOpportunityEvidence({
+      opportunityId: opportunity.id, scopeId: a.id, evidenceId: 'evidence-a', sourceId: null,
+      excerpt: 'Looking for an Electron developer', confidence: 0.86, sourceRef: 'https://example.test/post/a', platform: 'linkedin',
+    })
+    brain.recordOpportunityEvidence({
+      opportunityId: opportunity.id, scopeId: a.id, evidenceId: 'evidence-a', sourceId: null,
+      excerpt: 'Looking for an Electron developer', confidence: 0.86, sourceRef: 'https://example.test/post/a', platform: 'linkedin',
+    })
+
+    expect(evidence).toMatchObject({ opportunityId: opportunity.id, evidenceId: 'evidence-a' })
+    expect(brain.listOpportunities({ scopeId: a.id })).toMatchObject([{ id: opportunity.id, evidenceCount: 1 }])
+    expect(brain.listOpportunities({ scopeId: b.id })).toEqual([])
+    expect(() => brain.getOpportunityEvidence({ id: opportunity.id, scopeId: b.id })).toThrow('Opportunity not found')
+    expect(() => brain.reviewOpportunity({ id: opportunity.id, scopeId: b.id, decision: 'qualify' })).toThrow('Opportunity not found')
+    expect(brain.reviewOpportunity({ id: opportunity.id, scopeId: a.id, decision: 'qualify' }).status).toBe('qualified')
+    expect(brain.getOpportunityEvidence({ id: opportunity.id, scopeId: a.id })).toHaveLength(1)
+    brain.close()
+  })
+
+  it('returns the reviewed opportunity even when it falls outside the first list page', () => {
+    const brain = createBrain()
+    const scope = brain.ensureScope({ type: 'client', externalRef: 'many-opportunities', name: 'Many Opportunities' })
+    let lowestId = ''
+    for (let index = 0; index < 101; index += 1) {
+      const opportunity = brain.upsertOpportunity({
+        scopeId: scope.id, fingerprint: `lead-${index}`, category: 'warm_opportunity', title: `Lead ${index}`,
+        summary: `Summary ${index}`, score: index, confidence: 0.5, freshness: '2026-09-05T00:00:00.000Z',
+      })
+      if (index === 0) lowestId = opportunity.id
+    }
+    expect(brain.reviewOpportunity({ id: lowestId, scopeId: scope.id, decision: 'convert' })).toMatchObject({ id: lowestId, status: 'converted' })
+    brain.close()
+  })
+
+  it('rejects reuse of an evidence identity across client scopes', () => {
+    const brain = createBrain()
+    const a = brain.ensureScope({ type: 'client', externalRef: 'evidence-a', name: 'Evidence A' })
+    const b = brain.ensureScope({ type: 'client', externalRef: 'evidence-b', name: 'Evidence B' })
+    const createOpportunity = (scopeId: string, fingerprint: string) => brain.upsertOpportunity({
+      scopeId, fingerprint, category: 'market_signal', title: fingerprint, summary: fingerprint,
+      score: 50, confidence: 0.5, freshness: '2026-09-05T00:00:00.000Z',
+    })
+    const first = createOpportunity(a.id, 'signal-a')
+    const second = createOpportunity(b.id, 'signal-b')
+    brain.recordOpportunityEvidence({
+      opportunityId: first.id, scopeId: a.id, evidenceId: 'shared-evidence', sourceId: null,
+      excerpt: 'Private evidence A', confidence: 0.5, sourceRef: 'brain://a', platform: 'whatsapp',
+    })
+    expect(() => brain.recordOpportunityEvidence({
+      opportunityId: second.id, scopeId: b.id, evidenceId: 'shared-evidence', sourceId: null,
+      excerpt: 'Private evidence B', confidence: 0.5, sourceRef: 'brain://b', platform: 'linkedin',
+    })).toThrow('Evidence belongs to another scope')
+    expect(brain.getOpportunityEvidence({ id: second.id, scopeId: b.id })).toEqual([])
+    brain.close()
+  })
+
   it('lists vault conflicts only for the requested client', () => {
     const brain = createBrain()
     try {
@@ -47,9 +197,9 @@ describe('BrainDatabase', () => {
     } finally { brain.close() }
   })
 
-  it('creates the complete v1 schema with WAL, foreign keys and FTS5', () => {
+  it('creates the complete v2 schema with WAL, foreign keys and FTS5', () => {
     const brain = createBrain()
-    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 1 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 2 })
     expect(brain.getJournalMode()).toBe('wal')
     expect(brain.getForeignKeysEnabled()).toBe(true)
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
@@ -71,7 +221,7 @@ describe('BrainDatabase', () => {
     partial.exec('CREATE TABLE scopes (id TEXT PRIMARY KEY, type TEXT NOT NULL, external_ref TEXT NOT NULL, name TEXT NOT NULL, parent_id TEXT REFERENCES scopes(id), created_at TEXT NOT NULL, UNIQUE(type, external_ref))')
     partial.close()
     const brain = new BrainDatabase(path)
-    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 1 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 2 })
     expect(brain.listSchemaTables()).toContain('jobs')
     brain.close()
   })
