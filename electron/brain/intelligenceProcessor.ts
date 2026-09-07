@@ -170,7 +170,8 @@ function normalizedOrganizationDomainFromUrl(value: string | null | undefined) {
     if (!hostname || nonOrganizationDomainLabels.has(firstLabel)
       || [...nonOrganizationDomains].some(domain => hostname === domain || hostname.endsWith(`.${domain}`))) return null
     const domain = getDomain(hostname, { allowPrivateDomains: false })
-    if (!domain || nonOrganizationDomains.has(domain)) return null
+    const privateAwareDomain = getDomain(hostname, { allowPrivateDomains: true })
+    if (!domain || !privateAwareDomain || domain !== privateAwareDomain || nonOrganizationDomains.has(domain)) return null
     return domain
   } catch {
     return null

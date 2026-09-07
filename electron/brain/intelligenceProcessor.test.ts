@@ -173,6 +173,59 @@ describe('deterministic intelligence golden fixtures', () => {
     expect(result.opportunities.every(item => item.crossSourceSupport === 0)).toBe(true)
   })
 
+  it('does not correlate unrelated tenants through private public suffix hosting domains', () => {
+    const result = processIntelligence({ scopeId: 'client-a', now, records: [
+      {
+        platform: 'linkedin', externalId: 'web-app-a', canonicalUrl: 'https://tenant-a.web.app/releases',
+        sourceRef: 'li:web-app-a', text: 'Release automation is broken.', observedAt: now,
+      },
+      {
+        platform: 'whatsapp', externalId: 'web-app-b', canonicalUrl: 'https://tenant-b.web.app/billing',
+        sourceRef: 'wa:web-app-b', text: 'Invoice reconciliation remains blocked.', observedAt: now,
+      },
+      {
+        platform: 'linkedin', externalId: 'appspot-a', canonicalUrl: 'https://tenant-a.appspot.com/imports',
+        sourceRef: 'li:appspot-a', text: 'Customer imports are failing.', observedAt: now,
+      },
+      {
+        platform: 'whatsapp', externalId: 'appspot-b', canonicalUrl: 'https://tenant-b.appspot.com/notifications',
+        sourceRef: 'wa:appspot-b', text: 'Notifications remain blocked.', observedAt: now,
+      },
+    ] })
+
+    expect(result.opportunities).toHaveLength(4)
+    expect(result.opportunities.every(item => item.organizationDomain === null)).toBe(true)
+    expect(result.opportunities.every(item => item.crossSourceSupport === 0)).toBe(true)
+  })
+
+  it('does not merge separate private-suffix tenants through legacy cross-run correlation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-private-suffix-legacy-'))
+    roots.push(root)
+    const database = new BrainDatabase(join(root, 'brain.sqlite'))
+    const scope = database.ensureScope({ type: 'client', externalRef: 'private-hosting', name: 'Private hosting' })
+    const legacy = database.upsertOpportunity({
+      scopeId: scope.id, fingerprint: 'legacy-private-hosting', category: 'product_opportunity',
+      title: 'Legacy tenant signal', summary: 'Legacy tenant signal', score: 55, confidence: 0.6, freshness: now,
+    })
+    database.recordOpportunityEvidence({
+      opportunityId: legacy.id, scopeId: scope.id, evidenceId: 'legacy-private-hosting-evidence', sourceId: null,
+      excerpt: 'legacy descriptor', confidence: 0.6, sourceRef: 'https://tenant-a.web.app/releases',
+      platform: 'linkedin', observedAt: now,
+    })
+
+    const current = processIntelligence({ scopeId: scope.id, now, records: [{
+      platform: 'whatsapp', externalId: 'tenant-b', canonicalUrl: 'https://tenant-b.web.app/billing',
+      sourceRef: 'wa:tenant-b', text: 'Invoice reconciliation remains blocked.', observedAt: now,
+    }] })
+    persistIntelligence(database, current)
+
+    const opportunities = database.listOpportunities({ scopeId: scope.id })
+    const legacyEvidence = database.getOpportunityEvidence({ id: legacy.id, scopeId: scope.id })
+    database.close()
+    expect(opportunities).toHaveLength(2)
+    expect(legacyEvidence).toHaveLength(1)
+  })
+
   it('merges a new domain-keyed signal into a compatible legacy topic fingerprint across runs', () => {
     const root = mkdtempSync(join(tmpdir(), 'flowdesk-domain-legacy-'))
     roots.push(root)
