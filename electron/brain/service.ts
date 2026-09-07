@@ -6,6 +6,7 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { BrainBackupManager } from './backup'
 import { ArtifactStore } from './artifactStore'
 import { socialRecipeDefinitions } from './recipeDefinitions'
+import { buildDecisionBrief } from './decisionBrief'
 
 export class BrainService {
   readonly database: BrainDatabase
@@ -82,6 +83,15 @@ export class BrainService {
       case 'listOpportunities': return this.database.listOpportunities(request.payload)
       case 'getOpportunityEvidence': return this.database.getOpportunityEvidence(request.payload)
       case 'reviewOpportunity': return this.database.reviewOpportunity(request.payload)
+      case 'buildDecisionBrief': return buildDecisionBrief({
+        question: request.payload.question,
+        tokenBudget: request.payload.tokenBudget,
+        opportunities: this.database.listOpportunities({ scopeId: request.payload.scopeId, limit: 100 }).map(opportunity => ({
+          opportunity,
+          evidence: this.database.getOpportunityEvidence({ id: opportunity.id, scopeId: request.payload.scopeId }),
+        })),
+      })
+      case 'listSourceMetrics': return this.database.listSourceMetrics(request.payload)
       case 'getArtifactManifest': return this.database.getArtifactManifest(request.payload.jobId)
       case 'registerRecipe': return this.database.registerRecipe(request.payload)
       case 'enqueueJob': return this.database.enqueueJob(request.payload)

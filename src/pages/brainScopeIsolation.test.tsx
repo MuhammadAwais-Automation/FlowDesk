@@ -43,6 +43,8 @@ const api = {
   brainListJobs: vi.fn(), onBrainEvent: vi.fn(), brainSearch: vi.fn(), brainGetArtifactManifest: vi.fn(),
   brainGetVaultStatus: vi.fn(), brainListVaultConflicts: vi.fn(), brainResolveVaultConflict: vi.fn(),
   brainRunSocialRecipe: vi.fn(), brainGrantConsent: vi.fn(),
+  brainListOpportunities: vi.fn(), brainGetOpportunityEvidence: vi.fn(), brainReviewOpportunity: vi.fn(),
+  brainBuildDecisionBrief: vi.fn(), brainListSourceMetrics: vi.fn(), brainGetConsent: vi.fn(),
 }
 let Brain: ComponentType
 
@@ -67,6 +69,10 @@ beforeEach(() => {
   api.brainGetVaultStatus.mockResolvedValue({ root: 'vault', watching: true, conflicts: 1 })
   api.brainListVaultConflicts.mockImplementation(async (scopeId: string) => scopeId === 'b' ? [] : [conflict])
   api.brainResolveVaultConflict.mockResolvedValue(memory)
+  api.brainListOpportunities.mockResolvedValue([])
+  api.brainGetOpportunityEvidence.mockResolvedValue([])
+  api.brainListSourceMetrics.mockResolvedValue([])
+  api.brainGetConsent.mockResolvedValue(false)
 })
 
 afterEach(cleanup)
@@ -81,6 +87,19 @@ function switchScope(id = 'b') {
 }
 
 describe('Brain scope transitions', () => {
+  it('shows opportunities only from the selected Brain scope', async () => {
+    api.brainListOpportunities.mockImplementation(async ({ scopeId }: { scopeId: string }) => scopeId === 'a' ? [{
+      id: 'brain-opportunity-a', scopeId: 'a', category: 'direct_lead', title: 'Private lead A',
+      summary: 'Scoped lead', score: 81, confidence: 0.8, freshness: scopes[0].createdAt,
+      status: 'new', evidenceCount: 1, createdAt: scopes[0].createdAt, updatedAt: scopes[0].createdAt,
+    }] : [])
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Opportunities' }))
+    await waitFor(() => expect(screen.getByText('Private lead A')).toBeTruthy())
+    switchScope()
+    expect(screen.queryByText('Private lead A')).toBeNull()
+  })
+
   it.each([
     ['Memories', 'Private memory A'], ['Review Inbox', 'Private candidate A'], ['Jobs', 'Private job A'],
   ])('removes old %s actions while the new refresh is pending and after it fails', async (tab, text) => {

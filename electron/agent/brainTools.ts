@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { tool } from '@anthropic-ai/claude-agent-sdk'
 import type { RequestApproval } from './approval'
 
-type BrainMethod = 'search' | 'remember' | 'getMemory' | 'forget' | 'listCandidates' | 'decideCandidate' | 'enqueueJob' | 'listJobs'
+type BrainMethod = 'search' | 'remember' | 'getMemory' | 'forget' | 'listCandidates' | 'decideCandidate' | 'enqueueJob' | 'listJobs' | 'buildDecisionBrief' | 'reviewOpportunity'
 
 interface BrainToolRuntime {
   request(method: BrainMethod, payload: unknown): Promise<unknown>
@@ -42,6 +42,7 @@ export const BRAIN_TOOL_NAMES = [
   'mcp__workers__brain_job',
   'mcp__workers__brain_open_artifact',
   'mcp__workers__brain_build_decision_brief',
+  'mcp__workers__brain_review_opportunity',
 ] as const
 
 const memoryKinds = ['fact', 'preference', 'decision', 'goal', 'person', 'organization', 'opportunity', 'procedure', 'note'] as const
@@ -112,7 +113,20 @@ export function createBrainTools(requestApproval: RequestApproval) {
     }, { annotations: { readOnlyHint: true } }),
     tool('brain_build_decision_brief', 'Build a cited compact decision brief from Brain evidence.', { question: z.string().min(1) }, async ({ question }) => {
       const { runtime, scopeId } = activeRuntime()
-      return result(await runtime.request('search', { text: question, scopeId, includeParents: true, tokenBudget: 1200, limit: 12 }))
+      return result(await runtime.request('buildDecisionBrief', { question, scopeId, tokenBudget: 1200 }))
     }, { annotations: { readOnlyHint: true } }),
+    tool('brain_review_opportunity', 'Qualify, dismiss or convert an evidence-backed opportunity after approval.', {
+      id: z.string().min(1), decision: z.enum(['qualify', 'dismiss', 'convert']),
+    }, async input => {
+      const approved = await requestApproval({
+        tool: 'brain_review_opportunity',
+        title: `${input.decision.charAt(0).toUpperCase()}${input.decision.slice(1)} Brain opportunity?`,
+        detail: `${input.id} · ${input.decision}`,
+      })
+      if (!approved) return result({ cancelled: true })
+      const { runtime, scopeId } = activeRuntime()
+      requireWrites(runtime)
+      return result(await runtime.request('reviewOpportunity', { ...input, scopeId }))
+    }),
   ]
 }

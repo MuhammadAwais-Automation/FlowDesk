@@ -178,6 +178,17 @@ export interface OpportunityEvidence {
   observedAt: string | null
   stale: boolean
   createdAt: string
+  claimStatus?: 'accepted' | 'conflicting' | 'superseded'
+}
+
+export interface BrainDecisionBrief {
+  question: string
+  recommendation: string
+  supportingSignals: Array<{ text: string; citation: BrainCitation }>
+  counterSignals: Array<{ text: string; citation: BrainCitation }>
+  risks: string[]
+  nextActions: string[]
+  estimatedTokens: number
 }
 
 export interface BrainMonitor {

@@ -39,6 +39,12 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
   z.object({ ...requestBase, method: z.literal('reviewOpportunity'), payload: z.object({
     id, scopeId: id, decision: z.enum(['qualify', 'dismiss', 'convert']),
   }).strict() }),
+  z.object({ ...requestBase, method: z.literal('buildDecisionBrief'), payload: z.object({
+    scopeId: id, question: text, tokenBudget: z.number().int().min(1).max(1200).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('listSourceMetrics'), payload: z.object({
+    scopeId: id, platform: id.optional(),
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('getArtifactManifest'), payload: z.object({ jobId: id }).strict() }),
   z.object({ ...requestBase, method: z.literal('registerRecipe'), payload: z.object({ id, version: z.number().int().positive(), title: text, steps: z.array(id).min(1).max(100) }).strict() }),
   z.object({ ...requestBase, method: z.literal('enqueueJob'), payload: z.object({

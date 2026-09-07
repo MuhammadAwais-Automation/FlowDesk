@@ -215,6 +215,24 @@ describe('BrainDatabase', () => {
     brain.close()
   })
 
+  it('returns claim status with opportunity evidence so superseded claims can be excluded', () => {
+    const brain = createBrain()
+    const database = (brain as unknown as { db: DatabaseSync }).db
+    const scope = brain.ensureScope({ type: 'client', externalRef: 'claim-status', name: 'Claim Status' })
+    const opportunity = brain.upsertOpportunity({
+      scopeId: scope.id, fingerprint: 'claim-status', category: 'market_signal', title: 'Support trend',
+      summary: 'Support demand', score: 70, confidence: 0.7, freshness: '2026-09-05T00:00:00.000Z',
+    })
+    database.prepare("INSERT INTO claims(id, scope_id, subject, predicate, value_json, status, created_at) VALUES ('claim-status', ?, 'support', 'demand', '{}', 'superseded', '2026-09-05T00:00:00.000Z')").run(scope.id)
+    database.prepare("INSERT INTO evidence(id, claim_id, source_id, excerpt, confidence, extractor_version, created_at) VALUES ('claim-status-evidence', 'claim-status', NULL, 'Old demand', 0.7, 'test', '2026-09-05T00:00:00.000Z')").run()
+    brain.recordOpportunityEvidence({
+      opportunityId: opportunity.id, scopeId: scope.id, evidenceId: 'claim-status-evidence', sourceId: null,
+      excerpt: 'Old demand', confidence: 0.7, sourceRef: 'brain://claim/status', platform: 'brain',
+    })
+    expect(brain.getOpportunityEvidence({ id: opportunity.id, scopeId: scope.id })[0].claimStatus).toBe('superseded')
+    brain.close()
+  })
+
   it('lists vault conflicts only for the requested client', () => {
     const brain = createBrain()
     try {

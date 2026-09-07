@@ -9,6 +9,9 @@ describe('brain utility protocol', () => {
     expect(() => brainRequestSchema.parse({ id: '4', method: 'createOpportunity', payload: { scopeId: 'client-a' } })).toThrow()
     expect(() => brainRequestSchema.parse({ id: '5', method: 'listOpportunities', payload: { scopeId: 'client-a', limit: 101 } })).toThrow()
     expect(() => brainRequestSchema.parse({ id: '6', method: 'reviewOpportunity', payload: { id: 'opportunity-a', scopeId: 'client-a', decision: 'delete' } })).toThrow()
+    expect(brainRequestSchema.parse({ id: '7', method: 'buildDecisionBrief', payload: { scopeId: 'client-a', question: 'Should we pursue this?', tokenBudget: 1200 } })).toMatchObject({ method: 'buildDecisionBrief' })
+    expect(brainRequestSchema.parse({ id: '8', method: 'listSourceMetrics', payload: { scopeId: 'client-a' } })).toMatchObject({ method: 'listSourceMetrics' })
+    expect(() => brainRequestSchema.parse({ id: '9', method: 'buildDecisionBrief', payload: { scopeId: 'client-a', question: 'x', tokenBudget: 1201 } })).toThrow()
   })
 
   it.each(['listVaultConflicts', 'resolveVaultConflict'])('requires a selected scope for %s', method => {

@@ -127,6 +127,7 @@ function mapOpportunityEvidence(row: SqlRow): OpportunityEvidence {
     observedAt: row.observed_at ? String(row.observed_at) : null,
     stale: Number(row.stale) === 1,
     createdAt: String(row.created_at),
+    ...(row.claim_status ? { claimStatus: String(row.claim_status) as OpportunityEvidence['claimStatus'] } : {}),
   }
 }
 
@@ -506,9 +507,10 @@ export class BrainDatabase {
     if (!opportunity) throw new Error('Opportunity not found')
     const rows = this.db.prepare(`
       SELECT oe.opportunity_id, oe.evidence_id, e.source_id, e.excerpt, e.confidence,
-        oe.source_ref, oe.platform, oe.observed_at, oe.stale, oe.created_at
+        oe.source_ref, oe.platform, oe.observed_at, oe.stale, oe.created_at, c.status AS claim_status
       FROM opportunity_evidence oe
       JOIN evidence e ON e.id = oe.evidence_id
+      LEFT JOIN claims c ON c.id = e.claim_id
       WHERE oe.opportunity_id = ?
       ORDER BY oe.created_at, oe.evidence_id
     `).all(input.id) as SqlRow[]

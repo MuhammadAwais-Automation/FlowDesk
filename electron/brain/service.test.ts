@@ -11,6 +11,27 @@ afterEach(() => {
 })
 
 describe('BrainService', () => {
+  it('builds a scope-safe cited decision brief and ignores superseded claim evidence', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain.sqlite'))
+    try {
+      const scope = service.database.ensureScope({ type: 'client', externalRef: 'brief-a', name: 'Brief A' })
+      const other = service.database.ensureScope({ type: 'client', externalRef: 'brief-b', name: 'Brief B' })
+      const opportunity = service.database.upsertOpportunity({
+        scopeId: scope.id, fingerprint: 'support-backlog', category: 'direct_lead', title: 'Support backlog',
+        summary: 'A support team needs help.', score: 84, confidence: 0.82, freshness: '2026-09-05T00:00:00.000Z',
+      })
+      service.database.recordOpportunityEvidence({
+        opportunityId: opportunity.id, scopeId: scope.id, evidenceId: 'brief-evidence', sourceId: null,
+        excerpt: 'Our support backlog blocks releases.', confidence: 0.9, sourceRef: 'https://example.test/brief', platform: 'linkedin',
+      })
+      const brief = service.handle({ id: '1', method: 'buildDecisionBrief', payload: { scopeId: scope.id, question: 'Should we pursue support backlog work?', tokenBudget: 1200 } }) as { supportingSignals: Array<{ citation: { scopeId: string; sourceRef: string } }> }
+      expect(brief.supportingSignals).toMatchObject([{ citation: { scopeId: scope.id, sourceRef: 'https://example.test/brief' } }])
+      expect(service.handle({ id: '2', method: 'buildDecisionBrief', payload: { scopeId: other.id, question: 'Should we pursue support backlog work?', tokenBudget: 1200 } })).toMatchObject({ supportingSignals: [], counterSignals: [] })
+    } finally { service.close() }
+  })
+
   it('exposes scoped opportunity list, evidence and review without public creation', () => {
     const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
     roots.push(root)
