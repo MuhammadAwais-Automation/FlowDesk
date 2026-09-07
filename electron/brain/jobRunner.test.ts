@@ -204,7 +204,7 @@ describe('BrainJobRunner', () => {
     for (const name of readdirSync(join(root, 'artifacts', job.id, 'derived'))) {
       expect(gunzipSync(readFileSync(join(root, 'artifacts', job.id, 'derived', name))).toString()).not.toContain('Hiring a developer')
     }
-    expect(db.getJob(job.id)?.result).toMatchObject({ actionableCount: 1 })
+    expect(db.getJob(job.id)?.result).toMatchObject({ actionableCount: 0 })
   })
 
   it('persists cited opportunities and completes with a compact intelligence manifest', async () => {

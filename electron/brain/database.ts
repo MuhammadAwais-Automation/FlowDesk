@@ -390,6 +390,15 @@ export class BrainDatabase {
     return row ? mapOpportunity(row) : null
   }
 
+  listOpportunityCorrelationCandidates(input: { scopeId: string; category: OpportunityCategory }): Array<{ id: string; fingerprint: string }> {
+    const rows = this.db.prepare(`
+      SELECT id, fingerprint FROM opportunities
+      WHERE scope_id = ? AND category = ?
+      ORDER BY created_at, id
+    `).all(input.scopeId, input.category) as SqlRow[]
+    return rows.map(row => ({ id: String(row.id), fingerprint: String(row.fingerprint) }))
+  }
+
   reviewOpportunity(input: { id: string; scopeId: string; decision: 'qualify' | 'dismiss' | 'convert' }): BrainOpportunity {
     const statusByDecision = {
       qualify: 'qualified',

@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,6 +9,7 @@ import {
   extractBuyerIntent,
   extractPainSeverity,
   extractRisk,
+  parseIntelligenceResult,
   processIntelligence,
   persistIntelligence,
 } from './intelligenceProcessor'
@@ -27,9 +29,183 @@ describe('deterministic intelligence feature extraction', () => {
     expect(calculateRecency('2025-01-01T00:00:00.000Z', now)).toBe(0)
     expect(calculateRecency(null, now)).toBe(0)
   })
+
+  it('keeps stored pre-domain intelligence checkpoints readable', () => {
+    const current = processIntelligence({ scopeId: 'client-a', now, records: [{
+      platform: 'linkedin', externalId: 'legacy', sourceRef: 'li:legacy',
+      text: 'Looking for a React developer.', observedAt: now,
+    }] })
+    const { organizationDomain: _organizationDomain, ...legacyOpportunity } = current.opportunities[0]
+    const parsed = parseIntelligenceResult({ ...current, opportunities: [legacyOpportunity] })
+    expect(parsed.opportunities[0].organizationDomain).toBeNull()
+  })
 })
 
 describe('deterministic intelligence golden fixtures', () => {
+  it('keeps descriptive topics separate from ICP matches and gives zero ICP fit when no configured term matches', () => {
+    const record = {
+      platform: 'linkedin', externalId: 'lead', sourceRef: 'li:lead',
+      text: 'Looking for a React developer for a migration.', observedAt: now,
+    }
+    const matched = processIntelligence({ scopeId: 'client-a', now, icpTerms: ['react'], records: [record] }).opportunities[0]
+    const unmatched = processIntelligence({ scopeId: 'client-a', now, icpTerms: ['fintech'], records: [record] }).opportunities[0]
+
+    expect(matched.topicTokens).toContain('react')
+    expect(unmatched.topicTokens).toContain('react')
+    expect(matched.score - unmatched.score).toBe(15)
+    expect(processIntelligence({ scopeId: 'client-a', now, records: [record] }).opportunities[0].score).toBe(unmatched.score)
+  })
+
+  it('correlates differently worded cross-platform signals only through a safe normalized organization domain', () => {
+    const result = processIntelligence({ scopeId: 'client-a', now, icpTerms: ['unmatched-icp'], records: [
+      {
+        platform: 'linkedin', externalId: 'li-acme', canonicalUrl: 'https://www.Acme.test/jobs/123',
+        sourceRef: 'li:acme', text: 'Our deployment pipeline is broken.', observedAt: now,
+      },
+      {
+        platform: 'whatsapp', externalId: 'wa-acme', canonicalUrl: 'https://acme.test/help/releases',
+        sourceRef: 'wa:acme', text: 'Production releases remain blocked.', observedAt: now,
+      },
+    ] })
+
+    expect(result.opportunities).toHaveLength(1)
+    expect(result.opportunities[0]).toMatchObject({
+      category: 'product_opportunity',
+      crossSourceSupport: 1,
+      evidence: [{ platform: 'linkedin' }, { platform: 'whatsapp' }],
+    })
+  })
+
+  it('does not correlate unrelated signals through shared social or common hosting domains', () => {
+    const result = processIntelligence({ scopeId: 'client-a', now, records: [
+      {
+        platform: 'linkedin', externalId: 'li-release', canonicalUrl: 'https://linkedin.com/posts/a',
+        sourceRef: 'li:a', text: 'Our deployment pipeline is broken.', observedAt: now,
+      },
+      {
+        platform: 'whatsapp', externalId: 'wa-billing', canonicalUrl: 'https://www.linkedin.com/posts/b',
+        sourceRef: 'wa:b', text: 'Invoice reconciliation remains blocked.', observedAt: now,
+      },
+      {
+        platform: 'linkedin', externalId: 'li-github', canonicalUrl: 'https://github.com/acme/repository/issues/1',
+        sourceRef: 'li:github', text: 'Release automation is failing.', observedAt: now,
+      },
+      {
+        platform: 'whatsapp', externalId: 'wa-github', canonicalUrl: 'https://github.com/other/repository/issues/2',
+        sourceRef: 'wa:github', text: 'Customer imports are broken.', observedAt: now,
+      },
+    ] })
+
+    expect(result.opportunities).toHaveLength(4)
+    expect(result.opportunities.every(item => item.crossSourceSupport === 0)).toBe(true)
+  })
+
+  it('keeps different signal categories separate even on the same organization domain', () => {
+    const result = processIntelligence({ scopeId: 'client-a', now, records: [
+      {
+        platform: 'linkedin', externalId: 'li-hire', canonicalUrl: 'https://acme.test/jobs/react',
+        sourceRef: 'li:hire', text: 'Looking for a React developer.', observedAt: now,
+      },
+      {
+        platform: 'whatsapp', externalId: 'wa-pain', canonicalUrl: 'https://www.acme.test/status/releases',
+        sourceRef: 'wa:pain', text: 'Production releases are blocked.', observedAt: now,
+      },
+    ] })
+
+    expect(result.opportunities).toHaveLength(2)
+    expect(new Set(result.opportunities.map(item => item.category))).toEqual(new Set(['direct_lead', 'product_opportunity']))
+  })
+
+  it('correlates a normalized organization domain across separate durable processing runs', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-domain-correlation-'))
+    roots.push(root)
+    const database = new BrainDatabase(join(root, 'brain.sqlite'))
+    const scope = database.ensureScope({ type: 'client', externalRef: 'acme', name: 'Acme' })
+
+    persistIntelligence(database, processIntelligence({ scopeId: scope.id, now, records: [{
+      platform: 'linkedin', externalId: 'li-acme', canonicalUrl: 'https://www.Acme.test/jobs/123',
+      sourceRef: 'li:acme', text: 'Our deployment pipeline is broken.', observedAt: now,
+    }] }))
+    persistIntelligence(database, processIntelligence({ scopeId: scope.id, now, records: [{
+      platform: 'whatsapp', externalId: 'wa-acme', canonicalUrl: 'https://acme.test/help/releases',
+      sourceRef: 'wa:acme', text: 'Production releases remain blocked.', observedAt: now,
+    }] }))
+
+    const opportunities = database.listOpportunities({ scopeId: scope.id })
+    expect(opportunities).toHaveLength(1)
+    expect(opportunities[0].evidenceCount).toBe(2)
+    expect(database.getOpportunityEvidence({ id: opportunities[0].id, scopeId: scope.id }).map(item => item.platform).sort())
+      .toEqual(['linkedin', 'whatsapp'])
+    database.close()
+  })
+
+  it('correlates organization subdomains at the registrable domain and respects public suffix boundaries', () => {
+    const result = processIntelligence({ scopeId: 'client-a', now, records: [
+      {
+        platform: 'linkedin', externalId: 'li-acme', canonicalUrl: 'https://jobs.acme.co.uk/openings/1',
+        sourceRef: 'li:acme', text: 'Our deployment pipeline is broken.', observedAt: now,
+      },
+      {
+        platform: 'whatsapp', externalId: 'wa-acme', canonicalUrl: 'https://support.acme.co.uk/releases',
+        sourceRef: 'wa:acme', text: 'Production releases remain blocked.', observedAt: now,
+      },
+      {
+        platform: 'linkedin', externalId: 'li-other', canonicalUrl: 'https://other.co.uk/status',
+        sourceRef: 'li:other', text: 'Invoice reconciliation remains blocked.', observedAt: now,
+      },
+    ] })
+
+    expect(result.opportunities).toHaveLength(2)
+    expect(result.opportunities.find(item => item.evidence.length === 2)?.crossSourceSupport).toBe(1)
+  })
+
+  it('does not treat public suffixes, IPs or multi-tenant hosting domains as organizations', () => {
+    const result = processIntelligence({ scopeId: 'client-a', now, records: [
+      { platform: 'linkedin', externalId: 'suffix-a', canonicalUrl: 'https://co.uk/a', sourceRef: 'li:suffix', text: 'Release automation is broken.', observedAt: now },
+      { platform: 'whatsapp', externalId: 'suffix-b', canonicalUrl: 'https://co.uk/b', sourceRef: 'wa:suffix', text: 'Invoice imports are blocked.', observedAt: now },
+      { platform: 'linkedin', externalId: 'host-a', canonicalUrl: 'https://acme.github.io/a', sourceRef: 'li:host', text: 'Customer exports are broken.', observedAt: now },
+      { platform: 'whatsapp', externalId: 'host-b', canonicalUrl: 'https://other.github.io/b', sourceRef: 'wa:host', text: 'Billing reports are blocked.', observedAt: now },
+      { platform: 'linkedin', externalId: 'ip-a', canonicalUrl: 'https://192.0.2.1/a', sourceRef: 'li:ip', text: 'Data ingestion is broken.', observedAt: now },
+      { platform: 'whatsapp', externalId: 'ip-b', canonicalUrl: 'https://192.0.2.1/b', sourceRef: 'wa:ip', text: 'Notifications remain blocked.', observedAt: now },
+    ] })
+
+    expect(result.opportunities).toHaveLength(6)
+    expect(result.opportunities.every(item => item.crossSourceSupport === 0)).toBe(true)
+  })
+
+  it('merges a new domain-keyed signal into a compatible legacy topic fingerprint across runs', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-domain-legacy-'))
+    roots.push(root)
+    const database = new BrainDatabase(join(root, 'brain.sqlite'))
+    const scope = database.ensureScope({ type: 'client', externalRef: 'legacy-acme', name: 'Legacy Acme' })
+    const legacyFingerprint = createHash('sha256')
+      .update(`${scope.id}\u0000product_opportunity\u0000deployment|pipeline`)
+      .digest('hex')
+    const legacy = database.upsertOpportunity({
+      scopeId: scope.id, fingerprint: legacyFingerprint, category: 'product_opportunity',
+      title: 'Legacy signal', summary: 'Legacy signal', score: 55, confidence: 0.6, freshness: now,
+    })
+    database.recordOpportunityEvidence({
+      opportunityId: legacy.id, scopeId: scope.id, evidenceId: 'legacy-evidence', sourceId: null,
+      excerpt: 'legacy descriptor', confidence: 0.6, sourceRef: 'https://jobs.acme.co.uk/openings/1',
+      platform: 'linkedin', observedAt: now,
+    })
+
+    const current = processIntelligence({ scopeId: scope.id, now, records: [{
+      platform: 'whatsapp', externalId: 'wa-acme', canonicalUrl: 'https://support.acme.co.uk/releases',
+      sourceRef: 'wa:acme', text: 'Production releases remain blocked.', observedAt: now,
+    }] })
+    expect(current.opportunities[0].organizationDomain).toBe('acme.co.uk')
+    expect(database.getOpportunityEvidence({ id: legacy.id, scopeId: scope.id })[0].sourceRef).toBe('https://jobs.acme.co.uk/openings/1')
+    persistIntelligence(database, current)
+
+    const opportunities = database.listOpportunities({ scopeId: scope.id })
+    expect(opportunities).toHaveLength(1)
+    expect(opportunities[0].id).toBe(legacy.id)
+    expect(database.getOpportunityEvidence({ id: legacy.id, scopeId: scope.id })).toHaveLength(2)
+    database.close()
+  })
+
   it('classifies leads, ignores generic discussion, correlates paraphrased pain and keeps unverifiable Alex identities separate', () => {
     const result = processIntelligence({
       scopeId: 'client-a',
@@ -93,7 +269,7 @@ describe('deterministic intelligence golden fixtures', () => {
     expect(spam.risk).toBe(1)
     expect(spam.score).toBeLessThan(direct!.score)
     expect(result.entities.filter(entity => entity.name === 'Alex')).toHaveLength(2)
-    expect(result.metrics.find(metric => metric.platform === 'whatsapp')?.percentile).toBe(1)
+    expect(result.metrics.find(metric => metric.platform === 'whatsapp')?.percentile).toBe(0)
   })
 
   it('boosts cross-source support only when evidence comes from distinct platforms', () => {

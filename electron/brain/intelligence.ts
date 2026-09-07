@@ -82,9 +82,17 @@ export function scoreOpportunity(signals: OpportunitySignals, category: Opportun
 }
 
 export function percentileMomentum(value: number, peerValues: number[]) {
-  if (peerValues.length === 0) return 0
-  const belowOrEqual = peerValues.filter(peer => peer <= value).length
-  return belowOrEqual / peerValues.length
+  const normalized = Math.max(0, Number.isFinite(value) ? value : 0)
+  const peers = peerValues.map(peer => Math.max(0, Number.isFinite(peer) ? peer : 0))
+  if (normalized === 0 || peers.length < 2 || peers.every(peer => peer === 0)) return 0
+
+  // Percentiles from a two-item cohort are weak evidence. Scale rank confidence
+  // up to a five-item cohort so one reaction beside one zero cannot become 100%.
+  const below = peers.filter(peer => peer < normalized).length
+  const ties = peers.filter(peer => peer === normalized).length
+  const rank = (below + Math.max(0, ties - 1) / 2) / Math.max(1, peers.length - 1)
+  const cohortConfidence = Math.min(1, (peers.length - 1) / 4)
+  return Math.max(0, Math.min(1, rank * cohortConfidence))
 }
 
 export const REDDIT_CONNECTOR_CAPABILITIES = {

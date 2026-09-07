@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { getDomain } from 'tldts'
 import { z } from 'zod'
 import type { BrainSourceMetric, OpportunityCategory } from '../../src/types/brain'
 import type { BrainDatabase } from './database'
@@ -45,6 +46,7 @@ export interface IntelligenceOpportunity {
   momentum: number
   recency: number
   risk: number
+  organizationDomain: string | null
 }
 
 export interface IntelligenceResult {
@@ -70,6 +72,7 @@ const intelligenceOpportunitySchema = z.object({
   title: z.string(), summary: z.string(), score: z.number().min(0).max(100), confidence: z.number().min(0).max(1),
   freshness: z.string(), evidence: z.array(intelligenceEvidenceSchema).max(500), topicTokens: z.array(z.string()).max(50),
   crossSourceSupport: z.number().min(0).max(1), momentum: z.number().min(0).max(1), recency: z.number().min(0).max(1), risk: z.number().min(0).max(1),
+  organizationDomain: z.string().nullable().optional().transform(value => value ?? null),
 }).strict()
 
 const intelligenceResultSchema = z.object({
@@ -88,6 +91,21 @@ export function parseIntelligenceResult(value: unknown): IntelligenceResult {
 const stopWords = new Set([
   'a', 'an', 'and', 'are', 'build', 'customer', 'for', 'is', 'it', 'keeps', 'looking',
   'need', 'our', 'remains', 'solution', 'team', 'the', 'this', 'to', 'us', 'we', 'with',
+])
+
+// These hosts identify publishing/hosting platforms, not the organization
+// behind a signal. Using them as correlation keys would merge unrelated people.
+const nonOrganizationDomains = new Set([
+  'amazonaws.com', 'azurewebsites.net', 'blogspot.com', 'cloudfront.net', 'facebook.com',
+  'firebaseapp.com', 'github.com', 'github.io', 'google.com', 'herokuapp.com',
+  'linkedin.com', 'medium.com', 'netlify.app', 'notion.site', 'onrender.com',
+  'pages.dev', 'railway.app', 'reddit.com', 'sharepoint.com', 'squarespace.com',
+  'substack.com', 'twitter.com', 'vercel.app', 'whatsapp.com', 'wixsite.com',
+  'x.com', 'youtube.com', 'youtu.be',
+])
+const nonOrganizationDomainLabels = new Set([
+  'facebook', 'github', 'google', 'linkedin', 'medium', 'notion', 'reddit',
+  'substack', 'twitter', 'whatsapp', 'x', 'youtube', 'youtu',
 ])
 
 const clamp = (value: number) => Math.max(0, Math.min(1, value))
@@ -144,6 +162,25 @@ function canonicalUrl(value: string | null | undefined) {
   }
 }
 
+function normalizedOrganizationDomainFromUrl(value: string | null | undefined) {
+  if (!value) return null
+  try {
+    const hostname = new URL(value).hostname.toLowerCase().replace(/\.$/, '')
+    const firstLabel = hostname.split('.')[0]
+    if (!hostname || nonOrganizationDomainLabels.has(firstLabel)
+      || [...nonOrganizationDomains].some(domain => hostname === domain || hostname.endsWith(`.${domain}`))) return null
+    const domain = getDomain(hostname, { allowPrivateDomains: false })
+    if (!domain || nonOrganizationDomains.has(domain)) return null
+    return domain
+  } catch {
+    return null
+  }
+}
+
+function normalizedOrganizationDomain(record: IntelligenceRecord) {
+  return normalizedOrganizationDomainFromUrl(record.canonicalUrl ?? (record.sourceRef.startsWith('http') ? record.sourceRef : null))
+}
+
 function tokens(text: string) {
   return [...new Set(text.toLowerCase().match(/[a-z0-9]+/g) ?? [])].filter(token => token.length > 2 && !stopWords.has(token))
 }
@@ -155,11 +192,20 @@ function recordKey(record: IntelligenceRecord) {
   return `content:${hash(`${record.platform}\u0000${record.sourceRef}\u0000${record.text.replace(/\s+/g, ' ').trim()}`)}`
 }
 
-function topicTokens(text: string, icpTerms: string[]) {
+function topicProfile(text: string, icpTerms: string[]) {
   const present = new Set(tokens(text))
-  const matched = [...new Set(icpTerms.map(term => term.toLowerCase().trim()).filter(term => present.has(term)))]
-  if (matched.length) return matched.sort()
-  return [...present].filter(token => !['blocked', 'blocking', 'broken', 'urgent', 'urgently', 'struggling'].includes(token)).sort().slice(0, 3)
+  const matchedIcpTerms = [...new Set(icpTerms.map(term => term.toLowerCase().trim()).filter(term => {
+    const termTokens = tokens(term)
+    return termTokens.length > 0 && termTokens.every(token => present.has(token))
+  }))].sort()
+  const descriptiveTokens = [...present]
+    .filter(token => !['blocked', 'blocking', 'broken', 'urgent', 'urgently', 'struggling'].includes(token))
+    .sort()
+    .slice(0, 3)
+  const topicTokens = matchedIcpTerms.length
+    ? [...new Set(matchedIcpTerms.flatMap(term => tokens(term)))].sort()
+    : descriptiveTokens
+  return { topicTokens, matchedIcpTerms }
 }
 
 function categoryFor(buyerIntent: number, painSeverity: number, text: string): OpportunityCategory | null {
@@ -198,17 +244,21 @@ export function processIntelligence(input: {
     const buyerIntent = extractBuyerIntent(record.text)
     const painSeverity = extractPainSeverity(record.text)
     const risk = extractRisk(record.text)
-    const topic = topicTokens(record.text, input.icpTerms ?? [])
+    const { topicTokens: topic, matchedIcpTerms } = topicProfile(record.text, input.icpTerms ?? [])
     const category = categoryFor(buyerIntent, painSeverity, record.text)
     const momentum = percentileMomentum(Math.max(0, Number(record.engagement ?? 0)), engagementByPlatform.get(platform) ?? [])
     const recency = calculateRecency(record.observedAt ?? null, current)
-    const icpFit = input.icpTerms?.length ? clamp(topic.length) : (topic.length ? 0.5 : 0)
-    return { record, platform, buyerIntent, painSeverity, risk, topic, category, momentum, recency, icpFit }
+    const icpFit = matchedIcpTerms.length ? clamp(matchedIcpTerms.length) : 0
+    const organizationDomain = normalizedOrganizationDomain(record)
+    return { record, platform, buyerIntent, painSeverity, risk, topic, category, momentum, recency, icpFit, organizationDomain }
   }).filter(item => item.category && item.topic.length)
 
   const clusters = new Map<string, typeof candidates>()
   for (const candidate of candidates) {
-    const fingerprint = hash(`${input.scopeId}\u0000${candidate.category}\u0000${candidate.topic.join('|')}`)
+    const correlationKey = candidate.organizationDomain
+      ? `organization-domain:${candidate.organizationDomain}`
+      : `topic:${candidate.topic.join('|')}`
+    const fingerprint = hash(`${input.scopeId}\u0000${candidate.category}\u0000${correlationKey}`)
     const cluster = clusters.get(fingerprint) ?? []
     cluster.push(candidate)
     clusters.set(fingerprint, cluster)
@@ -246,6 +296,7 @@ export function processIntelligence(input: {
       summary: `${cluster.length} cited signal${cluster.length === 1 ? '' : 's'} across ${platforms.size} platform${platforms.size === 1 ? '' : 's'}.`,
       score, confidence: clamp(0.5 + Math.min(cluster.length, 3) * 0.1 + crossSourceSupport * 0.2),
       freshness: observed.at(-1) ?? current, evidence, topicTokens: topic, crossSourceSupport, momentum, recency, risk,
+      organizationDomain: cluster[0].organizationDomain,
     }
   }).sort((a, b) => b.score - a.score || a.fingerprint.localeCompare(b.fingerprint))
 
@@ -277,10 +328,20 @@ export function processIntelligence(input: {
 export function persistIntelligence(database: BrainDatabase, result: IntelligenceResult) {
   let evidence = 0
   for (const item of result.opportunities) {
-    const previous = database.getOpportunityByFingerprint(result.scopeId, item.fingerprint)
+    const exactPrevious = database.getOpportunityByFingerprint(result.scopeId, item.fingerprint)
+    const compatibleLegacy = !exactPrevious && item.organizationDomain
+      ? database.listOpportunityCorrelationCandidates({ scopeId: result.scopeId, category: item.category }).find(candidate => (
+        database.getOpportunityEvidence({ id: candidate.id, scopeId: result.scopeId })
+          .some(citation => normalizedOrganizationDomainFromUrl(citation.sourceRef) === item.organizationDomain)
+      ))
+      : null
+    const persistedFingerprint = compatibleLegacy?.fingerprint ?? item.fingerprint
+    const previous = exactPrevious ?? (compatibleLegacy
+      ? database.getOpportunityByFingerprint(result.scopeId, compatibleLegacy.fingerprint)
+      : null)
     const previousEvidence = previous ? database.getOpportunityEvidence({ id: previous.id, scopeId: result.scopeId }) : []
     const opportunity = database.upsertOpportunity({
-      scopeId: result.scopeId, fingerprint: item.fingerprint, category: item.category, title: item.title,
+      scopeId: result.scopeId, fingerprint: persistedFingerprint, category: item.category, title: item.title,
       summary: item.summary, score: Math.max(item.score, previous?.score ?? 0), confidence: Math.max(item.confidence, previous?.confidence ?? 0), freshness: item.freshness,
     })
     for (const citation of item.evidence) {
@@ -298,7 +359,7 @@ export function persistIntelligence(database: BrainDatabase, result: Intelligenc
       const crossSourceBoost = item.crossSourceSupport === 0 && previousPlatformCount < 2 && platformCount >= 2 ? 10 : 0
       database.upsertOpportunity({
         scopeId: result.scopeId,
-        fingerprint: item.fingerprint,
+        fingerprint: persistedFingerprint,
         category: item.category,
         title: item.title,
         summary: `${combinedEvidence.length} cited signal${combinedEvidence.length === 1 ? '' : 's'} across ${platformCount} platform${platformCount === 1 ? '' : 's'}.`,
