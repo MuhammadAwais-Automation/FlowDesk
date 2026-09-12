@@ -188,7 +188,7 @@ describe('Brain scope transitions', () => {
 describe('Intelligence scope transitions', () => {
   it('grants and completes a capture when the originating scope remains selected', async () => {
     api.brainRunSocialRecipe.mockResolvedValueOnce(consent).mockResolvedValueOnce({ requiresConsent: false, job: { id: 'job-queued', status: 'queued' } })
-    api.brainGrantConsent.mockResolvedValue({ granted: true })
+    api.brainGrantConsent.mockResolvedValue(true)
     await mount(Intelligence)
     fireEvent.click(screen.getByRole('button', { name: 'Scan unread' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Grant consent & run once' })).toBeTruthy())
@@ -239,7 +239,7 @@ describe('Intelligence scope transitions', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Grant consent & run once' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Grant consent & run once' }))
     switchScope()
-    await act(async () => grant.resolve({ granted: true }))
+    await act(async () => grant.resolve(true))
     expect(api.brainRunSocialRecipe).toHaveBeenCalledTimes(1)
     expect(screen.queryByText('Private source consent required')).toBeNull()
   })

@@ -75,4 +75,62 @@ describe('buildDecisionBrief', () => {
     })
     expect(brief.estimatedTokens).toBeLessThanOrEqual(1200)
   })
+
+  it('preserves a cited signal from both support classes when the budget can fit them', () => {
+    const brief = buildDecisionBrief({
+      question: 'Should we pursue support backlog work?',
+      opportunities: [{ opportunity, evidence: [
+        ...Array.from({ length: 20 }, (_, index) => evidence({ evidenceId: `support-${index}`, excerpt: `Support backlog demand ${index} ${'x'.repeat(80)}` })),
+        evidence({ evidenceId: 'counter-1', excerpt: 'The support backlog has now been cleared.', claimStatus: 'conflicting' }),
+      ] }],
+      tokenBudget: 600,
+    })
+
+    expect(brief.supportingSignals.length).toBeGreaterThan(0)
+    expect(brief.counterSignals).toHaveLength(1)
+    // The carried signals are majority-support, so the honest recommendation is
+    // the prioritise sentence — what matters is that it is computed from the
+    // signals the brief actually ships, and that the counter-signal survived.
+    expect(brief.supportingSignals.length).toBeGreaterThan(brief.counterSignals.length)
+    expect(brief.recommendation).toBe('Prioritize review of Support backlog; current cited signals are stronger than counter-signals.')
+    expect(brief.risks).toContain('Current evidence contains conflicting or stale signals.')
+    expect(brief.estimatedTokens).toBeLessThanOrEqual(600)
+  })
+
+  it('does not claim cited support after compaction removes every signal', () => {
+    const brief = buildDecisionBrief({
+      question: 'Should we pursue support backlog work?',
+      opportunities: [{ opportunity, evidence: [evidence()] }],
+      tokenBudget: 16,
+    })
+
+    expect(brief.supportingSignals).toEqual([])
+    expect(brief.counterSignals).toEqual([])
+    expect(brief.recommendation).not.toContain('cited signals are stronger')
+    expect(brief.estimatedTokens).toBeGreaterThan(16)
+  })
+
+  it('names the opportunity that supplied the top surviving supporting signal', () => {
+    const shipFaster: BrainOpportunity = {
+      ...opportunity, id: 'opportunity-ship', title: 'Team should ship faster',
+      summary: 'This work should move faster.', score: 95, confidence: 0.95,
+    }
+    const designer: BrainOpportunity = {
+      ...opportunity, id: 'opportunity-designer', title: 'Designer needed for rebrand',
+      summary: 'A designer is needed for the rebrand.', score: 50, confidence: 0.6,
+    }
+    const brief = buildDecisionBrief({
+      question: 'Should we hire a designer?',
+      opportunities: [
+        { opportunity: shipFaster, evidence: [evidence({ opportunityId: shipFaster.id, evidenceId: 'ship-1', excerpt: 'We should ship faster this quarter.', claimStatus: 'superseded' })] },
+        { opportunity: designer, evidence: [evidence({ opportunityId: designer.id, evidenceId: 'designer-1', excerpt: 'We need a designer for the rebrand.' })] },
+      ],
+      tokenBudget: 1200,
+    })
+
+    expect(brief.supportingSignals).toHaveLength(1)
+    expect(brief.supportingSignals[0].citation.memoryId).toBe(designer.id)
+    expect(brief.recommendation).toContain('Designer needed for rebrand')
+    expect(brief.recommendation).not.toContain('Team should ship faster')
+  })
 })

@@ -233,6 +233,25 @@ describe('BrainDatabase', () => {
     brain.close()
   })
 
+  it('bounds source metrics to a date window', () => {
+    const brain = createBrain()
+    try {
+      const scope = brain.ensureScope({ type: 'client', externalRef: 'trend-window', name: 'Trend Window' })
+      for (const [day, value] of [['2026-06-01', 5], ['2026-08-20', 9], ['2026-09-05', 11]] as const) {
+        brain.recordSourceMetric({ scopeId: scope.id, platform: 'linkedin', metric: 'support momentum', value, percentile: 0.5, observedAt: `${day}T00:00:00.000Z` })
+      }
+      // Without a window this returns every row ever written, so a spike from
+      // months ago outranks today's observation on the Trends tab.
+      expect(brain.listSourceMetrics({ scopeId: scope.id })).toHaveLength(3)
+      const windowed = brain.listSourceMetrics({ scopeId: scope.id, since: '2026-08-01T00:00:00.000Z' })
+      expect(windowed.map(metric => metric.value)).toEqual([11, 9])
+      expect(brain.listSourceMetrics({ scopeId: scope.id, platform: 'linkedin', since: '2026-09-01T00:00:00.000Z' })).toHaveLength(1)
+      expect(brain.listSourceMetrics({ scopeId: scope.id, platform: 'whatsapp', since: '2026-01-01T00:00:00.000Z' })).toHaveLength(0)
+    } finally {
+      brain.close()
+    }
+  })
+
   it('lists vault conflicts only for the requested client', () => {
     const brain = createBrain()
     try {

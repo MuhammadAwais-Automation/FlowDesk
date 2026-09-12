@@ -32,51 +32,12 @@
 
 import { shell, type WebContents } from 'electron'
 
-export type ShellLinkDecision =
-  /** Hand to the operating system default browser. */
-  | 'external'
-  /** The shell navigating within itself — the app's own routes, dev-server reloads. */
-  | 'allow-in-shell'
-  /** Neither, and not safe to hand to the OS. Nothing happens. */
-  | 'block'
+// One policy, one allowlist. The pure decision is shared with the renderer,
+// which must not paint a link the main process would refuse to open.
+import { shellLinkDecision } from '../src/lib/shellLinkDecision'
 
-const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'mailto:'])
-
-/**
- * Decides what the shell should do with a URL.
- *
- * Pure, so the decisions can be tested without a window — which matters here
- * because the interesting cases (a `javascript:` URL from a message, an
- * `about:blank` popup) are exactly the ones that are awkward to reproduce by
- * hand in a running app.
- */
-export function shellLinkDecision(targetUrl: string, shellUrl: string): ShellLinkDecision {
-  let target: URL
-  try {
-    target = new URL(targetUrl)
-  } catch {
-    return 'block'
-  }
-
-  // The shell's own pages: the dev server during development, a file:// bundle
-  // when packaged. Same origin means this is the app routing itself and must
-  // not be deflected — deflecting it would send the app's own reload to Chrome.
-  let shellOrigin = ''
-  try {
-    shellOrigin = new URL(shellUrl).origin
-  } catch { /* no URL yet — treat as no origin, which matches nothing below */ }
-
-  if (shellOrigin && shellOrigin !== 'null' && target.origin === shellOrigin) return 'allow-in-shell'
-
-  // A packaged build loads from file://, where every page shares the opaque
-  // "null" origin, so origin comparison cannot separate the app's own bundle
-  // from an arbitrary local file. Compared by scheme instead, and only for the
-  // shell's own scheme — a file: link arriving from a message still blocks,
-  // because the shell is not a file: page in that case.
-  if (target.protocol === 'file:' && shellUrl.startsWith('file:')) return 'allow-in-shell'
-
-  return EXTERNAL_SCHEMES.has(target.protocol) ? 'external' : 'block'
-}
+export { shellLinkDecision } from '../src/lib/shellLinkDecision'
+export type { ShellLinkDecision } from '../src/lib/shellLinkDecision'
 
 /**
  * Applies the policy to the shell's webContents.

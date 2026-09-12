@@ -1,4 +1,5 @@
 import { Check, Clock3, ExternalLink, X } from 'lucide-react'
+import { citationHref } from '@/lib/shellLinkDecision'
 import type { BrainOpportunity, BrainScope, OpportunityEvidence } from '@/types/brain'
 
 const categoryLabels: Record<BrainOpportunity['category'], string> = {
@@ -15,13 +16,17 @@ function platformLabel(platform: string) {
   return `${platform.charAt(0).toUpperCase()}${platform.slice(1)}`
 }
 
-export function OpportunityCard({ opportunity, scope, evidence, busy = false, onQualify, onDismiss }: {
+export function OpportunityCard({ opportunity, scope, evidence, busy = false, onQualify, onDismiss, onExpand }: {
   opportunity: BrainOpportunity
   scope: BrainScope
-  evidence: OpportunityEvidence[]
+  /** `undefined` until the rail is opened and its evidence has been read. */
+  evidence?: OpportunityEvidence[]
   busy?: boolean
   onQualify: (id: string) => void
   onDismiss: (id: string) => void
+  /** Fired when the evidence rail opens, so the page can read it on demand
+   * instead of one IPC round trip per opportunity on every refresh. */
+  onExpand?: (id: string) => void
 }) {
   return <article className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
     <div className="grid sm:grid-cols-[6rem_1fr]">
@@ -38,14 +43,12 @@ export function OpportunityCard({ opportunity, scope, evidence, busy = false, on
         </div>
         <h2 className="mt-3 text-base font-semibold text-stone-900">{opportunity.title}</h2>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-stone-600">{opportunity.summary}</p>
-        <details className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3">
+        <details className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3" onToggle={event => { if ((event.currentTarget as HTMLDetailsElement).open) onExpand?.(opportunity.id) }}>
           <summary className="cursor-pointer text-xs font-semibold text-stone-700">{opportunity.evidenceCount} evidence item{opportunity.evidenceCount === 1 ? '' : 's'}</summary>
           <div className="mt-3 space-y-2">
-            {evidence.length === 0 ? <p className="text-xs text-stone-500">Citation details are unavailable.</p> : evidence.map(item => <div key={item.evidenceId} className="border-l-2 border-violet-300 pl-3">
+            {evidence === undefined ? <p className="text-xs text-stone-500">Loading citations…</p> : evidence.length === 0 ? <p className="text-xs text-stone-500">Citation details are unavailable.</p> : evidence.map(item => <div key={item.evidenceId} className="border-l-2 border-violet-300 pl-3">
               <p className="text-xs leading-5 text-stone-600">{item.excerpt}</p>
-              <a href={item.sourceRef} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-violet-700">
-                Open {platformLabel(item.platform)} evidence <ExternalLink size={11} />
-              </a>
+              <CitationLink sourceRef={item.sourceRef} label={`Open ${platformLabel(item.platform)} evidence`} />
             </div>)}
           </div>
         </details>
@@ -56,4 +59,19 @@ export function OpportunityCard({ opportunity, scope, evidence, busy = false, on
       </div>
     </div>
   </article>
+}
+
+/**
+ * A citation's `sourceRef` is copied verbatim from captured social content, so
+ * it is a string a stranger wrote. Anything the shell link policy would refuse
+ * to open renders as inert text rather than as an href — this renderer holds
+ * `window.electronAPI`, so a clickable `javascript:` ref would be a one-click
+ * path from external content into the privileged bridge.
+ */
+function CitationLink({ sourceRef, label }: { sourceRef: string; label: string }) {
+  const href = citationHref(sourceRef)
+  if (!href) return <p className="mt-1 text-xs text-stone-400">Source link unavailable</p>
+  return <a href={href} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-violet-700">
+    {label} <ExternalLink size={11} />
+  </a>
 }

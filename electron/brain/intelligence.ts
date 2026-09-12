@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { CaptureEnvelope } from '../../src/types/brain'
 
+// One definition of source-relative momentum, shared with the Trends tab so
+// the UI ranks by the same formula that wrote the stored percentiles.
+export { percentileMomentum } from '../../src/lib/sourceTrends'
+
 export type OpportunityCategory = 'direct_lead' | 'warm_opportunity' | 'market_signal' | 'content_opportunity' | 'product_opportunity' | 'partnership_opportunity'
 
 interface RawCapture {
@@ -79,20 +83,6 @@ export function scoreOpportunity(signals: OpportunitySignals, category: Opportun
     + unit(signals.crossSourceSupport) * 10
     + unit(signals.evidenceQuality) * 10
   return { category, score: Math.round(Math.max(0, Math.min(100, weighted - Math.max(0, signals.risk)))) }
-}
-
-export function percentileMomentum(value: number, peerValues: number[]) {
-  const normalized = Math.max(0, Number.isFinite(value) ? value : 0)
-  const peers = peerValues.map(peer => Math.max(0, Number.isFinite(peer) ? peer : 0))
-  if (normalized === 0 || peers.length < 2 || peers.every(peer => peer === 0)) return 0
-
-  // Percentiles from a two-item cohort are weak evidence. Scale rank confidence
-  // up to a five-item cohort so one reaction beside one zero cannot become 100%.
-  const below = peers.filter(peer => peer < normalized).length
-  const ties = peers.filter(peer => peer === normalized).length
-  const rank = (below + Math.max(0, ties - 1) / 2) / Math.max(1, peers.length - 1)
-  const cohortConfidence = Math.min(1, (peers.length - 1) / 4)
-  return Math.max(0, Math.min(1, rank * cohortConfidence))
 }
 
 export const REDDIT_CONNECTOR_CAPABILITIES = {

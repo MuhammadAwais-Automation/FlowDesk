@@ -1,4 +1,5 @@
 import { AlertTriangle, ExternalLink } from 'lucide-react'
+import { citationHref } from '@/lib/shellLinkDecision'
 import type { BrainDecisionBrief } from '@/types/brain'
 
 export function DecisionBrief({ brief }: { brief: BrainDecisionBrief }) {
@@ -18,5 +19,13 @@ export function DecisionBrief({ brief }: { brief: BrainDecisionBrief }) {
 }
 
 function SignalList({ title, signals }: { title: string; signals: BrainDecisionBrief['supportingSignals'] }) {
-  return <section><h3 className="text-sm font-semibold text-stone-800">{title}</h3>{signals.length === 0 ? <p className="mt-2 text-xs text-stone-500">No cited signals.</p> : <div className="mt-2 space-y-3">{signals.map((signal, index) => <div key={signal.citation.id} className="border-l-2 border-violet-300 pl-3"><p className="text-xs leading-5 text-stone-600">{signal.text}</p><a href={signal.citation.sourceRef} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-violet-700">Open source {index + 1} <ExternalLink size={11} /></a></div>)}</div>}</section>
+  return <section><h3 className="text-sm font-semibold text-stone-800">{title}</h3>{signals.length === 0 ? <p className="mt-2 text-xs text-stone-500">No cited signals.</p> : <div className="mt-2 space-y-3">{signals.map((signal, index) => <div key={signal.citation.id} className="border-l-2 border-violet-300 pl-3"><p className="text-xs leading-5 text-stone-600">{signal.text}</p><CitationLink sourceRef={signal.citation.sourceRef} label={`Open source ${index + 1}`} /></div>)}</div>}</section>
+}
+
+/** Same rule as the opportunity rail: a ref the shell link policy would refuse
+ * to open is not painted as openable. See src/lib/shellLinkDecision.ts. */
+function CitationLink({ sourceRef, label }: { sourceRef: string; label: string }) {
+  const href = citationHref(sourceRef)
+  if (!href) return <p className="mt-1 text-xs text-stone-400">Source link unavailable</p>
+  return <a href={href} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-violet-700">{label} <ExternalLink size={11} /></a>
 }

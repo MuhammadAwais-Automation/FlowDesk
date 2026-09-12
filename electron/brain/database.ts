@@ -312,10 +312,21 @@ export class BrainDatabase {
     }
   }
 
-  listSourceMetrics(input: { scopeId: string; platform?: string }): BrainSourceMetric[] {
+  /**
+   * `since` bounds the read to a date window. Without one this returns every
+   * observation ever written for the scope, which is what let a months-old
+   * spike outrank today's row on the Trends tab. It stays optional because the
+   * capture processor reads full history deliberately.
+   */
+  listSourceMetrics(input: { scopeId: string; platform?: string; since?: string }): BrainSourceMetric[] {
+    const since = input.since ?? ''
     const rows = input.platform
-      ? this.db.prepare('SELECT * FROM source_metrics WHERE scope_id = ? AND platform = ? ORDER BY observed_at DESC').all(input.scopeId, input.platform)
-      : this.db.prepare('SELECT * FROM source_metrics WHERE scope_id = ? ORDER BY observed_at DESC').all(input.scopeId)
+      ? (since
+          ? this.db.prepare('SELECT * FROM source_metrics WHERE scope_id = ? AND platform = ? AND observed_at >= ? ORDER BY observed_at DESC').all(input.scopeId, input.platform, since)
+          : this.db.prepare('SELECT * FROM source_metrics WHERE scope_id = ? AND platform = ? ORDER BY observed_at DESC').all(input.scopeId, input.platform))
+      : (since
+          ? this.db.prepare('SELECT * FROM source_metrics WHERE scope_id = ? AND observed_at >= ? ORDER BY observed_at DESC').all(input.scopeId, since)
+          : this.db.prepare('SELECT * FROM source_metrics WHERE scope_id = ? ORDER BY observed_at DESC').all(input.scopeId))
     return (rows as SqlRow[]).map(row => ({
       id: String(row.id), scopeId: String(row.scope_id), platform: String(row.platform), metric: String(row.metric),
       value: Number(row.value), percentile: Number(row.percentile), observedAt: String(row.observed_at),

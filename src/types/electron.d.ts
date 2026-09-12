@@ -190,7 +190,7 @@ export interface ElectronAPI {
   brainGetOpportunityEvidence: (input: { id: string; scopeId: string }) => Promise<OpportunityEvidence[]>
   brainReviewOpportunity: (input: { id: string; scopeId: string; decision: 'qualify' | 'dismiss' | 'convert' }) => Promise<BrainOpportunity>
   brainBuildDecisionBrief: (input: { scopeId: string; question: string; tokenBudget?: number }) => Promise<BrainDecisionBrief>
-  brainListSourceMetrics: (input: { scopeId: string; platform?: string }) => Promise<BrainSourceMetric[]>
+  brainListSourceMetrics: (input: { scopeId: string; platform?: string; since?: string }) => Promise<BrainSourceMetric[]>
   brainGetArtifactManifest: (jobId: string) => Promise<Record<string, unknown> | null>
   brainRunRecipe: (input: unknown) => Promise<BrainJob>
   brainCompleteJob: (input: { id: string; result: Record<string, unknown> }) => Promise<BrainJob>

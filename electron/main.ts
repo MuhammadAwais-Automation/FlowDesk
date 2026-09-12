@@ -74,6 +74,7 @@ interface PromptCategory {
 import { join, basename } from 'path'
 import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView, findAnyViewByUrl, findWorkerViewByTool } from './sessions'
+import { attachShellLinkPolicy } from './shellLinkPolicy'
 import { startProbeRunner } from './discovery/probeRunner'
 import { injectPrompt, getLatestAssistantText, getSelectedText, type AITool } from './injector'
 import { extractTextFromSSEEvent, extractUsageFromSSEEvent, extractModelInfoFromSSEEvent, extractIdsFromSSEEvent, extractImageAssetsFromSSEEvent, isMessageStreamComplete } from './chatgptParser'
@@ -290,6 +291,14 @@ function createWindow() {
   })
 
   setMainWindow(mainWindow)
+
+  // Defence in depth for links the shell renders. The renderer already refuses
+  // to paint a non-http(s) citation as an href (src/lib/shellLinkDecision.ts),
+  // but that is a rendering decision: it cannot stop a navigation started any
+  // other way, and it protects only the components that remember to call it.
+  // This is the enforcement half — nothing leaves the shell, and nothing
+  // reaches `shell.openExternal`, unless the one shared allowlist permits it.
+  attachShellLinkPolicy(mainWindow.webContents)
 
   // System-theme changes push to the renderer live so "System" theme setting
   // tracks OS dark/light switches without a restart.
