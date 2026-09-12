@@ -1,5 +1,14 @@
+import { createHash } from 'node:crypto'
+import { MONITORABLE_RECIPE_IDS } from '../../src/lib/brainUi'
 import type { BrainMonitor } from '../../src/types/brain'
 import type { BrainDatabase } from './database'
+
+export { MONITORABLE_RECIPE_IDS }
+
+/** A monitor may only target a recipe the Brain job runner actually claims. */
+export function isMonitorableRecipe(recipeId: string) {
+  return (MONITORABLE_RECIPE_IDS as readonly string[]).includes(recipeId)
+}
 
 /** A monitor may never run more often than this, however it was configured. */
 export const MONITOR_MINIMUM_INTERVAL_MINUTES = 15
@@ -19,9 +28,17 @@ const CONSENT_PROVIDER = 'local-brain'
  * one scope coalesces into a single Agent turn, a monitor can never be grouped
  * into (and so never pollute or hijack) a user's live session, and cross-scope
  * results can never share a turn.
+ *
+ * The scope id is hashed rather than embedded. A continuation's session id is
+ * handed to the agent session store, which uses it verbatim as a directory name
+ * under `userData/agent-sessions` — so it has to be a legal path segment on
+ * every platform, and a scope id is not guaranteed to be one. Hashing keeps the
+ * mapping deterministic and injective (one scope, one session, never shared)
+ * while guaranteeing the result is lowercase hex: no `:` (which Windows reads as
+ * an alternate data stream and rejects), and none of `< > " / \ | ? *`.
  */
 export function monitorContinuationSessionId(scopeId: string) {
-  return `monitor:${scopeId}`
+  return `monitor-${createHash('sha256').update(scopeId).digest('hex').slice(0, 32)}`
 }
 
 /**
@@ -56,8 +73,11 @@ export function createMonitorSchedulerPort(
     listDueMonitors: at => database.listDueMonitors(at),
     markMonitorRun: input => database.markMonitorRun(input),
     runMonitor(monitor, windowStart) {
-      // The renderer can only name a registered recipe, and this re-checks it at
-      // run time in case the recipe was removed after the monitor was created.
+      // Re-checked at run time, not just at creation: a stored monitor row may
+      // predate this rule, and a recipe can stop being registered or claimed
+      // after the monitor was created. A job no runner claims would sit queued
+      // forever, so it is never enqueued at all.
+      if (!isMonitorableRecipe(monitor.recipeId)) return false
       const recipeVersion = database.getLatestRecipeVersion(monitor.recipeId)
       if (!recipeVersion) return false
       // A monitor gets no privilege a manual run would not have: private recipes

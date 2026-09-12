@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MONITORABLE_RECIPE_IDS } from '../../src/lib/brainUi'
 
 const id = z.string().min(1).max(200)
 const text = z.string().trim().min(1).max(100_000)
@@ -70,7 +71,7 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     contentHash: z.string().regex(/^[a-f0-9]{64}$/), characterCount: z.number().int().nonnegative(), createdAt: z.iso.datetime(),
   }).strict() }),
   z.object({ ...requestBase, method: z.literal('createMonitor'), payload: z.object({
-    scopeId: id, recipeId: id, intervalMinutes: z.number().int().min(15).max(10_080),
+    scopeId: id, recipeId: z.enum([...MONITORABLE_RECIPE_IDS]), intervalMinutes: z.number().int().min(15).max(10_080),
     minimumScore: z.number().min(0).max(100).optional(),
   }).strict() }),
   z.object({ ...requestBase, method: z.literal('listMonitors'), payload: z.object({ scopeId: id.optional() }).strict() }),

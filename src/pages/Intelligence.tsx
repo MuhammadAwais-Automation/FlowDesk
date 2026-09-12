@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, BarChart3, Radar, Radio } from 'lucide-react'
 import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
 import { DecisionBrief } from '@/components/intelligence/DecisionBrief'
 import { OpportunityCard } from '@/components/intelligence/OpportunityCard'
-import { INTELLIGENCE_SOURCES, INTELLIGENCE_TABS } from '@/lib/brainUi'
+import { INTELLIGENCE_SOURCES, INTELLIGENCE_TABS, MONITORABLE_RECIPE_IDS } from '@/lib/brainUi'
 import { summarizeTrends, TREND_WINDOW_DAYS, windowStart } from '@/lib/sourceTrends'
 import type { BrainDecisionBrief, BrainJob, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainScope, BrainSourceMetric, OpportunityEvidence } from '@/types/brain'
 
@@ -19,8 +19,12 @@ const consentChecks = Object.entries(sourceRecipes).flatMap(([sourceId, recipes]
 
 type ConsentState = 'granted' | 'required' | 'unknown'
 
-/** Only a registered recipe may be monitored; the utility process re-checks it. */
-const monitorRecipes = Object.values(sourceRecipes).flat()
+/**
+ * Only recipes the Brain job runner claims can be monitored; the utility process
+ * re-checks this. NotebookLM recipes are absent on purpose: their Brain jobs are
+ * mirrors of the NotebookLM queue, so a monitor on one would never run.
+ */
+const monitorRecipes: readonly string[] = MONITORABLE_RECIPE_IDS
 const MONITOR_MINIMUM_INTERVAL_MINUTES = 15
 const MONITOR_DEFAULT_MINIMUM_SCORE = 70
 

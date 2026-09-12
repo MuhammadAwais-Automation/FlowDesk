@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import {
   MONITOR_DEFAULT_MINIMUM_SCORE,
   MONITOR_MINIMUM_INTERVAL_MINUTES,
+  isMonitorableRecipe,
 } from './scheduler'
 import type {
   AgentContinuation,
@@ -1213,8 +1214,11 @@ export class BrainDatabase {
       throw new Error(`Monitor interval must be at least ${MONITOR_MINIMUM_INTERVAL_MINUTES} minutes`)
     }
     // An arbitrary string must never reach enqueueJob: a monitor may only target
-    // a recipe that is already registered in this database.
+    // a recipe that is registered in this database AND actually claimed by the
+    // job runner. A monitor on an unclaimed recipe would enqueue a job nothing
+    // ever executes — one silently stuck job per interval, forever.
     if (!this.getLatestRecipeVersion(input.recipeId)) throw new Error(`Unknown recipe ${input.recipeId}`)
+    if (!isMonitorableRecipe(input.recipeId)) throw new Error(`Recipe ${input.recipeId} cannot be monitored`)
     const createdAt = input.startAt ?? now()
     const id = randomUUID()
     this.db.prepare(`
