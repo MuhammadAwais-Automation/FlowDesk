@@ -73,6 +73,10 @@ export class BrainBackupManager {
   static restoreAtomic(inputPath: string, brainRoot: string) {
     const parent = dirname(brainRoot)
     mkdirSync(parent, { recursive: true })
+    // Restoring into a profile where Brain has never run is a supported recovery
+    // path, and there the brain root itself does not exist yet. Without this the
+    // atomic rename below fails with ENOENT after the archive already validated.
+    mkdirSync(brainRoot, { recursive: true })
     const staging = mkdtempSync(join(parent, 'brain-import-'))
     try {
       const manifest = this.extractArchive(inputPath, staging)

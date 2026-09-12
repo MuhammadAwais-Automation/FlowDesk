@@ -1176,6 +1176,18 @@ export class BrainDatabase {
           UPDATE opportunity_evidence SET stale = 1
           WHERE evidence_id IN (SELECT id FROM evidence WHERE source_id = ?)
         `).run(String(row.source_id))
+        // Deleting a source invalidates the derived signal that cited it, so an
+        // open opportunity goes back for human review rather than continuing to
+        // read as a live, fully-sourced lead. `dismissed` and `converted` are a
+        // reviewer's durable decisions and are never reopened by retention.
+        this.db.prepare(`
+          UPDATE opportunities SET status = 'reviewing', updated_at = ?
+          WHERE status IN ('new', 'qualified') AND id IN (
+            SELECT oe.opportunity_id FROM opportunity_evidence oe
+            JOIN evidence e ON e.id = oe.evidence_id
+            WHERE e.source_id = ?
+          )
+        `).run(at, String(row.source_id))
         this.db.prepare('UPDATE evidence SET source_id = NULL WHERE source_id = ?').run(String(row.source_id))
         this.db.prepare('DELETE FROM sources WHERE id = ? AND NOT EXISTS (SELECT 1 FROM capture_envelopes WHERE source_id = ?)').run(String(row.source_id), String(row.source_id))
       }

@@ -37,7 +37,7 @@ If the utility process crashes, Electron main retries after 5 seconds, 30 second
 
 Use Brain → Settings → Export backup to create a `.flowdesk-brain.zip`. The archive contains a consistent SQLite snapshot, curated vault, and manifest only. Import validates schema and paths, creates a pre-import backup, replaces data atomically, and restarts the utility process. Newer incompatible schemas and unsafe archive paths are rejected.
 
-Raw captures expire after 30 days by default. Accepted knowledge keeps its source locator and hash; deleting a source invalidates dependent derived data. A forgotten memory becomes a tombstone first so history remains auditable.
+Raw captures expire after 30 days by default and the window is configurable per recipe run. Accepted knowledge keeps its source locator and hash; deleting a source invalidates dependent derived data — its citations are marked stale and any affected opportunity still in `new` or `qualified` returns to `reviewing` for human review, while a reviewer's `dismissed` or `converted` decision is never reopened. A forgotten memory becomes a tombstone first so history remains auditable.
 
 ## Verification
 
@@ -50,3 +50,7 @@ npm run build
 ```
 
 The packaged build must contain `out/main/brainUtility.js` and be able to create the database and vault in the packaged `userData` location.
+
+`electron/brain/operationalAcceptance.test.ts` is the release gate for the operational loop: capture through a fixture connector, a durable job interrupted and resumed across a process restart, a persisted cited opportunity, a reviewer decision, a budgeted decision brief, and exactly one Agent continuation — plus cross-client isolation and the retention sweep. It runs entirely against throwaway profiles and fixture data; no live account and no real `userData` profile is touched.
+
+Operator procedures for every one of these flows are in [`brain-operations.md`](./brain-operations.md).

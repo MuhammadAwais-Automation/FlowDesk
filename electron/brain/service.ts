@@ -34,7 +34,13 @@ export class BrainService {
     this.maintenanceTimer.unref()
   }
 
-  private runMaintenance() {
+  /**
+   * Retention sweep: expired raw captures leave the ledger and their artifact
+   * files leave the disk. Public so the release-gate acceptance test can run it
+   * at a chosen clock instead of waiting out the 24-hour interval timer; the
+   * scheduled caller is still the constructor's own timer.
+   */
+  runMaintenance() {
     const brainRoot = dirname(this.vault.root)
     const artifactRoot = resolve(brainRoot, 'artifacts')
     for (const reference of this.database.purgeExpiredCaptures()) {
