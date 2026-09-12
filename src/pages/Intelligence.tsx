@@ -5,7 +5,7 @@ import { DecisionBrief } from '@/components/intelligence/DecisionBrief'
 import { OpportunityCard } from '@/components/intelligence/OpportunityCard'
 import { INTELLIGENCE_SOURCES, INTELLIGENCE_TABS } from '@/lib/brainUi'
 import { summarizeTrends, TREND_WINDOW_DAYS, windowStart } from '@/lib/sourceTrends'
-import type { BrainDecisionBrief, BrainJob, BrainOpportunity, BrainOpportunityStatus, BrainScope, BrainSourceMetric, OpportunityEvidence } from '@/types/brain'
+import type { BrainDecisionBrief, BrainJob, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainScope, BrainSourceMetric, OpportunityEvidence } from '@/types/brain'
 
 const sourceRecipes: Record<string, string[]> = {
   notebooklm: ['notebooklm.research', 'notebooklm.artifact'],
@@ -18,6 +18,11 @@ const sourceRecipes: Record<string, string[]> = {
 const consentChecks = Object.entries(sourceRecipes).flatMap(([sourceId, recipes]) => recipes.map(recipeId => ({ sourceId, recipeId })))
 
 type ConsentState = 'granted' | 'required' | 'unknown'
+
+/** Only a registered recipe may be monitored; the utility process re-checks it. */
+const monitorRecipes = Object.values(sourceRecipes).flat()
+const MONITOR_MINIMUM_INTERVAL_MINUTES = 15
+const MONITOR_DEFAULT_MINIMUM_SCORE = 70
 
 export default function Intelligence() {
   const [tab, setTab] = useState<(typeof INTELLIGENCE_TABS)[number]>('Overview')
@@ -34,6 +39,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
   const [evidence, setEvidence] = useState<Record<string, OpportunityEvidence[]>>({})
   const [metrics, setMetrics] = useState<BrainSourceMetric[]>([])
   const [jobs, setJobs] = useState<BrainJob[]>([])
+  const [monitors, setMonitors] = useState<BrainMonitor[]>([])
   const [consents, setConsents] = useState<Record<string, ConsentState>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -63,11 +69,12 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
       // consent-ledger failure must degrade the consent line on the Sources
       // card, not empty the reviewer's opportunity queue, pain points and
       // trends — which would read as "this scope has no intelligence".
-      const [[nextOpportunities, nextMetrics, nextJobs], nextConsents] = await Promise.all([
+      const [[nextOpportunities, nextMetrics, nextJobs, nextMonitors], nextConsents] = await Promise.all([
         Promise.all([
           api.brainListOpportunities({ scopeId: activeScope.id, limit: 100 }),
           api.brainListSourceMetrics({ scopeId: activeScope.id, since: windowStart(TREND_WINDOW_DAYS) }),
           api.brainListJobs(),
+          api.brainListMonitors(activeScope.id),
         ]),
         readConsents(activeScope.id),
       ])
@@ -75,6 +82,9 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
       setOpportunities(nextOpportunities)
       setMetrics(nextMetrics)
       setJobs(nextJobs.filter(job => job.scopeId === activeScope.id))
+      // The utility process already scopes this read; the filter keeps a stale or
+      // over-broad response from ever rendering under another scope.
+      setMonitors(nextMonitors.filter(monitor => monitor.scopeId === activeScope.id))
       setConsents(nextConsents)
       loaded.current = true
     } catch (reason) {
@@ -83,6 +93,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
         setEvidence({})
         setMetrics([])
         setJobs([])
+        setMonitors([])
         setError(reason instanceof Error ? reason.message : String(reason))
       }
     } finally {
@@ -198,13 +209,100 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
 
       {!loading && tab === 'Overview' && <div className="space-y-5"><Overview opportunities={opportunities} metrics={metrics} jobs={jobs} /><Sources jobs={jobs} consents={consents} onRun={recipe => void runRecipe(recipe)} /></div>}
       {!loading && tab === 'Sources' && <Sources jobs={jobs} consents={consents} onRun={recipe => void runRecipe(recipe)} />}
-      {!loading && tab === 'Monitors' && <section className="rounded-2xl border border-stone-200 bg-white p-5"><div className="flex items-center gap-2 font-semibold"><Activity size={18} /> Actionable-only monitors</div><p className="mt-2 text-sm text-stone-500">Monitor controls become available with the scheduler. FlowDesk band ho to koi background service nahi chalegi.</p></section>}
+      {!loading && tab === 'Monitors' && scope && <Monitors scope={scope} monitors={monitors} onChanged={() => void refresh(scope)} onError={setError} />}
       {!loading && tab === 'Pain Points' && <section><h2 className="text-sm font-semibold">Pain clusters by repetition and severity</h2>{painPoints.length === 0 ? <Empty text="No repeated pain points have been captured for this scope." /> : <div className="mt-3 space-y-3">{painPoints.map(item => <article key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4"><div className="flex items-center justify-between gap-4"><h3 className="font-semibold">{item.title}</h3><span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800">{item.evidenceCount} repetitions</span></div><p className="mt-2 text-sm text-stone-600">{item.summary}</p><p className="mt-3 text-xs text-stone-500">Severity score {Math.round(item.score)} · {Math.round(item.confidence * 100)}% confidence</p></article>)}</div>}</section>}
       {!loading && tab === 'Trends' && <section><div className="flex flex-wrap items-baseline justify-between gap-2"><h2 className="text-sm font-semibold">Source-relative momentum</h2><span className="text-xs text-stone-500">Last {TREND_WINDOW_DAYS} days · ranked within each source</span></div>{trends.length === 0 ? <Empty text={`No source metrics were recorded in the last ${TREND_WINDOW_DAYS} days for this scope.`} /> : <div className="mt-3 grid gap-3 md:grid-cols-2">{trends.map(trend => <article key={trend.id} className="rounded-2xl border border-stone-200 bg-white p-4"><div className="flex items-center justify-between"><BarChart3 size={17} className="text-violet-700" /><span className="text-xs text-stone-500">{trend.platform}</span></div><h3 className="mt-3 font-semibold">{trend.metric}</h3><p className="mt-1 text-2xl font-bold tabular-nums">{Math.round(trend.momentum * 100)}% momentum</p><p className="mt-1 text-xs font-medium text-stone-600">{trend.delta > 0 ? `Rising ${Math.round(trend.delta * 100)} pts` : trend.delta < 0 ? `Falling ${Math.round(Math.abs(trend.delta) * 100)} pts` : 'Flat across the window'}</p><p className="mt-2 text-xs text-stone-500">Latest value {trend.value} · {trend.observations} observation{trend.observations === 1 ? '' : 's'} · {new Date(trend.observedAt).toLocaleDateString()}</p></article>)}</div>}</section>}
       {!loading && tab === 'Opportunities' && <section><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-semibold">Evidence review queue</h2><label className="text-xs text-stone-600">Status <select aria-label="Opportunity status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as BrainOpportunityStatus | 'all')} className="ml-2 rounded-lg border border-stone-300 bg-white px-3 py-2"><option value="all">All review states</option><option value="new">New</option><option value="reviewing">Reviewing</option><option value="qualified">Qualified</option></select></label></div>{filteredOpportunities.length === 0 ? <Empty text={`No ${statusFilter} opportunities in this scope.`} /> : <div className="mt-3 space-y-4">{filteredOpportunities.map(item => <OpportunityCard key={item.id} opportunity={item} scope={scope as BrainScope} evidence={evidence[item.id]} busy={reviewingId === item.id} onExpand={id => void loadEvidence(id)} onQualify={id => void reviewOpportunity(id, 'qualify')} onDismiss={id => void reviewOpportunity(id, 'dismiss')} />)}</div>}</section>}
       {!loading && tab === 'Decision Briefs' && <section className="mx-auto max-w-4xl"><form onSubmit={event => { event.preventDefault(); void buildBrief() }} className="rounded-2xl border border-stone-200 bg-white p-5"><label htmlFor="decision-question" className="text-sm font-semibold">Decision question</label><div className="mt-3 flex flex-col gap-2 sm:flex-row"><input id="decision-question" aria-label="Decision question" value={question} onChange={event => setQuestion(event.target.value)} placeholder="Should we pursue this client segment?" className="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm" /><button disabled={briefBusy || !question.trim()} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{briefBusy ? 'Building…' : 'Build decision brief'}</button></div><p className="mt-2 text-xs text-stone-500">Only stored, scoped evidence is used. External instructions are treated as source text, never executed.</p></form>{brief && <div className="mt-4"><DecisionBrief brief={brief} /></div>}</section>}
     </main>
   </div>
+}
+
+/**
+ * Monitor controls: one recurring recipe run per scope, actionable results only.
+ *
+ * Every mutation re-reads through the page's own guarded refresh, so a scope
+ * switch during a write can never leave another scope's monitors on screen.
+ */
+function Monitors({ scope, monitors, onChanged, onError }: {
+  scope: BrainScope
+  monitors: BrainMonitor[]
+  onChanged: () => void
+  onError: (message: string) => void
+}) {
+  const api = window.electronAPI
+  const [recipeId, setRecipeId] = useState(monitorRecipes[0])
+  const [intervalMinutes, setIntervalMinutes] = useState(60)
+  const [minimumScore, setMinimumScore] = useState(MONITOR_DEFAULT_MINIMUM_SCORE)
+  const [busyId, setBusyId] = useState('')
+  const [confirmingId, setConfirmingId] = useState('')
+
+  async function mutate(id: string, action: () => Promise<unknown>) {
+    setBusyId(id)
+    onError('')
+    try {
+      await action()
+      onChanged()
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusyId('')
+    }
+  }
+
+  return <section className="space-y-4">
+    <section className="rounded-2xl border border-stone-200 bg-white p-5">
+      <div className="flex items-center gap-2 font-semibold"><Activity size={18} /> Actionable-only monitors</div>
+      <p className="mt-2 text-xs text-stone-500">A monitor runs a recipe on a schedule and resumes the Agent only when a new signal reaches its minimum score. Monitors run inside FlowDesk: band ho to koi background service nahi chalegi.</p>
+      <form
+        onSubmit={event => { event.preventDefault(); void mutate('new', () => api.brainCreateMonitor({ scopeId: scope.id, recipeId, intervalMinutes, minimumScore })) }}
+        className="mt-4 grid gap-3 sm:grid-cols-4"
+      >
+        <label className="text-xs text-stone-600">Recipe
+          <select aria-label="Monitor recipe" value={recipeId} onChange={event => setRecipeId(event.target.value)} className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-2 py-2 text-sm">
+            {monitorRecipes.map(item => <option key={item} value={item}>{item}</option>)}
+          </select>
+        </label>
+        <label className="text-xs text-stone-600">Interval (minutes)
+          <input aria-label="Monitor interval in minutes" type="number" min={MONITOR_MINIMUM_INTERVAL_MINUTES} step={5} value={intervalMinutes} onChange={event => setIntervalMinutes(Number(event.target.value))} className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-2 py-2 text-sm" />
+        </label>
+        <label className="text-xs text-stone-600">Minimum score
+          <input aria-label="Monitor minimum score" type="number" min={0} max={100} value={minimumScore} onChange={event => setMinimumScore(Number(event.target.value))} className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-2 py-2 text-sm" />
+        </label>
+        <button disabled={busyId !== '' || intervalMinutes < MONITOR_MINIMUM_INTERVAL_MINUTES} className="self-end rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">Add monitor</button>
+      </form>
+      <p className="mt-2 text-xs text-stone-500">Minimum interval {MONITOR_MINIMUM_INTERVAL_MINUTES} minutes. Private sources still need consent before a monitor can capture anything.</p>
+    </section>
+    {monitors.length === 0
+      ? <Empty text="No monitors in this scope yet." />
+      : <div className="space-y-3">{monitors.map(monitor => <article key={monitor.id} className="rounded-2xl border border-stone-200 bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="font-semibold">{monitor.recipeId}</h3>
+          <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${monitor.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>{monitor.status === 'active' ? 'Active' : 'Paused'}</span>
+        </div>
+        <dl className="mt-3 grid gap-1 text-xs sm:grid-cols-2">
+          <div className="flex justify-between gap-2"><dt className="text-stone-500">Scope</dt><dd>{scope.name}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-stone-500">Every</dt><dd>{monitor.intervalMinutes} minutes</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-stone-500">Minimum score</dt><dd>{monitor.minimumScore}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-stone-500">Last run</dt><dd>{monitor.lastRunAt ? new Date(monitor.lastRunAt).toLocaleString() : 'Never'}</dd></div>
+          <div className="flex justify-between gap-2"><dt className="text-stone-500">Next run</dt><dd>{new Date(monitor.nextRunAt).toLocaleString()}</dd></div>
+        </dl>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            disabled={busyId === monitor.id}
+            onClick={() => void mutate(monitor.id, () => api.brainSetMonitorStatus({ id: monitor.id, status: monitor.status === 'active' ? 'paused' : 'active' }))}
+            className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+          >{monitor.status === 'active' ? 'Pause' : 'Resume'}</button>
+          {confirmingId === monitor.id
+            ? <>
+              <button disabled={busyId === monitor.id} onClick={() => { setConfirmingId(''); void mutate(monitor.id, () => api.brainDeleteMonitor(monitor.id)) }} className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Confirm delete</button>
+              <button onClick={() => setConfirmingId('')} className="rounded-lg border border-stone-300 px-3 py-2 text-xs font-semibold text-stone-600">Keep monitor</button>
+              <span className="text-xs text-red-700">Deleting also forgets what this monitor has already reported.</span>
+            </>
+            : <button onClick={() => setConfirmingId(monitor.id)} className="rounded-lg border border-stone-300 px-3 py-2 text-xs font-semibold text-stone-600">Delete</button>}
+        </div>
+      </article>)}</div>}
+  </section>
 }
 
 /**

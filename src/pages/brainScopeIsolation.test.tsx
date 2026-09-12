@@ -45,6 +45,7 @@ const api = {
   brainRunSocialRecipe: vi.fn(), brainGrantConsent: vi.fn(),
   brainListOpportunities: vi.fn(), brainGetOpportunityEvidence: vi.fn(), brainReviewOpportunity: vi.fn(),
   brainBuildDecisionBrief: vi.fn(), brainListSourceMetrics: vi.fn(), brainGetConsent: vi.fn(),
+  brainListMonitors: vi.fn(), brainCreateMonitor: vi.fn(), brainSetMonitorStatus: vi.fn(), brainDeleteMonitor: vi.fn(),
 }
 let Brain: ComponentType
 
@@ -70,6 +71,7 @@ beforeEach(() => {
   api.brainListVaultConflicts.mockImplementation(async (scopeId: string) => scopeId === 'b' ? [] : [conflict])
   api.brainResolveVaultConflict.mockResolvedValue(memory)
   api.brainListOpportunities.mockResolvedValue([])
+  api.brainListMonitors.mockResolvedValue([])
   api.brainGetOpportunityEvidence.mockResolvedValue([])
   api.brainListSourceMetrics.mockResolvedValue([])
   api.brainGetConsent.mockResolvedValue(false)

@@ -9,6 +9,10 @@ export const socialRecipeRequestSchema = z.object({
     limit: z.number().int().min(1).max(500).optional(),
     retentionDays: z.number().int().min(1).max(365).optional(),
     continuationSessionId: z.string().min(1).optional(),
+    // Present when a monitor scheduled this run; windowStart is what makes each
+    // scheduled run its own job instead of deduplicating into the previous one.
+    monitorId: z.string().min(1).optional(),
+    windowStart: z.iso.datetime().optional(),
     mode: z.enum(['interactive', 'background', 'actionable_only']).optional(),
   }).strict(),
 }).strict()

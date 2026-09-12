@@ -1,6 +1,6 @@
 import type { CustomTool } from './browser'
 import type { ProjectSessionSnapshot } from './project'
-import type { BrainCandidate, BrainContextPack, BrainDecisionBrief, BrainJob, BrainMemory, BrainOpportunity, BrainOpportunityStatus, BrainQuery, BrainScope, BrainScopeQuery, BrainSourceMetric, BrainStatus, MemoryKind, OpportunityEvidence } from './brain'
+import type { BrainCandidate, BrainContextPack, BrainDecisionBrief, BrainJob, BrainMemory, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainQuery, BrainScope, BrainScopeQuery, BrainSourceMetric, BrainStatus, MemoryKind, OpportunityEvidence } from './brain'
 
 export interface GmailSession {
   email: string
@@ -204,6 +204,10 @@ export interface ElectronAPI {
   brainRevokeConsent: (input: { scopeId: string; recipeId: string; provider: string }) => Promise<boolean>
   brainExportBackup: () => Promise<{ outputPath: string; fileCount: number } | null>
   brainImportBackup: () => Promise<{ manifest: Record<string, unknown>; rollbackDatabase: string } | null>
+  brainCreateMonitor: (input: { scopeId: string; recipeId: string; intervalMinutes: number; minimumScore?: number }) => Promise<BrainMonitor>
+  brainListMonitors: (scopeId?: string) => Promise<BrainMonitor[]>
+  brainSetMonitorStatus: (input: { id: string; status: 'active' | 'paused' }) => Promise<BrainMonitor | null>
+  brainDeleteMonitor: (id: string) => Promise<boolean>
   brainListEntities: (scopeId: string) => Promise<Array<{ id: string; scopeId: string; type: string; name: string; properties: Record<string, unknown>; createdAt: string; updatedAt: string }>>
   brainGetGraph: (scopeId: string) => Promise<{ nodes: Array<{ id: string; type: string; name: string }>; edges: Array<{ id: string; from: string; to: string; relation: string; confidence: number; sourceRef: string }> }>
   brainRunSocialRecipe: (input: unknown) => Promise<unknown>

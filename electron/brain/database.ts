@@ -2,12 +2,17 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import {
+  MONITOR_DEFAULT_MINIMUM_SCORE,
+  MONITOR_MINIMUM_INTERVAL_MINUTES,
+} from './scheduler'
 import type {
   AgentContinuation,
   BrainCandidate,
   BrainContextPack,
   BrainJob,
   BrainMemory,
+  BrainMonitor,
   BrainOpportunity,
   BrainOpportunityStatus,
   BrainQuery,
@@ -34,6 +39,15 @@ const TABLES = [
 ] as const
 
 type SqlRow = Record<string, unknown>
+
+const MONITOR_OBSERVATION_PREFIX = 'monitor.observation:'
+
+interface MonitorObservation {
+  score: number
+  minimumScore: number
+  observedAt: string
+  notifiedAt: string | null
+}
 
 function now() {
   return new Date().toISOString()
@@ -88,6 +102,21 @@ function mapJob(row: SqlRow): BrainJob {
     status: String(row.status) as BrainJob['status'],
     parameters: JSON.parse(String(row.parameters_json)) as Record<string, unknown>,
     result: row.result_json ? JSON.parse(String(row.result_json)) as Record<string, unknown> : null,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  }
+}
+
+function mapMonitor(row: SqlRow): BrainMonitor {
+  return {
+    id: String(row.id),
+    scopeId: String(row.scope_id),
+    recipeId: String(row.recipe_id),
+    intervalMinutes: Number(row.interval_minutes),
+    minimumScore: Number(row.minimum_score),
+    status: String(row.status) as BrainMonitor['status'],
+    lastRunAt: row.last_run_at ? String(row.last_run_at) : null,
+    nextRunAt: String(row.next_run_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -809,6 +838,12 @@ export class BrainDatabase {
       .run(input.id, input.version, input.title, stableJson(input), now())
   }
 
+  /** The registered-recipe list is the only recipe surface a monitor may target. */
+  getLatestRecipeVersion(recipeId: string): number | null {
+    const row = this.db.prepare('SELECT max(version) AS version FROM recipes WHERE id = ?').get(recipeId) as SqlRow | undefined
+    return row && row.version !== null && row.version !== undefined ? Number(row.version) : null
+  }
+
   enqueueJob(input: {
     recipeId: string
     recipeVersion: number
@@ -1027,7 +1062,13 @@ export class BrainDatabase {
     try {
       this.db.prepare("UPDATE jobs SET status = 'completed', result_json = ?, updated_at = ? WHERE id = ?").run(stableJson(result), timestamp, id)
       this.db.prepare("UPDATE job_steps SET status = 'completed', completed_at = ? WHERE job_id = ? AND status != 'completed'").run(timestamp, id)
-      const actionable = result.actionable === true
+      // A monitor run is actionable only on its own terms. The recipe's own
+      // `actionable` flag uses a fixed recipe-level bar and knows nothing about
+      // what this monitor has already reported, so it is not consulted here.
+      const monitorId = typeof job.parameters.monitorId === 'string' ? job.parameters.monitorId : null
+      const actionable = monitorId
+        ? this.evaluateMonitorActionability(monitorId, timestamp).fingerprints.length > 0
+        : result.actionable === true
       this.db.prepare(`UPDATE agent_continuations
         SET status = CASE
           WHEN mode = 'background' THEN 'consumed'
@@ -1164,6 +1205,126 @@ export class BrainDatabase {
       providerSessionId: row.provider_session_id ? String(row.provider_session_id) : null,
       mode: String(row.mode) as AgentContinuation['mode'], contextBudget: Number(row.context_budget), status: 'queued' as const,
     }))
+  }
+
+  createMonitor(input: { scopeId: string; recipeId: string; intervalMinutes: number; minimumScore?: number; startAt?: string }): BrainMonitor {
+    const intervalMinutes = Math.trunc(input.intervalMinutes)
+    if (!Number.isFinite(intervalMinutes) || intervalMinutes < MONITOR_MINIMUM_INTERVAL_MINUTES) {
+      throw new Error(`Monitor interval must be at least ${MONITOR_MINIMUM_INTERVAL_MINUTES} minutes`)
+    }
+    // An arbitrary string must never reach enqueueJob: a monitor may only target
+    // a recipe that is already registered in this database.
+    if (!this.getLatestRecipeVersion(input.recipeId)) throw new Error(`Unknown recipe ${input.recipeId}`)
+    const createdAt = input.startAt ?? now()
+    const id = randomUUID()
+    this.db.prepare(`
+      INSERT INTO monitors(id, scope_id, recipe_id, interval_minutes, minimum_score, status, last_run_at, next_run_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'active', NULL, ?, ?, ?)
+    `).run(
+      id,
+      input.scopeId,
+      input.recipeId,
+      intervalMinutes,
+      clamp(input.minimumScore ?? MONITOR_DEFAULT_MINIMUM_SCORE, 0, 100),
+      new Date(Date.parse(createdAt) + intervalMinutes * 60_000).toISOString(),
+      createdAt,
+      createdAt,
+    )
+    return this.getMonitor(id) as BrainMonitor
+  }
+
+  getMonitor(id: string): BrainMonitor | null {
+    const row = this.db.prepare('SELECT * FROM monitors WHERE id = ?').get(id) as SqlRow | undefined
+    return row ? mapMonitor(row) : null
+  }
+
+  listMonitors(scopeId?: string): BrainMonitor[] {
+    const rows = scopeId
+      ? this.db.prepare('SELECT * FROM monitors WHERE scope_id = ? ORDER BY created_at').all(scopeId)
+      : this.db.prepare('SELECT * FROM monitors ORDER BY created_at').all()
+    return (rows as SqlRow[]).map(mapMonitor)
+  }
+
+  listDueMonitors(at = now()): BrainMonitor[] {
+    const rows = this.db.prepare("SELECT * FROM monitors WHERE status = 'active' AND next_run_at <= ? ORDER BY next_run_at").all(at) as SqlRow[]
+    return rows.map(mapMonitor)
+  }
+
+  setMonitorStatus(id: string, status: BrainMonitor['status']): BrainMonitor | null {
+    this.db.prepare('UPDATE monitors SET status = ?, updated_at = ? WHERE id = ?').run(status, now(), id)
+    return this.getMonitor(id)
+  }
+
+  deleteMonitor(id: string) {
+    const result = this.db.prepare('DELETE FROM monitors WHERE id = ?').run(id)
+    if (Number(result.changes) === 0) return false
+    this.db.prepare('DELETE FROM processing_cache WHERE cache_key LIKE ?').run(`${MONITOR_OBSERVATION_PREFIX}${id}:%`)
+    return true
+  }
+
+  /**
+   * Claims one monitor window by moving `nextRunAt` forward, conditional on the
+   * window that is being claimed. A second tick for the same window loses the
+   * swap and is told so, which is what keeps one window to one job.
+   */
+  markMonitorRun(input: { id: string; windowStart: string; lastRunAt: string; nextRunAt: string }) {
+    const result = this.db.prepare(`
+      UPDATE monitors SET last_run_at = ?, next_run_at = ?, updated_at = ?
+      WHERE id = ? AND status = 'active' AND next_run_at = ?
+    `).run(input.lastRunAt, input.nextRunAt, input.lastRunAt, input.id, input.windowStart)
+    return Number(result.changes) > 0
+  }
+
+  /**
+   * Decides whether a monitor run earns an Agent resume.
+   *
+   * Actionable means an opportunity in the monitor's scope meets its minimum
+   * score AND was not already meeting it at the previous evaluation. The prior
+   * state is kept per monitor and per fingerprint, so re-detecting an unchanged
+   * signal — however many times the monitor runs — notifies exactly once.
+   */
+  evaluateMonitorActionability(monitorId: string, at = now()): { fingerprints: string[] } {
+    const monitor = this.getMonitor(monitorId)
+    if (!monitor) return { fingerprints: [] }
+    const fingerprints: string[] = []
+    // Scope isolation: only this monitor's own scope is ever considered. The
+    // fingerprint is read straight from the ledger because it is deliberately
+    // not part of the renderer-facing opportunity shape.
+    const signals = this.db.prepare(`
+      SELECT fingerprint, score, status FROM opportunities
+      WHERE scope_id = ? ORDER BY score DESC, updated_at DESC LIMIT 100
+    `).all(monitor.scopeId) as SqlRow[]
+    for (const signal of signals) {
+      const fingerprint = String(signal.fingerprint)
+      const prior = this.readMonitorObservation(monitorId, fingerprint)
+      const wasActionable = prior ? prior.score >= prior.minimumScore : false
+      // A reviewer's dismissal is durable: a dismissed signal never re-notifies.
+      const isActionable = Number(signal.score) >= monitor.minimumScore && !['dismissed', 'converted'].includes(String(signal.status))
+      if (isActionable && !wasActionable) fingerprints.push(fingerprint)
+      this.writeMonitorObservation(monitorId, fingerprint, {
+        score: Number(signal.score),
+        minimumScore: monitor.minimumScore,
+        observedAt: at,
+        notifiedAt: isActionable && !wasActionable ? at : prior?.notifiedAt ?? null,
+      })
+    }
+    return { fingerprints }
+  }
+
+  /**
+   * The per-fingerprint notification ledger lives in `processing_cache`, the v2
+   * schema's durable key/value side table, with no expiry — the monitors feature
+   * needs no schema migration of its own and works on every existing v2 database.
+   */
+  private readMonitorObservation(monitorId: string, fingerprint: string): MonitorObservation | null {
+    const row = this.db.prepare('SELECT value_json FROM processing_cache WHERE cache_key = ?')
+      .get(`${MONITOR_OBSERVATION_PREFIX}${monitorId}:${fingerprint}`) as SqlRow | undefined
+    return row ? JSON.parse(String(row.value_json)) as MonitorObservation : null
+  }
+
+  private writeMonitorObservation(monitorId: string, fingerprint: string, observation: MonitorObservation) {
+    this.db.prepare('INSERT OR REPLACE INTO processing_cache(cache_key, value_json, created_at, expires_at) VALUES (?, ?, ?, NULL)')
+      .run(`${MONITOR_OBSERVATION_PREFIX}${monitorId}:${fingerprint}`, stableJson(observation), observation.observedAt)
   }
 
   consumeContinuation(id: string) {

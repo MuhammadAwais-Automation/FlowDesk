@@ -9,7 +9,7 @@ import { composePromptWithBrain } from './agent/brainContext'
 import type { BrainContextPack, BrainScope } from '../src/types/brain'
 import { configureBrainTools } from './agent/brainTools'
 import { brainModePolicy, normalizeAgentBrainMode } from './agent/brainMode'
-import { buildContinuationPrompt, groupContinuations } from './agent/continuations'
+import { buildContinuationPrompt, planContinuationTurns } from './agent/continuations'
 
 // Initializes Crashpad so Windows dev runs are less likely to log "not connected" (harmless Chromium noise otherwise).
 crashReporter.start({ productName: 'FlowDesk', uploadToServer: false })
@@ -432,6 +432,10 @@ ipcMain.handle('brain:importBackup', async () => {
   if (confirmation.response !== 1) return null
   return brainRequest('importBackup', { inputPath })
 })
+ipcMain.handle('brain:createMonitor', (_e, input: unknown) => brainRequest('createMonitor', input))
+ipcMain.handle('brain:listMonitors', (_e, scopeId?: string) => brainRequest('listMonitors', { scopeId }))
+ipcMain.handle('brain:setMonitorStatus', (_e, input: unknown) => brainRequest('setMonitorStatus', input))
+ipcMain.handle('brain:deleteMonitor', (_e, id: string) => brainRequest('deleteMonitor', { id }))
 ipcMain.handle('brain:listEntities', (_e, scopeId: string) => brainRequest('listEntities', { scopeId }))
 ipcMain.handle('brain:getGraph', (_e, scopeId: string) => brainRequest('getGraph', { scopeId }))
 ipcMain.handle('brain:runSocialRecipe', async (_e, input: unknown) => {
@@ -1751,7 +1755,7 @@ async function drainBrainContinuations() {
     const continuations = await brainRequest('listQueuedContinuations', {}) as Array<{ id: string; jobId: string; sessionId: string }>
     if (continuations.length === 0) return
     const jobs = await brainRequest('listJobs', {}) as Array<{ id: string; recipeId: string; status: string; result: Record<string, unknown> | null }>
-    for (const group of groupContinuations(continuations)) {
+    for (const group of planContinuationTurns({ continuations, manualTurnActive: currentAgentAbort !== null })) {
       if (currentAgentAbort) break
       const jobIds = new Set(group.items.map(item => item.jobId))
       const prompt = buildContinuationPrompt(group.sessionId, jobs.filter(job => jobIds.has(job.id)))

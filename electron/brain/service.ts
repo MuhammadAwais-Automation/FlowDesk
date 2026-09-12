@@ -7,12 +7,14 @@ import { BrainBackupManager } from './backup'
 import { ArtifactStore } from './artifactStore'
 import { socialRecipeDefinitions } from './recipeDefinitions'
 import { buildDecisionBrief } from './decisionBrief'
+import { MonitorScheduler, createMonitorSchedulerPort } from './scheduler'
 
 export class BrainService {
   readonly database: BrainDatabase
   readonly vault: VaultManager
   readonly artifacts: ArtifactStore
   private readonly maintenanceTimer: ReturnType<typeof setInterval>
+  private readonly monitors: MonitorScheduler
 
   constructor(databasePath: string) {
     this.database = new BrainDatabase(databasePath)
@@ -24,6 +26,10 @@ export class BrainService {
     this.database.registerRecipe({ id: 'notebooklm.artifact', version: 1, title: 'NotebookLM Artifact', steps: ['generate', 'capture_manifest'] })
     for (const recipe of socialRecipeDefinitions) this.database.registerRecipe(recipe)
     this.database.recoverExpiredLeases()
+    // Monitors are recipes registered above, so the scheduler starts only after
+    // registration. It lives and dies with this utility process: no OS task.
+    this.monitors = new MonitorScheduler(createMonitorSchedulerPort(this.database))
+    this.monitors.start()
     this.maintenanceTimer = setInterval(() => this.runMaintenance(), 24 * 60 * 60 * 1000)
     this.maintenanceTimer.unref()
   }
@@ -129,6 +135,10 @@ export class BrainService {
         return restored
       }
       case 'recordConversationTurn': return this.database.recordConversationTurn(request.payload)
+      case 'createMonitor': return this.database.createMonitor(request.payload)
+      case 'listMonitors': return this.database.listMonitors(request.payload.scopeId)
+      case 'setMonitorStatus': return this.database.setMonitorStatus(request.payload.id, request.payload.status)
+      case 'deleteMonitor': return this.database.deleteMonitor(request.payload.id)
       case 'listQueuedContinuations': return this.database.listQueuedContinuations()
       case 'consumeContinuation': return this.database.consumeContinuation(request.payload.id)
       case 'listEntities': return this.database.listEntities(request.payload.scopeId)
@@ -146,6 +156,7 @@ export class BrainService {
 
   close() {
     clearInterval(this.maintenanceTimer)
+    this.monitors.stop()
     this.vault.stop()
     this.database.checkpoint()
     this.database.close()

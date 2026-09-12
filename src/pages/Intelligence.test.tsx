@@ -20,6 +20,7 @@ const api = {
   brainListOpportunities: vi.fn(), brainGetOpportunityEvidence: vi.fn(), brainReviewOpportunity: vi.fn(),
   brainBuildDecisionBrief: vi.fn(), brainListSourceMetrics: vi.fn(), brainListJobs: vi.fn(), brainGetConsent: vi.fn(),
   brainRunSocialRecipe: vi.fn(), brainGrantConsent: vi.fn(), onBrainEvent: vi.fn(),
+  brainListMonitors: vi.fn(), brainCreateMonitor: vi.fn(), brainSetMonitorStatus: vi.fn(), brainDeleteMonitor: vi.fn(),
 }
 let Intelligence: typeof import('./Intelligence').default
 
@@ -41,6 +42,7 @@ beforeEach(() => {
   api.brainBuildDecisionBrief.mockResolvedValue(brief)
   api.brainListSourceMetrics.mockResolvedValue([{ id: 'metric-1', scopeId: scope.id, platform: 'linkedin', metric: 'support momentum', value: 12, percentile: 0.8, observedAt: '2026-09-06T00:00:00.000Z' }])
   api.brainListJobs.mockResolvedValue([{ id: 'job-1', scopeId: scope.id, recipeId: 'linkedin.opportunity_scan', recipeVersion: 1, accountId: null, status: 'failed', parameters: {}, result: { recordCount: 14, error: 'Login expired' }, createdAt: scope.createdAt, updatedAt: '2026-09-06T00:00:00.000Z' }])
+  api.brainListMonitors.mockResolvedValue([])
   api.brainGetConsent.mockResolvedValue(true)
   api.onBrainEvent.mockReturnValue(() => undefined)
 })
@@ -234,5 +236,53 @@ describe('Intelligence refresh behaviour', () => {
     expect(screen.getByText('Loading intelligence for this scope…')).toBeTruthy()
     resolve(opportunities)
     await waitFor(() => expect(screen.queryByText('Loading intelligence for this scope…')).toBeNull())
+  })
+})
+
+describe('Intelligence monitors', () => {
+  const monitor = {
+    id: 'monitor-1', scopeId: scope.id, recipeId: 'linkedin.opportunity_scan', intervalMinutes: 60,
+    minimumScore: 70, status: 'active' as const, lastRunAt: '2026-09-06T00:00:00.000Z',
+    nextRunAt: '2026-09-06T01:00:00.000Z', createdAt: scope.createdAt, updatedAt: scope.createdAt,
+  }
+
+  it('shows the schedule, score bar and run times for each monitor in the scope', async () => {
+    api.brainListMonitors.mockResolvedValue([monitor])
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Monitors' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'linkedin.opportunity_scan' })).toBeTruthy())
+    expect(api.brainListMonitors).toHaveBeenCalledWith(scope.id)
+    expect(screen.getByText('60 minutes')).toBeTruthy()
+    expect(screen.getByText('70')).toBeTruthy()
+    expect(screen.getByText('Active')).toBeTruthy()
+  })
+
+  it('creates a monitor with the default minimum score of 70', async () => {
+    api.brainListMonitors.mockResolvedValue([])
+    api.brainCreateMonitor.mockResolvedValue(monitor)
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Monitors' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Monitor recipe' })).toBeTruthy())
+    fireEvent.change(screen.getByRole('combobox', { name: 'Monitor recipe' }), { target: { value: 'linkedin.opportunity_scan' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add monitor' }))
+    await waitFor(() => expect(api.brainCreateMonitor).toHaveBeenCalledWith({
+      scopeId: scope.id, recipeId: 'linkedin.opportunity_scan', intervalMinutes: 60, minimumScore: 70,
+    }))
+  })
+
+  it('pauses a monitor and deletes only after an explicit confirmation', async () => {
+    api.brainListMonitors.mockResolvedValue([monitor])
+    api.brainSetMonitorStatus.mockResolvedValue({ ...monitor, status: 'paused' })
+    api.brainDeleteMonitor.mockResolvedValue(true)
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Monitors' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
+    await waitFor(() => expect(api.brainSetMonitorStatus).toHaveBeenCalledWith({ id: 'monitor-1', status: 'paused' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(api.brainDeleteMonitor).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(api.brainDeleteMonitor).toHaveBeenCalledWith('monitor-1'))
   })
 })

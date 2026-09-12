@@ -1,4 +1,4 @@
-interface ContinuationItem {
+export interface ContinuationItem {
   id: string
   jobId: string
   sessionId: string
@@ -40,4 +40,18 @@ export function buildContinuationPrompt(sessionId: string, jobs: CompletedJob[])
     'Only compact manifests are included. Use cited artifact handles for drill-down when needed.',
     serialized,
   ].join('\n')
+}
+
+/**
+ * The drain plan for one 10-second poll.
+ *
+ * Every queued continuation in the window collapses to one turn per session,
+ * so several jobs finishing together — interactive completions and monitor
+ * resumes alike — resume the Agent once rather than once each. A manual turn
+ * that is already running takes the whole window: nothing is planned, nothing
+ * is consumed, and the queue is drained on a later poll instead.
+ */
+export function planContinuationTurns(input: { continuations: ContinuationItem[]; manualTurnActive: boolean }) {
+  if (input.manualTurnActive) return []
+  return groupContinuations(input.continuations)
 }
