@@ -75,8 +75,10 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     minimumScore: z.number().min(0).max(100).optional(),
   }).strict() }),
   z.object({ ...requestBase, method: z.literal('listMonitors'), payload: z.object({ scopeId: id.optional() }).strict() }),
-  z.object({ ...requestBase, method: z.literal('setMonitorStatus'), payload: z.object({ id, status: z.enum(['active', 'paused']) }).strict() }),
-  z.object({ ...requestBase, method: z.literal('deleteMonitor'), payload: z.object({ id }).strict() }),
+  // Scope is required, not optional: monitor mutation is scope-keyed exactly
+  // like opportunity review, so a wrong-scope id can only be not-found.
+  z.object({ ...requestBase, method: z.literal('setMonitorStatus'), payload: z.object({ id, scopeId: id, status: z.enum(['active', 'paused']) }).strict() }),
+  z.object({ ...requestBase, method: z.literal('deleteMonitor'), payload: z.object({ id, scopeId: id }).strict() }),
   z.object({ ...requestBase, method: z.literal('listQueuedContinuations'), payload: z.object({}).strict() }),
   z.object({ ...requestBase, method: z.literal('consumeContinuation'), payload: z.object({ id }).strict() }),
   z.object({ ...requestBase, method: z.literal('listEntities'), payload: z.object({ scopeId: id }).strict() }),

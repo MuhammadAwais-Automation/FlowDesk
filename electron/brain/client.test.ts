@@ -78,6 +78,48 @@ describe('BrainClient', () => {
     client.stop()
   })
 
+  /**
+   * `importBackup` exits the utility on purpose (service.ts) and relies on this
+   * supervisor to bring it back. The budget used to be consumed by those
+   * deliberate exits and never given back, so three backup imports in one
+   * session degraded the Brain permanently — every later request rejecting with
+   * "Brain utility is unavailable" until the whole app restarted.
+   */
+  it('gives the restart budget back after a healthy run', async () => {
+    vi.useFakeTimers()
+    const children: FakeChild[] = []
+    const client = new BrainClient(() => {
+      const child = new FakeChild()
+      children.push(child)
+      return child
+    }, { restartDelaysMs: [5, 30, 120], healthyUptimeMs: 1_000 })
+    client.start()
+
+    // Three intentional restarts, each after the utility has run healthily —
+    // exactly the backup-import shape.
+    for (let round = 0; round < 3; round += 1) {
+      await vi.advanceTimersByTimeAsync(5_000)
+      children[round].emit('exit', 0)
+      expect(client.getRuntimeStatus()).toMatchObject({ state: 'restarting', restartAttempts: 1 })
+      await vi.advanceTimersByTimeAsync(5)
+      expect(client.getRuntimeStatus().state).toBe('ready')
+    }
+    expect(client.getRuntimeStatus().state).not.toBe('degraded')
+
+    // And the crash-loop protection still bites: a genuine loop crashes before
+    // it ever earns healthy uptime, so the budget is not refunded.
+    // The last healthy exit left one attempt spent, so two more young crashes
+    // exhaust the budget and the third exit degrades.
+    children[3].emit('exit', 1)
+    await vi.advanceTimersByTimeAsync(30)
+    children[4].emit('exit', 1)
+    await vi.advanceTimersByTimeAsync(120)
+    children[5].emit('exit', 1)
+    expect(client.getRuntimeStatus()).toMatchObject({ state: 'degraded', restartAttempts: 3 })
+    client.stop()
+    vi.useRealTimers()
+  })
+
   it('enters degraded state after three failed restarts', async () => {
     vi.useFakeTimers()
     const children: FakeChild[] = []

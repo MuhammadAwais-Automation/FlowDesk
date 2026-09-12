@@ -38,7 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   brainCreateMonitor: (input: unknown) => ipcRenderer.invoke('brain:createMonitor', input),
   brainListMonitors: (scopeId?: string) => ipcRenderer.invoke('brain:listMonitors', scopeId),
   brainSetMonitorStatus: (input: unknown) => ipcRenderer.invoke('brain:setMonitorStatus', input),
-  brainDeleteMonitor: (id: string) => ipcRenderer.invoke('brain:deleteMonitor', id),
+  brainDeleteMonitor: (input: unknown) => ipcRenderer.invoke('brain:deleteMonitor', input),
   brainListEntities: (scopeId: string) => ipcRenderer.invoke('brain:listEntities', scopeId),
   brainGetGraph: (scopeId: string) => ipcRenderer.invoke('brain:getGraph', scopeId),
   brainRunSocialRecipe: (input: unknown) => ipcRenderer.invoke('brain:runSocialRecipe', input),

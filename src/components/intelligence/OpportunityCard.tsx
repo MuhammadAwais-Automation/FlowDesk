@@ -28,6 +28,13 @@ export function OpportunityCard({ opportunity, scope, evidence, busy = false, on
    * instead of one IPC round trip per opportunity on every refresh. */
   onExpand?: (id: string) => void
 }) {
+  // Retention has purged the sources behind `stale` rows, so they are citations
+  // in name only. Once the rail has been read, the count says how many can
+  // still be followed rather than repeating a total that includes dead ones.
+  const staleCount = evidence?.filter(item => item.stale).length ?? 0
+  const evidenceSummary = evidence && staleCount > 0
+    ? `${evidence.length - staleCount} of ${evidence.length} citations still available`
+    : `${opportunity.evidenceCount} evidence item${opportunity.evidenceCount === 1 ? '' : 's'}`
   return <article className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
     <div className="grid sm:grid-cols-[6rem_1fr]">
       <div className="flex flex-row items-center justify-between gap-3 bg-violet-50 p-4 sm:flex-col sm:items-start sm:justify-start" aria-label={`Opportunity score ${Math.round(opportunity.score)} out of 100`}>
@@ -44,11 +51,17 @@ export function OpportunityCard({ opportunity, scope, evidence, busy = false, on
         <h2 className="mt-3 text-base font-semibold text-stone-900">{opportunity.title}</h2>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-stone-600">{opportunity.summary}</p>
         <details className="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3" onToggle={event => { if ((event.currentTarget as HTMLDetailsElement).open) onExpand?.(opportunity.id) }}>
-          <summary className="cursor-pointer text-xs font-semibold text-stone-700">{opportunity.evidenceCount} evidence item{opportunity.evidenceCount === 1 ? '' : 's'}</summary>
+          <summary className="cursor-pointer text-xs font-semibold text-stone-700">{evidenceSummary}</summary>
           <div className="mt-3 space-y-2">
-            {evidence === undefined ? <p className="text-xs text-stone-500">Loading citations…</p> : evidence.length === 0 ? <p className="text-xs text-stone-500">Citation details are unavailable.</p> : evidence.map(item => <div key={item.evidenceId} className="border-l-2 border-violet-300 pl-3">
-              <p className="text-xs leading-5 text-stone-600">{item.excerpt}</p>
-              <CitationLink sourceRef={item.sourceRef} label={`Open ${platformLabel(item.platform)} evidence`} />
+            {evidence === undefined ? <p className="text-xs text-stone-500">Loading citations…</p> : evidence.length === 0 ? <p className="text-xs text-stone-500">Citation details are unavailable.</p> : evidence.map(item => <div key={item.evidenceId} className={`border-l-2 pl-3 ${item.stale ? 'border-stone-300' : 'border-violet-300'}`}>
+              <p className={`text-xs leading-5 ${item.stale ? 'text-stone-400 line-through' : 'text-stone-600'}`}>{item.excerpt}</p>
+              {item.stale
+                // A purged source must not look actionable: no href at all, the
+                // same discipline the shell link policy applies to refs it
+                // cannot vouch for. The excerpt stays as the record of what was
+                // once cited, visibly struck through.
+                ? <p className="mt-1 text-xs font-medium text-stone-500">Source expired</p>
+                : <CitationLink sourceRef={item.sourceRef} label={`Open ${platformLabel(item.platform)} evidence`} />}
             </div>)}
           </div>
         </details>

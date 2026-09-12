@@ -41,11 +41,13 @@ A private capture recipe cannot run without consent for the exact
 `(scope, recipe, provider)` triple. WhatsApp and LinkedIn are private; LinkedIn
 declares **two** recipes and consenting to one is not consent for the other.
 
-1. **Intelligence → Sources**. Each card shows a **Consent** line
-   (`Granted` / `Not granted`, or `Unknown` if the consent ledger could not be
-   read — treat `Unknown` as not granted).
-2. Press the card's run button (**Scan unread** for WhatsApp, **Scan
-   opportunities** for LinkedIn).
+1. **Intelligence → Sources**. Each card shows a **Consent** line for the source
+   as a whole (`Granted` only when *every* recipe that source declares is
+   granted; `Unknown` if the consent ledger could not be read — treat `Unknown`
+   as not granted), and under each run button the state of that one recipe.
+2. Press the run button for the recipe you want. Every recipe has its own
+   button, because consent is per recipe: **Scan unread** for WhatsApp, and
+   **Scan opportunities** / **Scan community** for LinkedIn's two recipes.
 3. If consent is missing, a **Private source consent required** banner appears at
    the top of the screen showing provider, retention days, destination scope and
    the exact fields requested.
@@ -58,7 +60,8 @@ the result rather than storing it.
 
 ## 3. Running a recipe
 
-1. **Intelligence → Sources** → **Scan unread** / **Scan opportunities**.
+1. **Intelligence → Sources** → **Scan unread** / **Scan opportunities** /
+   **Scan community**.
 2. Watch progress on **Brain → Jobs**: the job moves
    `queued → running → processing → completed`, with one durable step per stage
    (`capture, normalize, classify, score, summarize`).
@@ -110,8 +113,14 @@ background OS service, and nothing runs while the app is closed.
 
 Notes:
 
-- Consent still applies. A monitor on a private source with no consent captures
-  nothing.
+- Consent still applies, per recipe. A monitor on a private recipe with no
+  consent claims its window, captures nothing and still advances **Last run** —
+  so grant the recipe's consent *before* creating the monitor, from
+  **Intelligence → Sources** using that recipe's own run button (section 2).
+  The monitor form says so when the selected recipe is not granted in the
+  current scope.
+- Pause, resume and delete are scope-keyed: a monitor can only be changed from
+  the scope that owns it.
 - Every interval missed while FlowDesk was closed collapses into one run; the
   schedule re-anchors forward rather than replaying.
 - Re-detecting an unchanged signal notifies once, not once per interval.

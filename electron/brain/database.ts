@@ -27,7 +27,8 @@ import type {
   OpportunityEvidence,
 } from '../../src/types/brain'
 
-const SCHEMA_VERSION = 2
+/** SQLite schema version (`PRAGMA user_version`), not the backup archive's. */
+export const SCHEMA_VERSION = 2
 
 const TABLES = [
   'scopes', 'scope_links', 'memories', 'memory_revisions', 'memory_candidates',
@@ -167,9 +168,19 @@ export class BrainDatabase {
   constructor(databasePath: string) {
     mkdirSync(dirname(databasePath), { recursive: true })
     this.db = new DatabaseSync(databasePath)
-    this.db.exec('PRAGMA journal_mode=WAL')
-    this.db.exec('PRAGMA foreign_keys=ON')
-    this.migrate()
+    try {
+      this.db.exec('PRAGMA journal_mode=WAL')
+      this.db.exec('PRAGMA foreign_keys=ON')
+      this.migrate()
+    } catch (error) {
+      // Opening a file that is not a SQLite database (a truncated or corrupt
+      // one inside a backup archive, say) throws here — with the handle already
+      // open and now unreachable, which on Windows locks the file for the rest
+      // of the process. The probe in `BrainBackupManager.stageArchive` opens
+      // exactly such files on purpose, so the failed open closes after itself.
+      this.db.close()
+      throw error
+    }
   }
 
   private migrate() {
@@ -1249,8 +1260,15 @@ export class BrainDatabase {
     return this.getMonitor(id) as BrainMonitor
   }
 
-  getMonitor(id: string): BrainMonitor | null {
-    const row = this.db.prepare('SELECT * FROM monitors WHERE id = ?').get(id) as SqlRow | undefined
+  /**
+   * `scopeId` is optional only for the utility's own internal reads (the
+   * scheduler already holds the monitor row). Every renderer-reachable caller
+   * passes it, so a wrong-scope id reads as not-found rather than as data.
+   */
+  getMonitor(id: string, scopeId?: string): BrainMonitor | null {
+    const row = scopeId
+      ? this.db.prepare('SELECT * FROM monitors WHERE id = ? AND scope_id = ?').get(id, scopeId) as SqlRow | undefined
+      : this.db.prepare('SELECT * FROM monitors WHERE id = ?').get(id) as SqlRow | undefined
     return row ? mapMonitor(row) : null
   }
 
@@ -1266,13 +1284,15 @@ export class BrainDatabase {
     return rows.map(mapMonitor)
   }
 
-  setMonitorStatus(id: string, status: BrainMonitor['status']): BrainMonitor | null {
-    this.db.prepare('UPDATE monitors SET status = ?, updated_at = ? WHERE id = ?').run(status, now(), id)
-    return this.getMonitor(id)
+  // Scope-keyed like every opportunity mutation: an id from another scope is
+  // not found, never silently applied to that scope's monitor.
+  setMonitorStatus(id: string, scopeId: string, status: BrainMonitor['status']): BrainMonitor | null {
+    this.db.prepare('UPDATE monitors SET status = ?, updated_at = ? WHERE id = ? AND scope_id = ?').run(status, now(), id, scopeId)
+    return this.getMonitor(id, scopeId)
   }
 
-  deleteMonitor(id: string) {
-    const result = this.db.prepare('DELETE FROM monitors WHERE id = ?').run(id)
+  deleteMonitor(id: string, scopeId: string) {
+    const result = this.db.prepare('DELETE FROM monitors WHERE id = ? AND scope_id = ?').run(id, scopeId)
     if (Number(result.changes) === 0) return false
     this.db.prepare('DELETE FROM processing_cache WHERE cache_key LIKE ?').run(`${MONITOR_OBSERVATION_PREFIX}${id}:%`)
     return true

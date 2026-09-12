@@ -10,6 +10,7 @@ import type { BrainContextPack, BrainScope } from '../src/types/brain'
 import { configureBrainTools } from './agent/brainTools'
 import { brainModePolicy, normalizeAgentBrainMode } from './agent/brainMode'
 import { buildContinuationPrompt, planContinuationTurns } from './agent/continuations'
+import { withAgentAbortSlot } from './agent/agentRunAbortSlot'
 
 // Initializes Crashpad so Windows dev runs are less likely to log "not connected" (harmless Chromium noise otherwise).
 crashReporter.start({ productName: 'FlowDesk', uploadToServer: false })
@@ -435,7 +436,7 @@ ipcMain.handle('brain:importBackup', async () => {
 ipcMain.handle('brain:createMonitor', (_e, input: unknown) => brainRequest('createMonitor', input))
 ipcMain.handle('brain:listMonitors', (_e, scopeId?: string) => brainRequest('listMonitors', { scopeId }))
 ipcMain.handle('brain:setMonitorStatus', (_e, input: unknown) => brainRequest('setMonitorStatus', input))
-ipcMain.handle('brain:deleteMonitor', (_e, id: string) => brainRequest('deleteMonitor', { id }))
+ipcMain.handle('brain:deleteMonitor', (_e, input: unknown) => brainRequest('deleteMonitor', input))
 ipcMain.handle('brain:listEntities', (_e, scopeId: string) => brainRequest('listEntities', { scopeId }))
 ipcMain.handle('brain:getGraph', (_e, scopeId: string) => brainRequest('getGraph', { scopeId }))
 ipcMain.handle('brain:runSocialRecipe', async (_e, input: unknown) => {
@@ -1569,13 +1570,6 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
   currentAgentAbort?.abort()
   denyAllPendingApprovals()
   const abortController = new AbortController()
-  currentAgentAbort = abortController
-
-  // A fresh run starts an empty event log: replay is for reconnecting to
-  // THIS run, and carrying the previous run's events over would make the
-  // renderer replay a conversation it has already rendered.
-  const startedAt = new Date().toISOString()
-  setAgentRunState({ runId, sessionId, status: 'running', startedAt, updatedAt: startedAt, events: [] })
 
   // browserWorkerQueue's heartbeat (see its own comment) is the only signal
   // the renderer gets while a slow provider is mid-wait — the SDK's own
@@ -1585,6 +1579,37 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
     publishAgentEvent(runId, sessionId, { type: 'tool_progress', toolUseId: data.tool, tool: data.tool, elapsedSeconds: data.elapsedSeconds })
   }
   workerProgress.on('progress', onWorkerProgress)
+
+  // Everything from here on runs with the abort slot held, including the
+  // transcript write and the session-meta read. Those are filesystem calls that
+  // can throw (full disk, EPERM, a corrupt meta JSON); before this guard they
+  // sat outside the try that empties the slot, so one of them left the slot
+  // filled — wedging every monitor continuation — and the run stuck at
+  // 'running' with no error event and no finishAgentRun.
+  return withAgentAbortSlot(abortController, {
+    claim: controller => { currentAgentAbort = controller },
+    release: controller => { if (currentAgentAbort === controller) currentAgentAbort = null },
+    onError: error => {
+      // Reported through the same numbered channel the renderer replays, so a
+      // failure is visible after a reload rather than looking like a hang.
+      publishAgentEvent(runId, sessionId, {
+        type: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      })
+      finishAgentRun(abortController.signal.aborted ? 'cancelled' : 'failed')
+    },
+    onSettle: () => {
+      activeBrainScopeId = null
+      activeBrainWritesAllowed = false
+      workerProgress.off('progress', onWorkerProgress)
+      denyAllPendingApprovals()
+    },
+  }, async () => {
+  // A fresh run starts an empty event log: replay is for reconnecting to
+  // THIS run, and carrying the previous run's events over would make the
+  // renderer replay a conversation it has already rendered.
+  const startedAt = new Date().toISOString()
+  setAgentRunState({ runId, sessionId, status: 'running', startedAt, updatedAt: startedAt, events: [] })
 
   const configuredSettings = (store.get('settings') as Partial<AppSettings>) || {}
   const leadAgentProvider: AppSettings['leadAgentProvider'] =
@@ -1674,76 +1699,60 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
   let providerSessionId: string | null = null
   let finalText = ''
   const pendingToolCalls = new Map<string, agentSessions.AgentToolCallEntry>()
-  try {
-    for await (const event of runAgentTurn(
-      promptToSend, abortController, projectRuntime, leadAgentProvider,
-      requestApproval, bypassPermissions, { resumeSessionId },
-    )) {
-      if (event.type === 'provider_session') providerSessionId = event.id
-      if (event.type === 'done') finalText = event.text
-      if (event.type === 'tool_call') {
-        pendingToolCalls.set(event.toolUseId, { tool: event.tool, prompt: event.prompt, result: '', isError: false })
-      }
-      if (event.type === 'tool_result') {
-        const existing = pendingToolCalls.get(event.toolUseId)
-        if (existing) {
-          existing.result = event.text
-          existing.isError = event.isError
-        }
-      }
-      publishAgentEvent(runId, sessionId, event)
+  for await (const event of runAgentTurn(
+    promptToSend, abortController, projectRuntime, leadAgentProvider,
+    requestApproval, bypassPermissions, { resumeSessionId },
+  )) {
+    if (event.type === 'provider_session') providerSessionId = event.id
+    if (event.type === 'done') finalText = event.text
+    if (event.type === 'tool_call') {
+      pendingToolCalls.set(event.toolUseId, { tool: event.tool, prompt: event.prompt, result: '', isError: false })
     }
-    const assistantTurn = await agentSessions.appendTurn(sessionId, {
-      role: 'assistant',
-      content: finalText,
-      // Recorded so a reopened session shows what the agent actually did,
-      // not just its final sentence — the data model promises these.
-      toolCalls: [...pendingToolCalls.values()],
-      ...(providerKey ? { provider: providerKey } : {}),
-    })
-    if (sessionBrainScope) {
-      await brainRequest('recordConversationTurn', {
-        turnId: assistantTurn.id,
-        sessionId,
-        scopeId: sessionBrainScope.id,
-        role: 'assistant',
-        sourceRef: `agent-session://${sessionId}/${assistantTurn.id}`,
-        contentHash: createHash('sha256').update(assistantTurn.content).digest('hex'),
-        characterCount: assistantTurn.content.length,
-        createdAt: assistantTurn.createdAt,
-      }).catch(error => console.log(`[FlowDesk brain] turn reference unavailable: ${error instanceof Error ? error.message : String(error)}`))
-    }
-    // Advanced only after the turn completed: an aborted run must not mark
-    // a provider as caught up on turns it never actually received.
-    if (providerKey && providerSessionId) {
-      const meta = await agentSessions.readMeta(sessionId)
-      if (meta) {
-        await agentSessions.writeMeta({
-          ...meta,
-          providers: {
-            ...meta.providers,
-            [providerKey]: { id: providerSessionId, syncedThroughTurn: meta.turnCount },
-          },
-        })
+    if (event.type === 'tool_result') {
+      const existing = pendingToolCalls.get(event.toolUseId)
+      if (existing) {
+        existing.result = event.text
+        existing.isError = event.isError
       }
     }
-    finishAgentRun(abortController.signal.aborted ? 'cancelled' : 'completed')
-  } catch (error) {
-    // Reported through the same numbered channel the renderer replays, so a
-    // failure is visible after a reload rather than looking like a hang.
-    publishAgentEvent(runId, sessionId, {
-      type: 'error',
-      message: error instanceof Error ? error.message : String(error),
-    })
-    finishAgentRun(abortController.signal.aborted ? 'cancelled' : 'failed')
-  } finally {
-    activeBrainScopeId = null
-    activeBrainWritesAllowed = false
-    workerProgress.off('progress', onWorkerProgress)
-    if (currentAgentAbort === abortController) currentAgentAbort = null
-    denyAllPendingApprovals()
+    publishAgentEvent(runId, sessionId, event)
   }
-  return true
+  const assistantTurn = await agentSessions.appendTurn(sessionId, {
+    role: 'assistant',
+    content: finalText,
+    // Recorded so a reopened session shows what the agent actually did,
+    // not just its final sentence — the data model promises these.
+    toolCalls: [...pendingToolCalls.values()],
+    ...(providerKey ? { provider: providerKey } : {}),
+  })
+  if (sessionBrainScope) {
+    await brainRequest('recordConversationTurn', {
+      turnId: assistantTurn.id,
+      sessionId,
+      scopeId: sessionBrainScope.id,
+      role: 'assistant',
+      sourceRef: `agent-session://${sessionId}/${assistantTurn.id}`,
+      contentHash: createHash('sha256').update(assistantTurn.content).digest('hex'),
+      characterCount: assistantTurn.content.length,
+      createdAt: assistantTurn.createdAt,
+    }).catch(error => console.log(`[FlowDesk brain] turn reference unavailable: ${error instanceof Error ? error.message : String(error)}`))
+  }
+  // Advanced only after the turn completed: an aborted run must not mark
+  // a provider as caught up on turns it never actually received.
+  if (providerKey && providerSessionId) {
+    const meta = await agentSessions.readMeta(sessionId)
+    if (meta) {
+      await agentSessions.writeMeta({
+        ...meta,
+        providers: {
+          ...meta.providers,
+          [providerKey]: { id: providerSessionId, syncedThroughTurn: meta.turnCount },
+        },
+      })
+    }
+  }
+  finishAgentRun(abortController.signal.aborted ? 'cancelled' : 'completed')
+  })
 }
 
 ipcMain.handle('agent:sendMessage', async (_e, input: { prompt?: unknown; sessionId?: unknown; runId?: unknown } | string) => runAgentMessage(input))

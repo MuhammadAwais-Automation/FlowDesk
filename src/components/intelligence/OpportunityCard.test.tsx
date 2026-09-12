@@ -44,6 +44,36 @@ describe('OpportunityCard', () => {
 })
 
 /**
+ * Retention purges raw captures after their window, and the sweep marks the
+ * evidence rows that pointed at them `stale` — the source they cite no longer
+ * exists. The Agent surface already routes stale evidence to counter-signals;
+ * the human review queue used to render it as a live, openable citation and
+ * count it in the evidence total, so a fully-purged opportunity looked fully
+ * cited in exactly the screen where a user decides to act on it.
+ */
+describe('OpportunityCard stale evidence', () => {
+  const stale: OpportunityEvidence = { ...evidence[0], evidenceId: 'evidence-stale', excerpt: 'Hiring a React contractor.', sourceRef: 'https://example.test/post/2', stale: true }
+
+  it('marks a stale citation, refuses to link it and counts only live citations', () => {
+    render(<OpportunityCard opportunity={opportunity} scope={scope} evidence={[evidence[0], stale]} onQualify={vi.fn()} onDismiss={vi.fn()} />)
+
+    // The expired source is not something to click through to.
+    expect(screen.getAllByRole('link')).toHaveLength(1)
+    expect(screen.getByRole('link', { name: 'Open LinkedIn evidence' }).getAttribute('href')).toBe('https://example.test/post/1')
+    expect(screen.getByText('Source expired')).toBeTruthy()
+    expect(screen.getByText(stale.excerpt).className).toContain('line-through')
+    // The count no longer advertises citations that cannot be read.
+    expect(screen.getByText('1 of 2 citations still available')).toBeTruthy()
+  })
+
+  it('keeps the plain evidence count when nothing has been purged', () => {
+    render(<OpportunityCard opportunity={opportunity} scope={scope} evidence={evidence} onQualify={vi.fn()} onDismiss={vi.fn()} />)
+    expect(screen.getByText('2 evidence items')).toBeTruthy()
+    expect(screen.queryByText('Source expired')).toBeNull()
+  })
+})
+
+/**
  * `sourceRef` is copied verbatim off captured social content — a LinkedIn post
  * body, a WhatsApp message — so it is a string a stranger wrote. This renderer
  * holds `window.electronAPI`, i.e. Brain writes, consent grants and backup

@@ -130,21 +130,34 @@ export class BrainService {
       case 'exportBackup': return BrainBackupManager.exportArchive(this.database, this.vault.root, request.payload.outputPath)
       case 'importBackup': {
         const brainRoot = dirname(this.vault.root)
-        const backupDir = join(brainRoot, 'backups')
-        mkdirSync(backupDir, { recursive: true })
-        BrainBackupManager.exportArchive(this.database, this.vault.root, join(backupDir, `pre-import-${Date.now()}.flowdesk-brain.zip`))
-        this.vault.stop()
-        this.database.checkpoint()
-        this.database.close()
-        const restored = BrainBackupManager.restoreAtomic(request.payload.inputPath, brainRoot)
-        setTimeout(() => process.exit(0), 50)
-        return restored
+        // Validated first, with this utility's own database still open and
+        // serving: every rejection an archive can earn (unsafe entry, missing
+        // or incompatible manifest, a database that fails its health probe)
+        // happens here. Closing first and validating afterwards left a rejected
+        // import with a live process holding a closed database — no restart,
+        // and every later Brain call failing with nothing to explain it.
+        const staged = BrainBackupManager.stageArchive(request.payload.inputPath, brainRoot)
+        try {
+          const backupDir = join(brainRoot, 'backups')
+          mkdirSync(backupDir, { recursive: true })
+          BrainBackupManager.exportArchive(this.database, this.vault.root, join(backupDir, `pre-import-${Date.now()}.flowdesk-brain.zip`))
+          this.vault.stop()
+          this.database.checkpoint()
+          this.database.close()
+          const restored = { manifest: staged.manifest, ...BrainBackupManager.commitStaged(staged.staging, brainRoot) }
+          // The database is closed and replaced, so this process cannot serve
+          // anything more; the supervisor restarts it onto the restored file.
+          setTimeout(() => process.exit(0), 50)
+          return restored
+        } finally {
+          rmSync(staged.staging, { recursive: true, force: true })
+        }
       }
       case 'recordConversationTurn': return this.database.recordConversationTurn(request.payload)
       case 'createMonitor': return this.database.createMonitor(request.payload)
       case 'listMonitors': return this.database.listMonitors(request.payload.scopeId)
-      case 'setMonitorStatus': return this.database.setMonitorStatus(request.payload.id, request.payload.status)
-      case 'deleteMonitor': return this.database.deleteMonitor(request.payload.id)
+      case 'setMonitorStatus': return this.database.setMonitorStatus(request.payload.id, request.payload.scopeId, request.payload.status)
+      case 'deleteMonitor': return this.database.deleteMonitor(request.payload.id, request.payload.scopeId)
       case 'listQueuedContinuations': return this.database.listQueuedContinuations()
       case 'consumeContinuation': return this.database.consumeContinuation(request.payload.id)
       case 'listEntities': return this.database.listEntities(request.payload.scopeId)

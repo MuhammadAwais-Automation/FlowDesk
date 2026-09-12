@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MONITORABLE_RECIPE_CONTROLS, MONITORABLE_RECIPE_IDS } from '@/lib/brainUi'
 import type { BrainDecisionBrief, BrainOpportunity, BrainScope, OpportunityEvidence } from '@/types/brain'
 
 const scope: BrainScope = { id: 'client-a', type: 'client', externalRef: 'client-a', name: 'Acme', parentId: null, createdAt: '2026-09-05T00:00:00.000Z' }
@@ -169,6 +170,55 @@ describe('Intelligence consent handling', () => {
 })
 
 
+/**
+ * Every recipe a monitor may schedule must be grantable from the UI.
+ *
+ * A monitor on a recipe the user cannot consent to is claimed every window and
+ * silently skipped by `scheduler.runMonitor`, while its "Last run" keeps
+ * advancing — a dead feature that looks healthy. The consent-granting path is
+ * the Sources card, so every monitorable recipe needs a control there.
+ */
+describe('Intelligence consent reachability', () => {
+  it.each(MONITORABLE_RECIPE_IDS)('reaches a consent grant for %s from the Sources card', async recipeId => {
+    api.brainRunSocialRecipe.mockResolvedValue({ requiresConsent: true, provider: 'local-brain', fields: ['excerpt'], retentionDays: 30, destinationScopeId: scope.id })
+    api.brainGrantConsent.mockResolvedValue(true)
+
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sources' }))
+    fireEvent.click(await screen.findByRole('button', { name: MONITORABLE_RECIPE_CONTROLS[recipeId].actionLabel }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Grant consent & run once' }))
+
+    await waitFor(() => expect(api.brainGrantConsent).toHaveBeenCalledWith({
+      scopeId: scope.id, recipeId, provider: 'local-brain', fields: ['excerpt'],
+    }))
+    // The grant is followed by the capture it was gating, for this same recipe.
+    await waitFor(() => expect(api.brainRunSocialRecipe).toHaveBeenCalledTimes(2))
+    expect(api.brainRunSocialRecipe.mock.calls.every(call => (call[0] as { recipeId: string }).recipeId === recipeId)).toBe(true)
+  })
+
+  it('shows the per-recipe consent state LinkedIn needs for both of its recipes', async () => {
+    api.brainGetConsent.mockImplementation(async ({ recipeId }: { recipeId: string }) => recipeId !== 'linkedin.community_scan')
+
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sources' }))
+
+    const linkedin = (await screen.findByRole('heading', { name: 'LinkedIn' })).closest('section') as HTMLElement
+    await waitFor(() => expect(linkedin.textContent).toContain('linkedin.community_scan: Consent required'))
+    expect(linkedin.textContent).toContain('linkedin.opportunity_scan: Consent granted')
+  })
+
+  it('tells a monitor author when the selected recipe still needs consent', async () => {
+    api.brainGetConsent.mockImplementation(async ({ recipeId }: { recipeId: string }) => recipeId !== 'linkedin.community_scan')
+    api.brainListMonitors.mockResolvedValue([])
+
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Monitors' }))
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Monitor recipe' }), { target: { value: 'linkedin.community_scan' } })
+
+    await waitFor(() => expect(screen.getByText(/Grant it on the Sources tab/)).toBeTruthy())
+  })
+})
+
 describe('Intelligence Trends window', () => {
   const series = [
     { id: 'rise-late', scopeId: scope.id, platform: 'linkedin', metric: 'support momentum', value: 30, percentile: 0.9, observedAt: '2026-09-06T00:00:00.000Z' },
@@ -278,11 +328,13 @@ describe('Intelligence monitors', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Monitors' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
-    await waitFor(() => expect(api.brainSetMonitorStatus).toHaveBeenCalledWith({ id: 'monitor-1', status: 'paused' }))
+    // Scoped: monitor mutation carries the scope it was read from, so a stale
+    // id can never reach another scope's monitor.
+    await waitFor(() => expect(api.brainSetMonitorStatus).toHaveBeenCalledWith({ id: 'monitor-1', scopeId: scope.id, status: 'paused' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     expect(api.brainDeleteMonitor).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
-    await waitFor(() => expect(api.brainDeleteMonitor).toHaveBeenCalledWith('monitor-1'))
+    await waitFor(() => expect(api.brainDeleteMonitor).toHaveBeenCalledWith({ id: 'monitor-1', scopeId: scope.id }))
   })
 })

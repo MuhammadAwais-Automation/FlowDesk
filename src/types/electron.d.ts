@@ -206,8 +206,8 @@ export interface ElectronAPI {
   brainImportBackup: () => Promise<{ manifest: Record<string, unknown>; rollbackDatabase: string } | null>
   brainCreateMonitor: (input: { scopeId: string; recipeId: string; intervalMinutes: number; minimumScore?: number }) => Promise<BrainMonitor>
   brainListMonitors: (scopeId?: string) => Promise<BrainMonitor[]>
-  brainSetMonitorStatus: (input: { id: string; status: 'active' | 'paused' }) => Promise<BrainMonitor | null>
-  brainDeleteMonitor: (id: string) => Promise<boolean>
+  brainSetMonitorStatus: (input: { id: string; scopeId: string; status: 'active' | 'paused' }) => Promise<BrainMonitor | null>
+  brainDeleteMonitor: (input: { id: string; scopeId: string }) => Promise<boolean>
   brainListEntities: (scopeId: string) => Promise<Array<{ id: string; scopeId: string; type: string; name: string; properties: Record<string, unknown>; createdAt: string; updatedAt: string }>>
   brainGetGraph: (scopeId: string) => Promise<{ nodes: Array<{ id: string; type: string; name: string }>; edges: Array<{ id: string; from: string; to: string; relation: string; confidence: number; sourceRef: string }> }>
   brainRunSocialRecipe: (input: unknown) => Promise<unknown>

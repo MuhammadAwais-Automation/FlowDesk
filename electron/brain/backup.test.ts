@@ -5,7 +5,7 @@ import { zipSync, strToU8 } from 'fflate'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ArtifactStore } from './artifactStore'
 import { BrainDatabase } from './database'
-import { BrainBackupManager } from './backup'
+import { ARCHIVE_FORMAT_VERSION, BrainBackupManager } from './backup'
 import { VaultManager } from './vault'
 
 const roots: string[] = []
@@ -74,7 +74,7 @@ describe('Brain portable backup', () => {
     roots.push(fresh)
     const freshBrainRoot = join(fresh, 'brain')
     const { manifest } = BrainBackupManager.restoreAtomic(archive, freshBrainRoot)
-    expect(manifest).toMatchObject({ format: 'flowdesk-brain-backup', version: 1, schemaVersion: 1 })
+    expect(manifest).toMatchObject({ format: 'flowdesk-brain-backup', archiveFormatVersion: ARCHIVE_FORMAT_VERSION, databaseSchemaVersion: 2 })
 
     const restored = new BrainDatabase(join(freshBrainRoot, 'brain.sqlite'))
     expect(restored.listScopes().map(scope => scope.externalRef).sort()).toEqual(['acme', 'acme-site'])
@@ -141,7 +141,7 @@ describe('Brain portable backup', () => {
     roots.push(root)
     const archive = join(root, 'unsafe.zip')
     writeFileSync(archive, zipSync({
-      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', version: 1, schemaVersion: 1, createdAt: new Date().toISOString() })),
+      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 1, databaseSchemaVersion: 2, createdAt: new Date().toISOString() })),
       'brain.sqlite': strToU8('not-a-database'),
       ...extra,
     }))
@@ -150,14 +150,86 @@ describe('Brain portable backup', () => {
     expect(existsSync(join(root, 'restore'))).toBe(false)
   })
 
-  it('rejects an incompatible schema version instead of replacing live data', () => {
-    const root = mkdtempSync(join(tmpdir(), 'flowdesk-backup-schema-'))
+  /**
+   * The manifest names the ARCHIVE format, not the SQLite schema. They were both
+   * called `schemaVersion` and diverged (archive 1, database 2), so an operator
+   * reading `manifest.json` saw "1" on an archive holding a v2 database — and
+   * the natural "fix" of bumping the manifest field to match a future database
+   * version would, under the old exact-equality check, have rejected every
+   * archive ever exported.
+   */
+  it('names the archive format and the database schema separately', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-backup-versions-'))
+    roots.push(root)
+    const database = new BrainDatabase(join(root, 'brain.sqlite'))
+    const vault = new VaultManager(database, join(root, 'vault'))
+    const archive = join(root, 'versions.flowdesk-brain.zip')
+    BrainBackupManager.exportArchive(database, vault.root, archive)
+    const { manifest } = BrainBackupManager.inspectArchive(archive)
+    expect(manifest).toMatchObject({ format: 'flowdesk-brain-backup', archiveFormatVersion: ARCHIVE_FORMAT_VERSION })
+    // Sourced from the real SQLite schema version, not a hand-kept literal.
+    expect(manifest.databaseSchemaVersion).toBe(database.getStatus().schemaVersion)
+    expect(manifest).not.toHaveProperty('schemaVersion')
+    database.close()
+  })
+
+  it('rejects a newer archive format with a message naming the actual version', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-backup-newer-'))
     roots.push(root)
     const archive = join(root, 'future.zip')
     writeFileSync(archive, zipSync({
-      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', version: 1, schemaVersion: 99, createdAt: new Date().toISOString() })),
+      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 99, databaseSchemaVersion: 2, createdAt: new Date().toISOString() })),
       'brain.sqlite': strToU8('not-a-database'),
     }))
-    expect(() => BrainBackupManager.inspectArchive(archive)).toThrow(/format or schema is incompatible/i)
+    expect(() => BrainBackupManager.inspectArchive(archive)).toThrow(/archive format version 99/i)
+  })
+
+  it('rejects an archive whose database schema is newer than this build understands', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-backup-db-newer-'))
+    roots.push(root)
+    const archive = join(root, 'future-db.zip')
+    writeFileSync(archive, zipSync({
+      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 1, databaseSchemaVersion: 99, createdAt: new Date().toISOString() })),
+      'brain.sqlite': strToU8('not-a-database'),
+    }))
+    expect(() => BrainBackupManager.inspectArchive(archive)).toThrow(/database schema version 99/i)
+  })
+
+  /**
+   * An older database schema restores fine — the migration runs on open — so an
+   * older archive must never be turned away by a version comparison.
+   */
+  it('accepts an archive carrying an older database schema', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-backup-older-'))
+    roots.push(root)
+    const archive = join(root, 'older.zip')
+    writeFileSync(archive, zipSync({
+      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 1, databaseSchemaVersion: 1, createdAt: new Date().toISOString() })),
+      'brain.sqlite': strToU8('not-a-database'),
+    }))
+    expect(BrainBackupManager.inspectArchive(archive).manifest.databaseSchemaVersion).toBe(1)
+  })
+
+  /** Archives exported before the rename still carry `version`/`schemaVersion`. */
+  it('still reads a pre-rename archive manifest', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-backup-legacy-'))
+    roots.push(root)
+    const archive = join(root, 'legacy.zip')
+    writeFileSync(archive, zipSync({
+      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', version: 1, schemaVersion: 1, createdAt: new Date().toISOString() })),
+      'brain.sqlite': strToU8('not-a-database'),
+    }))
+    expect(BrainBackupManager.inspectArchive(archive).manifest.archiveFormatVersion).toBe(1)
+  })
+
+  it('rejects an archive that is not a FlowDesk Brain backup at all', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-backup-format-'))
+    roots.push(root)
+    const archive = join(root, 'alien.zip')
+    writeFileSync(archive, zipSync({
+      'manifest.json': strToU8(JSON.stringify({ format: 'some-other-tool', archiveFormatVersion: 1, createdAt: new Date().toISOString() })),
+      'brain.sqlite': strToU8('not-a-database'),
+    }))
+    expect(() => BrainBackupManager.inspectArchive(archive)).toThrow(/not a FlowDesk Brain backup/i)
   })
 })

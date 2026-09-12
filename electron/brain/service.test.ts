@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { strToU8, zipSync } from 'fflate'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BrainService } from './service'
 
@@ -94,6 +95,85 @@ describe('BrainService', () => {
       expect(service.database.getMemory(memory.id)?.text).toBe('Private A')
       expect(service.handle({ id: '3', method: 'listVaultConflicts', payload: { scopeId: a.id } })).toHaveLength(1)
       expect(service.handle({ id: '4', method: 'resolveVaultConflict', payload: { id, scopeId: a.id, resolution: 'file' } })).toMatchObject({ text: 'Changed A' })
+    } finally { service.close() }
+  })
+
+  /**
+   * Monitor mutation is the one v2 entity that took an id with no scope, so the
+   * isolation invariant every opportunity API enforces at the repository
+   * boundary stopped short of it. Ids are hard to discover today, but the next
+   * caller — an Agent tool, a bulk action, a deep link — would inherit nothing.
+   */
+  it('refuses to mutate a monitor through the wrong scope', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-monitor-scope-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain.sqlite'))
+    try {
+      const mine = service.database.ensureScope({ type: 'client', externalRef: 'mine', name: 'Mine' })
+      const theirs = service.database.ensureScope({ type: 'client', externalRef: 'theirs', name: 'Theirs' })
+      const monitor = service.handle({ id: '1', method: 'createMonitor', payload: { scopeId: mine.id, recipeId: 'linkedin.opportunity_scan', intervalMinutes: 60, minimumScore: 70 } }) as { id: string }
+
+      expect(service.handle({ id: '2', method: 'setMonitorStatus', payload: { id: monitor.id, scopeId: theirs.id, status: 'paused' } })).toBeNull()
+      expect(service.database.getMonitor(monitor.id)?.status).toBe('active')
+      expect(service.handle({ id: '3', method: 'deleteMonitor', payload: { id: monitor.id, scopeId: theirs.id } })).toBe(false)
+      expect(service.database.getMonitor(monitor.id)).not.toBeNull()
+
+      // The owning scope still works, so the guard is a scope check and not a
+      // blanket refusal.
+      expect(service.handle({ id: '4', method: 'setMonitorStatus', payload: { id: monitor.id, scopeId: mine.id, status: 'paused' } })).toMatchObject({ status: 'paused' })
+      expect(service.handle({ id: '5', method: 'deleteMonitor', payload: { id: monitor.id, scopeId: mine.id } })).toBe(true)
+      expect(service.database.getMonitor(monitor.id)).toBeNull()
+
+      // Scope is required, not optional: an unscoped payload is refused.
+      expect(() => service.handle({ id: '6', method: 'deleteMonitor', payload: { id: monitor.id } })).toThrow()
+      expect(() => service.handle({ id: '7', method: 'setMonitorStatus', payload: { id: monitor.id, status: 'paused' } })).toThrow()
+    } finally { service.close() }
+  })
+
+  /**
+   * A rejected import must cost nothing. `importBackup` used to stop the vault
+   * and close the database before any archive validation ran, so a truncated,
+   * traversing or incompatible archive threw before the deliberate
+   * `process.exit` — leaving the utility alive, serving requests against a
+   * closed database, with no restart and no explanation.
+   */
+  it('rejects an invalid backup archive with the live database untouched', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-import-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain', 'brain.sqlite'))
+    try {
+      const scope = service.handle({ id: '1', method: 'ensureScope', payload: { type: 'client', externalRef: 'import', name: 'Import' } }) as { id: string }
+      service.handle({ id: '2', method: 'remember', payload: { scopeId: scope.id, kind: 'fact', text: 'Survives a refused import' } })
+
+      const archive = join(root, 'bad.flowdesk-brain.zip')
+      writeFileSync(archive, zipSync({
+        'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 1, databaseSchemaVersion: 1, createdAt: new Date().toISOString() })),
+        'brain.sqlite': strToU8('not-a-database'),
+        '../escape.md': strToU8('bad'),
+      }))
+      expect(() => service.handle({ id: '3', method: 'importBackup', payload: { inputPath: archive } })).toThrow(/unsafe backup entry/i)
+
+      // The proof the database was never closed: it still serves reads and writes.
+      expect(service.handle({ id: '4', method: 'listMemories', payload: { scopeId: scope.id } })).toHaveLength(1)
+      service.handle({ id: '5', method: 'remember', payload: { scopeId: scope.id, kind: 'fact', text: 'Still writable' } })
+      expect(service.handle({ id: '6', method: 'status', payload: {} })).toMatchObject({ ready: true })
+    } finally { service.close() }
+  })
+
+  it('rejects a backup whose database fails its health probe before closing the live one', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-import-probe-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain', 'brain.sqlite'))
+    try {
+      const scope = service.handle({ id: '1', method: 'ensureScope', payload: { type: 'client', externalRef: 'probe', name: 'Probe' } }) as { id: string }
+      const archive = join(root, 'corrupt.flowdesk-brain.zip')
+      writeFileSync(archive, zipSync({
+        'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 1, databaseSchemaVersion: 2, createdAt: new Date().toISOString() })),
+        'brain.sqlite': strToU8('this is not a SQLite file at all'),
+      }))
+      expect(() => service.handle({ id: '2', method: 'importBackup', payload: { inputPath: archive } })).toThrow()
+      expect(service.handle({ id: '3', method: 'status', payload: {} })).toMatchObject({ ready: true })
+      expect(service.handle({ id: '4', method: 'listMemories', payload: { scopeId: scope.id } })).toEqual([])
     } finally { service.close() }
   })
 

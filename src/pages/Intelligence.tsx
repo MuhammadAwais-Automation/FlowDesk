@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, BarChart3, Radar, Radio } from 'lucide-react'
 import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
 import { DecisionBrief } from '@/components/intelligence/DecisionBrief'
 import { OpportunityCard } from '@/components/intelligence/OpportunityCard'
-import { INTELLIGENCE_SOURCES, INTELLIGENCE_TABS, MONITORABLE_RECIPE_IDS } from '@/lib/brainUi'
+import { INTELLIGENCE_SOURCES, INTELLIGENCE_TABS, MONITORABLE_RECIPE_CONTROLS, MONITORABLE_RECIPE_IDS, type MonitorableRecipeId } from '@/lib/brainUi'
 import { summarizeTrends, TREND_WINDOW_DAYS, windowStart } from '@/lib/sourceTrends'
 import type { BrainDecisionBrief, BrainJob, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainScope, BrainSourceMetric, OpportunityEvidence } from '@/types/brain'
 
@@ -18,13 +18,22 @@ const sourceRecipes: Record<string, string[]> = {
 const consentChecks = Object.entries(sourceRecipes).flatMap(([sourceId, recipes]) => recipes.map(recipeId => ({ sourceId, recipeId })))
 
 type ConsentState = 'granted' | 'required' | 'unknown'
+/** Per-source aggregate plus the per-recipe states the aggregate is built from. */
+interface ConsentView { sources: Record<string, ConsentState>; recipes: Record<string, ConsentState> }
+const EMPTY_CONSENTS: ConsentView = { sources: {}, recipes: {} }
 
 /**
  * Only recipes the Brain job runner claims can be monitored; the utility process
  * re-checks this. NotebookLM recipes are absent on purpose: their Brain jobs are
  * mirrors of the NotebookLM queue, so a monitor on one would never run.
  */
-const monitorRecipes: readonly string[] = MONITORABLE_RECIPE_IDS
+const monitorRecipes: readonly MonitorableRecipeId[] = MONITORABLE_RECIPE_IDS
+
+/** The run/consent controls a source card renders, in declaration order. */
+const sourceControls: Record<string, Array<{ recipeId: MonitorableRecipeId; actionLabel: string }>> = MONITORABLE_RECIPE_IDS.reduce((map, recipeId) => {
+  const control = MONITORABLE_RECIPE_CONTROLS[recipeId]
+  return { ...map, [control.sourceId]: [...(map[control.sourceId] ?? []), { recipeId, actionLabel: control.actionLabel }] }
+}, {} as Record<string, Array<{ recipeId: MonitorableRecipeId; actionLabel: string }>>)
 const MONITOR_MINIMUM_INTERVAL_MINUTES = 15
 const MONITOR_DEFAULT_MINIMUM_SCORE = 70
 
@@ -44,7 +53,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
   const [metrics, setMetrics] = useState<BrainSourceMetric[]>([])
   const [jobs, setJobs] = useState<BrainJob[]>([])
   const [monitors, setMonitors] = useState<BrainMonitor[]>([])
-  const [consents, setConsents] = useState<Record<string, ConsentState>>({})
+  const [consents, setConsents] = useState<ConsentView>(EMPTY_CONSENTS)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -153,7 +162,11 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
     }
   }
 
-  async function runRecipe(recipeId: 'whatsapp.unread_intelligence' | 'linkedin.opportunity_scan') {
+  // Every recipe a monitor may schedule is runnable — and therefore consentable
+  // — from this page. Consent is granted only through a recipe's own run
+  // control, so a narrower type here would leave a monitorable recipe with no
+  // consent path at all: a monitor on it would be skipped forever.
+  async function runRecipe(recipeId: MonitorableRecipeId) {
     if (!scope || !active.current) return
     const request = ++captureRequest.current
     setPendingConsent(null)
@@ -190,7 +203,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
       setError('Consent was not granted, so the capture did not run.')
       return
     }
-    const recipeId = pendingConsent.recipeId as 'whatsapp.unread_intelligence' | 'linkedin.opportunity_scan'
+    const recipeId = pendingConsent.recipeId as MonitorableRecipeId
     setPendingConsent(null)
     await runRecipe(recipeId)
   }
@@ -213,7 +226,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
 
       {!loading && tab === 'Overview' && <div className="space-y-5"><Overview opportunities={opportunities} metrics={metrics} jobs={jobs} /><Sources jobs={jobs} consents={consents} onRun={recipe => void runRecipe(recipe)} /></div>}
       {!loading && tab === 'Sources' && <Sources jobs={jobs} consents={consents} onRun={recipe => void runRecipe(recipe)} />}
-      {!loading && tab === 'Monitors' && scope && <Monitors scope={scope} monitors={monitors} onChanged={() => void refresh(scope)} onError={setError} />}
+      {!loading && tab === 'Monitors' && scope && <Monitors scope={scope} monitors={monitors} consents={consents} onChanged={() => void refresh(scope)} onError={setError} />}
       {!loading && tab === 'Pain Points' && <section><h2 className="text-sm font-semibold">Pain clusters by repetition and severity</h2>{painPoints.length === 0 ? <Empty text="No repeated pain points have been captured for this scope." /> : <div className="mt-3 space-y-3">{painPoints.map(item => <article key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4"><div className="flex items-center justify-between gap-4"><h3 className="font-semibold">{item.title}</h3><span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800">{item.evidenceCount} repetitions</span></div><p className="mt-2 text-sm text-stone-600">{item.summary}</p><p className="mt-3 text-xs text-stone-500">Severity score {Math.round(item.score)} · {Math.round(item.confidence * 100)}% confidence</p></article>)}</div>}</section>}
       {!loading && tab === 'Trends' && <section><div className="flex flex-wrap items-baseline justify-between gap-2"><h2 className="text-sm font-semibold">Source-relative momentum</h2><span className="text-xs text-stone-500">Last {TREND_WINDOW_DAYS} days · ranked within each source</span></div>{trends.length === 0 ? <Empty text={`No source metrics were recorded in the last ${TREND_WINDOW_DAYS} days for this scope.`} /> : <div className="mt-3 grid gap-3 md:grid-cols-2">{trends.map(trend => <article key={trend.id} className="rounded-2xl border border-stone-200 bg-white p-4"><div className="flex items-center justify-between"><BarChart3 size={17} className="text-violet-700" /><span className="text-xs text-stone-500">{trend.platform}</span></div><h3 className="mt-3 font-semibold">{trend.metric}</h3><p className="mt-1 text-2xl font-bold tabular-nums">{Math.round(trend.momentum * 100)}% momentum</p><p className="mt-1 text-xs font-medium text-stone-600">{trend.delta > 0 ? `Rising ${Math.round(trend.delta * 100)} pts` : trend.delta < 0 ? `Falling ${Math.round(Math.abs(trend.delta) * 100)} pts` : 'Flat across the window'}</p><p className="mt-2 text-xs text-stone-500">Latest value {trend.value} · {trend.observations} observation{trend.observations === 1 ? '' : 's'} · {new Date(trend.observedAt).toLocaleDateString()}</p></article>)}</div>}</section>}
       {!loading && tab === 'Opportunities' && <section><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-semibold">Evidence review queue</h2><label className="text-xs text-stone-600">Status <select aria-label="Opportunity status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as BrainOpportunityStatus | 'all')} className="ml-2 rounded-lg border border-stone-300 bg-white px-3 py-2"><option value="all">All review states</option><option value="new">New</option><option value="reviewing">Reviewing</option><option value="qualified">Qualified</option></select></label></div>{filteredOpportunities.length === 0 ? <Empty text={`No ${statusFilter} opportunities in this scope.`} /> : <div className="mt-3 space-y-4">{filteredOpportunities.map(item => <OpportunityCard key={item.id} opportunity={item} scope={scope as BrainScope} evidence={evidence[item.id]} busy={reviewingId === item.id} onExpand={id => void loadEvidence(id)} onQualify={id => void reviewOpportunity(id, 'qualify')} onDismiss={id => void reviewOpportunity(id, 'dismiss')} />)}</div>}</section>}
@@ -228,9 +241,10 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
  * Every mutation re-reads through the page's own guarded refresh, so a scope
  * switch during a write can never leave another scope's monitors on screen.
  */
-function Monitors({ scope, monitors, onChanged, onError }: {
+function Monitors({ scope, monitors, consents, onChanged, onError }: {
   scope: BrainScope
   monitors: BrainMonitor[]
+  consents: ConsentView
   onChanged: () => void
   onError: (message: string) => void
 }) {
@@ -263,7 +277,7 @@ function Monitors({ scope, monitors, onChanged, onError }: {
         className="mt-4 grid gap-3 sm:grid-cols-4"
       >
         <label className="text-xs text-stone-600">Recipe
-          <select aria-label="Monitor recipe" value={recipeId} onChange={event => setRecipeId(event.target.value)} className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-2 py-2 text-sm">
+          <select aria-label="Monitor recipe" value={recipeId} onChange={event => setRecipeId(event.target.value as MonitorableRecipeId)} className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-2 py-2 text-sm">
             {monitorRecipes.map(item => <option key={item} value={item}>{item}</option>)}
           </select>
         </label>
@@ -276,6 +290,11 @@ function Monitors({ scope, monitors, onChanged, onError }: {
         <button disabled={busyId !== '' || intervalMinutes < MONITOR_MINIMUM_INTERVAL_MINUTES} className="self-end rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">Add monitor</button>
       </form>
       <p className="mt-2 text-xs text-stone-500">Minimum interval {MONITOR_MINIMUM_INTERVAL_MINUTES} minutes. Private sources still need consent before a monitor can capture anything.</p>
+      {/* A monitor whose recipe has no consent is claimed every window and then
+          skipped, while its "Last run" still advances — so the missing grant is
+          said here, before the monitor is created, and pointed at the one place
+          that can grant it. */}
+      {consents.recipes[recipeId] !== 'granted' && <p role="status" className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">{consentLabels[consents.recipes[recipeId] ?? 'unknown']} for {recipeId}. Grant it on the Sources tab with that recipe&apos;s own run control, or this monitor will be skipped every window.</p>}
     </section>
     {monitors.length === 0
       ? <Empty text="No monitors in this scope yet." />
@@ -294,12 +313,12 @@ function Monitors({ scope, monitors, onChanged, onError }: {
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             disabled={busyId === monitor.id}
-            onClick={() => void mutate(monitor.id, () => api.brainSetMonitorStatus({ id: monitor.id, status: monitor.status === 'active' ? 'paused' : 'active' }))}
+            onClick={() => void mutate(monitor.id, () => api.brainSetMonitorStatus({ id: monitor.id, scopeId: scope.id, status: monitor.status === 'active' ? 'paused' : 'active' }))}
             className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
           >{monitor.status === 'active' ? 'Pause' : 'Resume'}</button>
           {confirmingId === monitor.id
             ? <>
-              <button disabled={busyId === monitor.id} onClick={() => { setConfirmingId(''); void mutate(monitor.id, () => api.brainDeleteMonitor(monitor.id)) }} className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Confirm delete</button>
+              <button disabled={busyId === monitor.id} onClick={() => { setConfirmingId(''); void mutate(monitor.id, () => api.brainDeleteMonitor({ id: monitor.id, scopeId: scope.id })) }} className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Confirm delete</button>
               <button onClick={() => setConfirmingId('')} className="rounded-lg border border-stone-300 px-3 py-2 text-xs font-semibold text-stone-600">Keep monitor</button>
               <span className="text-xs text-red-700">Deleting also forgets what this monitor has already reported.</span>
             </>
@@ -318,7 +337,7 @@ function Monitors({ scope, monitors, onChanged, onError }: {
  * "Consent required" for a ledger we could not reach would be a guess, and
  * displaying "Consent granted" would be a dangerous one.
  */
-async function readConsents(scopeId: string): Promise<Record<string, ConsentState>> {
+async function readConsents(scopeId: string): Promise<ConsentView> {
   const api = window.electronAPI
   const results = await Promise.all(consentChecks.map(async check => {
     try {
@@ -327,12 +346,13 @@ async function readConsents(scopeId: string): Promise<Record<string, ConsentStat
       return { ...check, state: 'unknown' as const }
     }
   }))
-  return Object.fromEntries(Object.keys(sourceRecipes).map(sourceId => {
+  const sources = Object.fromEntries(Object.keys(sourceRecipes).map(sourceId => {
     const forSource = results.filter(result => result.sourceId === sourceId)
     if (!forSource.length) return [sourceId, 'required' as ConsentState]
     if (forSource.some(result => result.state === 'unknown')) return [sourceId, 'unknown' as ConsentState]
     return [sourceId, forSource.every(result => result.state === 'granted') ? 'granted' as ConsentState : 'required' as ConsentState]
   }))
+  return { sources, recipes: Object.fromEntries(results.map(result => [result.recipeId, result.state])) }
 }
 
 const consentLabels: Record<ConsentState, string> = {
@@ -355,12 +375,19 @@ function Overview({ opportunities, metrics, jobs }: { opportunities: BrainOpport
   return <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">{cards.map(([label, value]) => <section key={label} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm"><p className="text-xs text-stone-500">{label}</p><p className="mt-2 text-3xl font-bold">{value}</p></section>)}</div>
 }
 
-function Sources({ jobs, consents, onRun }: { jobs: BrainJob[]; consents: Record<string, ConsentState>; onRun: (recipe: 'whatsapp.unread_intelligence' | 'linkedin.opportunity_scan') => void }) {
+function Sources({ jobs, consents, onRun }: { jobs: BrainJob[]; consents: ConsentView; onRun: (recipe: MonitorableRecipeId) => void }) {
   return <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{INTELLIGENCE_SOURCES.map(source => {
     const sourceJobs = jobs.filter(job => sourceRecipes[source.id].includes(job.recipeId))
     const latest = [...sourceJobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
     const recordCount = typeof latest?.result?.recordCount === 'number' ? latest.result.recordCount : 0
     const sourceError = latest?.status === 'failed' && typeof latest.result?.error === 'string' ? latest.result.error : ''
-    return <section key={source.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm"><div className="flex items-center justify-between"><Radio size={18} className={source.status === 'available' ? 'text-emerald-600' : 'text-stone-400'} /><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${source.status === 'available' ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>{source.status === 'available' ? 'Available' : 'Not connected'}</span></div><h2 className="mt-4 font-semibold">{source.title}</h2><p className="mt-1 text-xs text-stone-500">{source.detail}</p>{source.status === 'available' && <dl className="mt-3 space-y-1 text-xs"><div className="flex justify-between gap-2"><dt className="text-stone-500">Consent</dt><dd>{consentLabels[consents[source.id] ?? 'unknown']}</dd></div><div className="flex justify-between gap-2"><dt className="text-stone-500">Last capture</dt><dd>{latest ? new Date(latest.updatedAt).toLocaleDateString() : 'Never'}</dd></div><div className="flex justify-between gap-2"><dt className="text-stone-500">Records</dt><dd>{recordCount} records</dd></div></dl>}{sourceError && <p className="mt-3 flex items-start gap-1 rounded-lg bg-red-50 p-2 text-xs text-red-700"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {sourceError}</p>}{source.id === 'whatsapp' && <button onClick={() => onRun('whatsapp.unread_intelligence')} className="mt-3 rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">Scan unread</button>}{source.id === 'linkedin' && <button onClick={() => onRun('linkedin.opportunity_scan')} className="mt-3 rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">Scan opportunities</button>}{source.id === 'reddit' && <p className="mt-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">Live capture excluded; fake data show nahi hogi.</p>}</section>
+    return <section key={source.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm"><div className="flex items-center justify-between"><Radio size={18} className={source.status === 'available' ? 'text-emerald-600' : 'text-stone-400'} /><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${source.status === 'available' ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>{source.status === 'available' ? 'Available' : 'Not connected'}</span></div><h2 className="mt-4 font-semibold">{source.title}</h2><p className="mt-1 text-xs text-stone-500">{source.detail}</p>{source.status === 'available' && <dl className="mt-3 space-y-1 text-xs"><div className="flex justify-between gap-2"><dt className="text-stone-500">Consent</dt><dd>{consentLabels[consents.sources[source.id] ?? 'unknown']}</dd></div><div className="flex justify-between gap-2"><dt className="text-stone-500">Last capture</dt><dd>{latest ? new Date(latest.updatedAt).toLocaleDateString() : 'Never'}</dd></div><div className="flex justify-between gap-2"><dt className="text-stone-500">Records</dt><dd>{recordCount} records</dd></div></dl>}{sourceError && <p className="mt-3 flex items-start gap-1 rounded-lg bg-red-50 p-2 text-xs text-red-700"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {sourceError}</p>}{(sourceControls[source.id] ?? []).map(control => <div key={control.recipeId} className="mt-3">
+      <button onClick={() => onRun(control.recipeId)} className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">{control.actionLabel}</button>
+      {/* Per recipe, not per source: consent is keyed on scope + recipe +
+          provider, so LinkedIn's two recipes each need their own state and
+          their own way to be granted. Running the recipe opens the consent
+          banner when the ledger has no grant yet. */}
+      <p className="mt-1 text-[11px] text-stone-500">{control.recipeId}: {consentLabels[consents.recipes[control.recipeId] ?? 'unknown']}</p>
+    </div>)}{source.id === 'reddit' &&<p className="mt-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">Live capture excluded; fake data show nahi hogi.</p>}</section>
   })}</div>
 }

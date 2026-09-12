@@ -11,8 +11,23 @@ export interface BrainUtilityChild extends EventEmitter {
 interface BrainClientOptions {
   requestTimeoutMs?: number
   restartDelaysMs?: number[]
+  /** How long a utility must run before its exit stops counting as a crash. */
+  healthyUptimeMs?: number
   capabilityHandler?: BrainCapabilityExecutor
 }
+
+/**
+ * A utility that served requests for this long before exiting was not in a
+ * crash loop, so its exit refunds the restart budget.
+ *
+ * The budget exists to stop a utility that dies on startup from being respawned
+ * forever. It must not be spent by an exit that was the point of the operation:
+ * `importBackup` deliberately exits the utility after a restore so it reopens
+ * the replaced database. Resetting on `spawn` instead would refund the budget
+ * before the new process had proven anything — every crash loop would then be
+ * infinite — so the refund is earned by uptime, not by being started.
+ */
+const DEFAULT_HEALTHY_UPTIME_MS = 60_000
 
 interface PendingRequest {
   resolve: (value: unknown) => void
@@ -26,6 +41,8 @@ export class BrainClient extends EventEmitter {
   private readonly requestTimeoutMs: number
   private readonly restartDelaysMs: number[]
   private restartAttempts = 0
+  private readonly healthyUptimeMs: number
+  private spawnedAt = 0
   private stopped = true
   private state: 'stopped' | 'starting' | 'ready' | 'restarting' | 'degraded' = 'stopped'
   private readonly capabilityHandler?: BrainCapabilityExecutor
@@ -34,6 +51,7 @@ export class BrainClient extends EventEmitter {
     super()
     this.requestTimeoutMs = options.requestTimeoutMs ?? 15_000
     this.restartDelaysMs = options.restartDelaysMs ?? [5_000, 30_000, 120_000]
+    this.healthyUptimeMs = options.healthyUptimeMs ?? DEFAULT_HEALTHY_UPTIME_MS
     this.capabilityHandler = options.capabilityHandler
   }
 
@@ -45,6 +63,7 @@ export class BrainClient extends EventEmitter {
 
   private spawn(state: 'starting' | 'restarting') {
     this.state = state
+    this.spawnedAt = Date.now()
     const child = this.launch()
     this.child = child
     child.on('message', message => { if (this.child === child) this.onMessage(message, child) })
@@ -98,6 +117,10 @@ export class BrainClient extends EventEmitter {
     }
     this.pending.clear()
     if (this.stopped) return
+    // A utility that ran healthily before exiting was not crash-looping, so it
+    // hands the budget back — an intentional restart (backup import) then costs
+    // nothing, while a process that keeps dying young never earns the refund.
+    if (Date.now() - this.spawnedAt >= this.healthyUptimeMs) this.restartAttempts = 0
     if (this.restartAttempts >= this.restartDelaysMs.length) {
       this.state = 'degraded'
       this.emit('status', this.getRuntimeStatus())

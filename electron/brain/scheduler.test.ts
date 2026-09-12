@@ -78,7 +78,7 @@ describe('MonitorScheduler clock', () => {
   it('enqueues nothing for a paused monitor', () => {
     const { database, scopeId } = createBrain()
     const monitor = database.createMonitor({ scopeId, recipeId: MONITORED_RECIPE, intervalMinutes: 15 })
-    database.setMonitorStatus(monitor.id, 'paused')
+    database.setMonitorStatus(monitor.id, scopeId, 'paused')
     const { scheduler, runs } = createScheduler(database)
     scheduler.start()
 
@@ -87,7 +87,7 @@ describe('MonitorScheduler clock', () => {
     expect(database.listJobs()).toHaveLength(0)
 
     // Resuming makes the overdue window run once on the next tick.
-    database.setMonitorStatus(monitor.id, 'active')
+    database.setMonitorStatus(monitor.id, scopeId, 'active')
     vi.advanceTimersByTime(MONITOR_TICK_INTERVAL_MS)
     expect(database.listJobs()).toHaveLength(1)
 
@@ -178,7 +178,7 @@ describe('Monitor model', () => {
     expect(monitor.minimumScore).toBe(MONITOR_DEFAULT_MINIMUM_SCORE)
     expect(MONITOR_DEFAULT_MINIMUM_SCORE).toBe(70)
     expect(database.listMonitors(scopeId)).toHaveLength(1)
-    expect(database.deleteMonitor(monitor.id)).toBe(true)
+    expect(database.deleteMonitor(monitor.id, scopeId)).toBe(true)
     expect(database.listMonitors(scopeId)).toHaveLength(0)
     database.close()
   })

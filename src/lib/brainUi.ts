@@ -16,6 +16,23 @@ export const MONITORABLE_RECIPE_IDS = [
   'linkedin.opportunity_scan',
 ] as const
 
+export type MonitorableRecipeId = (typeof MONITORABLE_RECIPE_IDS)[number]
+
+/**
+ * Where each monitorable recipe is run and consented from in the UI.
+ *
+ * Typed as a total `Record` over `MonitorableRecipeId` on purpose: consent is
+ * granted only through a recipe's own run control, so a monitorable recipe with
+ * no control here would be a monitor a user can create and never consent to —
+ * claimed every window, silently skipped, with its "Last run" still advancing.
+ * Adding an id above without adding its control fails typecheck.
+ */
+export const MONITORABLE_RECIPE_CONTROLS: Record<MonitorableRecipeId, { sourceId: string; actionLabel: string }> = {
+  'whatsapp.unread_intelligence': { sourceId: 'whatsapp', actionLabel: 'Scan unread' },
+  'linkedin.community_scan': { sourceId: 'linkedin', actionLabel: 'Scan community' },
+  'linkedin.opportunity_scan': { sourceId: 'linkedin', actionLabel: 'Scan opportunities' },
+}
+
 export const INTELLIGENCE_SOURCES = [
   { id: 'notebooklm', title: 'NotebookLM', status: 'available', liveCapture: true, detail: 'Durable research and artifacts' },
   { id: 'whatsapp', title: 'WhatsApp', status: 'available', liveCapture: true, detail: 'Consent-gated unread intelligence' },
