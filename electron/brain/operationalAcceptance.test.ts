@@ -296,10 +296,74 @@ describe('Brain operational acceptance: retention and deletion', () => {
     expect(brief.counterSignals.length).toBeGreaterThan(0)
     expect(brief.risks).toContain('Current evidence contains conflicting or stale signals.')
 
-    // A dismissal is durable: purge-driven review never resurrects it.
-    service.database.reviewOpportunity({ id: opportunity.id, scopeId: scope.id, decision: 'dismiss' })
-    service.runMaintenance()
-    expect(service.database.listOpportunities({ scopeId: scope.id })[0].status).toBe('dismissed')
+    // One sweep consumes every expired envelope, so a second sweep is a no-op.
+    // The durability of a dismissal is proven in the next test, where both
+    // opportunities are still backed by unexpired rows when the sweep runs.
+    expect(service.database.purgeExpiredCaptures()).toEqual([])
+  })
+
+  it('returns only open opportunities to review in a single sweep and leaves a dismissal alone', () => {
+    const root = profile('retention-guard')
+    const service = openService(root)
+    const scope = service.database.ensureScope({ type: 'client', externalRef: 'guard', name: 'Guard' })
+
+    /** One expired capture, its own source, its own evidence, its own opportunity. */
+    const seed = (marker: string, status: 'new' | 'qualified' | 'dismissed') => {
+      const capturedAt = '2020-01-01T00:00:00.000Z'
+      const rawPayloadRef = `artifact://job-${marker}/raw/${marker}.jsonl.gz`
+      expect(service.database.storeCaptureEnvelope({
+        envelopeVersion: 1, source: 'linkedin', captureType: 'scan', connectorId: 'flowdesk', connectorVersion: 'v1',
+        jobId: `job-${marker}`, stepId: `step-${marker}`, scopeId: scope.id, accountId: null,
+        externalId: `external-${marker}`, parentExternalId: null,
+        canonicalUrl: `https://guard.test/posts/${marker}`, observedAt: capturedAt, capturedAt,
+        cursor: null, contentHash: `hash-${marker}`, rawPayloadRef, schemaHint: null,
+      })).toBe(true)
+      const sourceId = service.database.findCaptureSource({
+        scopeId: scope.id, jobId: `job-${marker}`, platform: 'linkedin',
+        externalId: `external-${marker}`, canonicalUrl: `https://guard.test/posts/${marker}`,
+      })
+      expect(sourceId).toEqual(expect.any(String))
+      const opportunity = service.database.upsertOpportunity({
+        scopeId: scope.id, fingerprint: `fingerprint-${marker}`, category: 'direct_lead',
+        title: `direct lead signal for ${marker}`, summary: '1 cited signal across 1 platform.',
+        score: 80, confidence: 0.7, freshness: capturedAt,
+      })
+      service.database.recordOpportunityEvidence({
+        opportunityId: opportunity.id, scopeId: scope.id, evidenceId: `evidence-${marker}`, sourceId,
+        excerpt: `direct lead signal for ${marker}`, confidence: 0.8,
+        sourceRef: `https://guard.test/posts/${marker}`, platform: 'linkedin', observedAt: capturedAt,
+      })
+      if (status !== 'new') {
+        service.database.reviewOpportunity({ id: opportunity.id, scopeId: scope.id, decision: status === 'qualified' ? 'qualify' : 'dismiss' })
+      }
+      return opportunity.id
+    }
+
+    const openId = seed('open', 'new')
+    const qualifiedId = seed('qualified', 'qualified')
+    const dismissedId = seed('dismissed', 'dismissed')
+    const statusOf = (id: string) => service.database.listOpportunities({ scopeId: scope.id }).find(item => item.id === id)?.status
+    const staleOf = (id: string) => service.database.getOpportunityEvidence({ id, scopeId: scope.id })[0]
+    expect([statusOf(openId), statusOf(qualifiedId), statusOf(dismissedId)]).toEqual(['new', 'qualified', 'dismissed'])
+    expect([staleOf(openId).stale, staleOf(qualifiedId).stale, staleOf(dismissedId).stale]).toEqual([false, false, false])
+
+    // Exactly one sweep, and it really did process all three expired sources.
+    const purged = service.database.purgeExpiredCaptures()
+    expect(purged.sort()).toEqual([
+      'artifact://job-dismissed/raw/dismissed.jsonl.gz',
+      'artifact://job-open/raw/open.jsonl.gz',
+      'artifact://job-qualified/raw/qualified.jsonl.gz',
+    ])
+
+    // Every citation lost its source in that same pass — including the dismissed
+    // one. So the guard did run over the dismissed row and chose not to reopen it,
+    // rather than never having been reached at all.
+    for (const id of [openId, qualifiedId, dismissedId]) {
+      expect(staleOf(id)).toMatchObject({ stale: true, sourceId: null })
+    }
+    expect(statusOf(openId)).toBe('reviewing')
+    expect(statusOf(qualifiedId)).toBe('reviewing')
+    expect(statusOf(dismissedId)).toBe('dismissed')
   })
 
   it('keeps a restored backup free of the raw artifacts the purge is meant to delete', async () => {
