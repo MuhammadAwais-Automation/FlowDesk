@@ -71,6 +71,12 @@ export function useBrainScope() {
     const selected = scopes.find(item => item.id === scopeId)
     if (!selected) return
     setScope(selected)
+    // A stale error from a past failed storeSet (or the initial load) used to
+    // outlive every later successful scope switch — the red banner stayed
+    // mounted for the rest of the session even though scope switching kept
+    // working. Any attempted switch clears it optimistically; a genuine new
+    // failure below sets it again.
+    setError('')
     void window.electronAPI.storeSet(BRAIN_ACTIVE_SCOPE_KEY, selected.id)
       .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [scopes])

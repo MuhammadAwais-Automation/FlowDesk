@@ -420,7 +420,12 @@ export class BrainDatabase {
   }
 
   listOpportunities(input: { scopeId: string; status?: BrainOpportunityStatus; limit?: number }): BrainOpportunity[] {
-    const limit = Math.min(100, Math.max(1, Math.trunc(input.limit ?? 50)))
+    // 500, not 100: a single scan can legitimately produce hundreds of
+    // clustered signals, and this list had no pagination — anything past the
+    // old 100-row ceiling was invisible with no indication more existed.
+    // countOpportunities (below) lets the UI say so honestly if a scope ever
+    // does exceed this.
+    const limit = Math.min(500, Math.max(1, Math.trunc(input.limit ?? 50)))
     const rows = input.status
       ? this.db.prepare(`
         SELECT o.*, (SELECT count(*) FROM opportunity_evidence oe WHERE oe.opportunity_id = o.id) AS evidence_count
@@ -433,6 +438,14 @@ export class BrainDatabase {
         ORDER BY o.score DESC, o.updated_at DESC LIMIT ?
       `).all(input.scopeId, limit) as SqlRow[]
     return rows.map(mapOpportunity)
+  }
+
+  /** Total opportunities matching the same filter listOpportunities uses, so the UI can say "showing N of TOTAL" instead of silently truncating. */
+  countOpportunities(input: { scopeId: string; status?: BrainOpportunityStatus }): number {
+    const row = input.status
+      ? this.db.prepare('SELECT count(*) AS total FROM opportunities WHERE scope_id = ? AND status = ?').get(input.scopeId, input.status) as SqlRow
+      : this.db.prepare('SELECT count(*) AS total FROM opportunities WHERE scope_id = ?').get(input.scopeId) as SqlRow
+    return Number(row.total ?? 0)
   }
 
   getOpportunityByFingerprint(scopeId: string, fingerprint: string): BrainOpportunity | null {

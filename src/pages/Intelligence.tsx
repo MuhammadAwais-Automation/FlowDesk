@@ -49,6 +49,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
 }) {
   const api = window.electronAPI
   const [opportunities, setOpportunities] = useState<BrainOpportunity[]>([])
+  const [opportunityTotal, setOpportunityTotal] = useState(0)
   const [evidence, setEvidence] = useState<Record<string, OpportunityEvidence[]>>({})
   const [metrics, setMetrics] = useState<BrainSourceMetric[]>([])
   const [jobs, setJobs] = useState<BrainJob[]>([])
@@ -69,6 +70,20 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
   const loaded = useRef(false)
   const briefRequest = useRef(0)
 
+  // The "Job queued: ... completed" notice used to have no way to go away on
+  // its own: nothing cleared it after the job it named actually finished, so
+  // it sat at the top of the page through every tab switch (tabs are plain
+  // state on this same component) and only vanished when the whole page
+  // unmounted — leaving to Brain and back, never navigating within
+  // Intelligence itself. A capture is done long before ten seconds pass, so
+  // auto-clearing on a short timer removes the stale banner without needing
+  // to track the named job's live status.
+  useEffect(() => {
+    if (!notice) return
+    const timer = setTimeout(() => setNotice(''), 10_000)
+    return () => clearTimeout(timer)
+  }, [notice])
+
   const refresh = useCallback(async (activeScope: BrainScope) => {
     const request = ++refreshRequest.current
     // Only the first load for a scope blanks the page. Brain events fire while
@@ -82,9 +97,10 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
       // consent-ledger failure must degrade the consent line on the Sources
       // card, not empty the reviewer's opportunity queue, pain points and
       // trends — which would read as "this scope has no intelligence".
-      const [[nextOpportunities, nextMetrics, nextJobs, nextMonitors], nextConsents] = await Promise.all([
+      const [[nextOpportunities, nextOpportunityTotal, nextMetrics, nextJobs, nextMonitors], nextConsents] = await Promise.all([
         Promise.all([
-          api.brainListOpportunities({ scopeId: activeScope.id, limit: 100 }),
+          api.brainListOpportunities({ scopeId: activeScope.id, limit: 500 }),
+          api.brainCountOpportunities({ scopeId: activeScope.id }),
           api.brainListSourceMetrics({ scopeId: activeScope.id, since: windowStart(TREND_WINDOW_DAYS) }),
           api.brainListJobs(),
           api.brainListMonitors(activeScope.id),
@@ -93,6 +109,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
       ])
       if (!active.current || request !== refreshRequest.current) return
       setOpportunities(nextOpportunities)
+      setOpportunityTotal(nextOpportunityTotal)
       setMetrics(nextMetrics)
       setJobs(nextJobs.filter(job => job.scopeId === activeScope.id))
       // The utility process already scopes this read; the filter keeps a stale or
@@ -103,6 +120,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
     } catch (reason) {
       if (active.current && request === refreshRequest.current) {
         setOpportunities([])
+        setOpportunityTotal(0)
         setEvidence({})
         setMetrics([])
         setJobs([])
@@ -122,9 +140,17 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
     return () => { active.current = false; unsubscribe() }
   }, [refresh, scope])
 
-  /** Reads one opportunity's evidence when its rail is opened, once. */
+  /**
+   * Reads one opportunity's evidence when its rail is opened, and re-reads it
+   * if a later capture changed how much evidence exists. Caching forever on
+   * first open meant a background capture that added evidence to an
+   * already-open opportunity left the rail showing the old list while the
+   * collapsed card's own evidenceCount moved on without it.
+   */
   async function loadEvidence(id: string) {
-    if (!scope || !active.current || evidence[id]) return
+    if (!scope || !active.current) return
+    const current = opportunities.find(item => item.id === id)
+    if (evidence[id] && current && evidence[id].length === current.evidenceCount) return
     try {
       const items = await api.brainGetOpportunityEvidence({ id, scopeId: scope.id })
       if (active.current) setEvidence(current => ({ ...current, [id]: items }))
@@ -175,7 +201,14 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
       const response = await api.brainRunSocialRecipe({ recipeId, scopeId: scope.id, accountId: null, parameters: { limit: 50, retentionDays: 30, mode: 'background' } }) as { requiresConsent: boolean; provider?: string; fields?: string[]; retentionDays?: number; destinationScopeId?: string; job?: { id: string; status: string } }
       if (!active.current || request !== captureRequest.current) return
       if (response.requiresConsent) {
-        if (!response.provider || !response.fields || response.destinationScopeId !== scope.id) return
+        // A malformed or wrong-scope consent response used to just `return`
+        // here with the notice already cleared above — the user pressed the
+        // scan button and saw nothing at all, no error, no banner, as if
+        // the click had done nothing.
+        if (!response.provider || !response.fields || response.destinationScopeId !== scope.id) {
+          setError('Consent check returned an unusable response — the capture was refused rather than run.')
+          return
+        }
         setPendingConsent({ recipeId, provider: response.provider, fields: response.fields, retentionDays: response.retentionDays ?? 30, destinationScopeId: response.destinationScopeId })
         return
       }
@@ -220,7 +253,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
       <nav aria-label="Intelligence sections" className="mt-4 flex gap-2 overflow-x-auto pb-1">{INTELLIGENCE_TABS.map(item => <button key={item} onClick={() => setTab(item)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs ${tab === item ? 'bg-violet-700 text-white' : 'bg-stone-100 text-stone-600'}`}>{item}</button>)}</nav>
     </header>
     <main className="flex-1 overflow-y-auto p-6">
-      {(scopeError || error || notice) && <p role={scopeError || error ? 'alert' : 'status'} className={`mb-4 rounded-xl p-3 text-sm ${scopeError || error ? 'bg-red-50 text-red-700' : 'bg-violet-50 text-violet-700'}`}>{scopeError || error || notice}</p>}
+      {(scopeError || error || notice) && <p role={scopeError || error ? 'alert' : 'status'} className={`mb-4 flex items-center justify-between gap-3 rounded-xl p-3 text-sm ${scopeError || error ? 'bg-red-50 text-red-700' : 'bg-violet-50 text-violet-700'}`}><span>{scopeError || error || notice}</span>{notice && !scopeError && !error && <button aria-label="Dismiss" onClick={() => setNotice('')} className="shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold text-violet-700 hover:bg-violet-100">Dismiss</button>}</p>}
       {pendingConsent && <section className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 p-4"><h2 className="font-semibold text-amber-900">Private source consent required</h2><p className="mt-2 text-sm text-amber-800">Provider: {pendingConsent.provider} · Retention: {pendingConsent.retentionDays} days · Scope: {pendingConsent.destinationScopeId}</p><p className="mt-1 text-xs text-amber-700">Fields: {pendingConsent.fields.join(', ')}</p><button onClick={() => void grantAndRun()} className="mt-3 rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white">Grant consent & run once</button></section>}
       {loading && <p role="status" className="rounded-2xl border border-stone-200 bg-white p-5 text-sm text-stone-500">Loading intelligence for this scope…</p>}
 
@@ -229,7 +262,7 @@ function IntelligenceScopeView({ scopes, scope, selectScope, loading: scopeLoadi
       {!loading && tab === 'Monitors' && scope && <Monitors scope={scope} monitors={monitors} consents={consents} onChanged={() => void refresh(scope)} onError={setError} />}
       {!loading && tab === 'Pain Points' && <section><h2 className="text-sm font-semibold">Pain clusters by repetition and severity</h2>{painPoints.length === 0 ? <Empty text="No repeated pain points have been captured for this scope." /> : <div className="mt-3 space-y-3">{painPoints.map(item => <article key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4"><div className="flex items-center justify-between gap-4"><h3 className="font-semibold">{item.title}</h3><span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800">{item.evidenceCount} repetitions</span></div><p className="mt-2 text-sm text-stone-600">{item.summary}</p><p className="mt-3 text-xs text-stone-500">Severity score {Math.round(item.score)} · {Math.round(item.confidence * 100)}% confidence</p></article>)}</div>}</section>}
       {!loading && tab === 'Trends' && <section><div className="flex flex-wrap items-baseline justify-between gap-2"><h2 className="text-sm font-semibold">Source-relative momentum</h2><span className="text-xs text-stone-500">Last {TREND_WINDOW_DAYS} days · ranked within each source</span></div>{trends.length === 0 ? <Empty text={`No source metrics were recorded in the last ${TREND_WINDOW_DAYS} days for this scope.`} /> : <div className="mt-3 grid gap-3 md:grid-cols-2">{trends.map(trend => <article key={trend.id} className="rounded-2xl border border-stone-200 bg-white p-4"><div className="flex items-center justify-between"><BarChart3 size={17} className="text-violet-700" /><span className="text-xs text-stone-500">{trend.platform}</span></div><h3 className="mt-3 font-semibold">{trend.metric}</h3><p className="mt-1 text-2xl font-bold tabular-nums">{Math.round(trend.momentum * 100)}% momentum</p><p className="mt-1 text-xs font-medium text-stone-600">{trend.delta > 0 ? `Rising ${Math.round(trend.delta * 100)} pts` : trend.delta < 0 ? `Falling ${Math.round(Math.abs(trend.delta) * 100)} pts` : 'Flat across the window'}</p><p className="mt-2 text-xs text-stone-500">Latest value {trend.value} · {trend.observations} observation{trend.observations === 1 ? '' : 's'} · {new Date(trend.observedAt).toLocaleDateString()}</p></article>)}</div>}</section>}
-      {!loading && tab === 'Opportunities' && <section><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-semibold">Evidence review queue</h2><label className="text-xs text-stone-600">Status <select aria-label="Opportunity status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as BrainOpportunityStatus | 'all')} className="ml-2 rounded-lg border border-stone-300 bg-white px-3 py-2"><option value="all">All review states</option><option value="new">New</option><option value="reviewing">Reviewing</option><option value="qualified">Qualified</option></select></label></div>{filteredOpportunities.length === 0 ? <Empty text={`No ${statusFilter} opportunities in this scope.`} /> : <div className="mt-3 space-y-4">{filteredOpportunities.map(item => <OpportunityCard key={item.id} opportunity={item} scope={scope as BrainScope} evidence={evidence[item.id]} busy={reviewingId === item.id} onExpand={id => void loadEvidence(id)} onQualify={id => void reviewOpportunity(id, 'qualify')} onDismiss={id => void reviewOpportunity(id, 'dismiss')} />)}</div>}</section>}
+      {!loading && tab === 'Opportunities' && <section><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-semibold">Evidence review queue</h2><label className="text-xs text-stone-600">Status <select aria-label="Opportunity status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as BrainOpportunityStatus | 'all')} className="ml-2 rounded-lg border border-stone-300 bg-white px-3 py-2"><option value="all">All review states</option><option value="new">New</option><option value="reviewing">Reviewing</option><option value="qualified">Qualified</option></select></label></div>{opportunityTotal > opportunities.length && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">Showing the top {opportunities.length} of {opportunityTotal} opportunities by score. Qualify or dismiss some to bring the rest into view.</p>}{filteredOpportunities.length === 0 ? <Empty text={`No ${statusFilter} opportunities in this scope.`} /> : <div className="mt-3 space-y-4">{filteredOpportunities.map(item => <OpportunityCard key={item.id} opportunity={item} scope={scope as BrainScope} evidence={evidence[item.id]} busy={reviewingId === item.id} onExpand={id => void loadEvidence(id)} onQualify={id => void reviewOpportunity(id, 'qualify')} onDismiss={id => void reviewOpportunity(id, 'dismiss')} />)}</div>}</section>}
       {!loading && tab === 'Decision Briefs' && <section className="mx-auto max-w-4xl"><form onSubmit={event => { event.preventDefault(); void buildBrief() }} className="rounded-2xl border border-stone-200 bg-white p-5"><label htmlFor="decision-question" className="text-sm font-semibold">Decision question</label><div className="mt-3 flex flex-col gap-2 sm:flex-row"><input id="decision-question" aria-label="Decision question" value={question} onChange={event => setQuestion(event.target.value)} placeholder="Should we pursue this client segment?" className="min-w-0 flex-1 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm" /><button disabled={briefBusy || !question.trim()} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{briefBusy ? 'Building…' : 'Build decision brief'}</button></div><p className="mt-2 text-xs text-stone-500">Only stored, scoped evidence is used. External instructions are treated as source text, never executed.</p></form>{brief && <div className="mt-4"><DecisionBrief brief={brief} /></div>}</section>}
     </main>
   </div>

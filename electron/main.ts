@@ -394,6 +394,7 @@ ipcMain.handle('brain:listCandidates', (_e, scopeId?: string) => brainRequest('l
 ipcMain.handle('brain:decideCandidate', (_e, input: unknown) => brainRequest('decideCandidate', input))
 ipcMain.handle('brain:listJobs', () => brainRequest('listJobs', {}))
 ipcMain.handle('brain:listOpportunities', (_e, input: unknown) => brainRequest('listOpportunities', input))
+ipcMain.handle('brain:countOpportunities', (_e, input: unknown) => brainRequest('countOpportunities', input))
 ipcMain.handle('brain:getOpportunityEvidence', (_e, input: unknown) => brainRequest('getOpportunityEvidence', input))
 ipcMain.handle('brain:reviewOpportunity', (_e, input: unknown) => brainRequest('reviewOpportunity', input))
 ipcMain.handle('brain:buildDecisionBrief', (_e, input: unknown) => brainRequest('buildDecisionBrief', input))
@@ -457,7 +458,15 @@ ipcMain.handle('brain:runSocialRecipe', async (_e, input: unknown) => {
     recipeVersion: 1,
     scopeId: request.scopeId,
     accountId: request.accountId ?? null,
-    parameters: { query: request.parameters.query ?? '', limit: request.parameters.limit ?? 50, retentionDays: request.parameters.retentionDays ?? 30 },
+    // enqueueJob's idempotency key is a hash of recipeId + scopeId + accountId
+    // + parameters, and reuses any existing non-failed/non-cancelled job with
+    // the same key instead of capturing again. Without windowStart, every
+    // manual "Scan" click sent identical parameters, so every click after the
+    // first silently returned the same already-completed job — the button
+    // looked like it ran, but no new capture ever happened. A monitor's
+    // scheduled runs already avoid this by including their own windowStart
+    // (see scheduler.ts); a manual run needs the same discriminator.
+    parameters: { query: request.parameters.query ?? '', limit: request.parameters.limit ?? 50, retentionDays: request.parameters.retentionDays ?? 30, windowStart: new Date().toISOString() },
     ...(request.parameters.continuationSessionId ? { continuation: {
       sessionId: request.parameters.continuationSessionId,
       mode: request.parameters.mode ?? 'interactive',

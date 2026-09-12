@@ -187,6 +187,7 @@ export interface ElectronAPI {
   brainDecideCandidate: (input: { id: string; decision: 'accept' | 'reject'; editedText?: string }) => Promise<BrainMemory | null>
   brainListJobs: () => Promise<BrainJob[]>
   brainListOpportunities: (input: { scopeId: string; status?: BrainOpportunityStatus; limit?: number }) => Promise<BrainOpportunity[]>
+  brainCountOpportunities: (input: { scopeId: string; status?: BrainOpportunityStatus }) => Promise<number>
   brainGetOpportunityEvidence: (input: { id: string; scopeId: string }) => Promise<OpportunityEvidence[]>
   brainReviewOpportunity: (input: { id: string; scopeId: string; decision: 'qualify' | 'dismiss' | 'convert' }) => Promise<BrainOpportunity>
   brainBuildDecisionBrief: (input: { scopeId: string; question: string; tokenBudget?: number }) => Promise<BrainDecisionBrief>

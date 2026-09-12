@@ -104,6 +104,27 @@ describe('BrainDatabase', () => {
     brain.close()
   })
 
+  it('lists up to 500 opportunities and reports the true total when a scope holds more than fit on one page', () => {
+    // A single scan can legitimately produce hundreds of clustered signals.
+    // listOpportunities used to hard-cap at 100 with no way for a caller to
+    // know more existed; countOpportunities exists so the UI can say
+    // "showing 500 of 620" instead of silently truncating.
+    const brain = createBrain()
+    const scope = brain.ensureScope({ type: 'client', externalRef: 'client-many', name: 'Client Many' })
+    for (let index = 0; index < 520; index += 1) {
+      brain.upsertOpportunity({
+        scopeId: scope.id, fingerprint: `lead-${index}`, category: 'direct_lead', title: `Lead ${index}`,
+        summary: 'A generated opportunity.', score: index % 100, confidence: 0.5, freshness: '2026-09-05T00:00:00.000Z',
+      })
+    }
+    expect(brain.listOpportunities({ scopeId: scope.id })).toHaveLength(50)
+    expect(brain.listOpportunities({ scopeId: scope.id, limit: 500 })).toHaveLength(500)
+    expect(brain.countOpportunities({ scopeId: scope.id })).toBe(520)
+    expect(brain.countOpportunities({ scopeId: scope.id, status: 'new' })).toBe(520)
+    expect(brain.countOpportunities({ scopeId: scope.id, status: 'qualified' })).toBe(0)
+    brain.close()
+  })
+
   it('lists, reviews and resolves evidence only inside the selected scope', () => {
     const brain = createBrain()
     const a = brain.ensureScope({ type: 'client', externalRef: 'opportunity-a', name: 'Opportunity A' })

@@ -93,6 +93,7 @@ export class BrainService {
       }
       case 'listJobs': return this.database.listJobs()
       case 'listOpportunities': return this.database.listOpportunities(request.payload)
+      case 'countOpportunities': return this.database.countOpportunities(request.payload)
       case 'getOpportunityEvidence': return this.database.getOpportunityEvidence(request.payload)
       case 'reviewOpportunity': return this.database.reviewOpportunity(request.payload)
       case 'buildDecisionBrief': return buildDecisionBrief({

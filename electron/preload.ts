@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   brainDecideCandidate: (input: unknown) => ipcRenderer.invoke('brain:decideCandidate', input),
   brainListJobs: () => ipcRenderer.invoke('brain:listJobs'),
   brainListOpportunities: (input: unknown) => ipcRenderer.invoke('brain:listOpportunities', input),
+  brainCountOpportunities: (input: unknown) => ipcRenderer.invoke('brain:countOpportunities', input),
   brainGetOpportunityEvidence: (input: unknown) => ipcRenderer.invoke('brain:getOpportunityEvidence', input),
   brainReviewOpportunity: (input: unknown) => ipcRenderer.invoke('brain:reviewOpportunity', input),
   brainBuildDecisionBrief: (input: unknown) => ipcRenderer.invoke('brain:buildDecisionBrief', input),

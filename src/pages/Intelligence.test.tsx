@@ -18,7 +18,7 @@ const brief: BrainDecisionBrief = {
 }
 
 const api = {
-  brainListOpportunities: vi.fn(), brainGetOpportunityEvidence: vi.fn(), brainReviewOpportunity: vi.fn(),
+  brainListOpportunities: vi.fn(), brainCountOpportunities: vi.fn(), brainGetOpportunityEvidence: vi.fn(), brainReviewOpportunity: vi.fn(),
   brainBuildDecisionBrief: vi.fn(), brainListSourceMetrics: vi.fn(), brainListJobs: vi.fn(), brainGetConsent: vi.fn(),
   brainRunSocialRecipe: vi.fn(), brainGrantConsent: vi.fn(), onBrainEvent: vi.fn(),
   brainListMonitors: vi.fn(), brainCreateMonitor: vi.fn(), brainSetMonitorStatus: vi.fn(), brainDeleteMonitor: vi.fn(),
@@ -38,6 +38,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.resetAllMocks()
   api.brainListOpportunities.mockResolvedValue(opportunities)
+  api.brainCountOpportunities.mockResolvedValue(opportunities.length)
   api.brainGetOpportunityEvidence.mockImplementation(async ({ id }: { id: string }) => id === 'lead-1' ? [evidence] : [])
   api.brainReviewOpportunity.mockResolvedValue({ ...opportunities[0], status: 'qualified' })
   api.brainBuildDecisionBrief.mockResolvedValue(brief)
@@ -70,6 +71,74 @@ describe('Intelligence live views', () => {
     expect(screen.queryByText('Needs React help')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Qualify opportunity' }))
     await waitFor(() => expect(api.brainReviewOpportunity).toHaveBeenCalledWith({ id: 'pain-1', scopeId: scope.id, decision: 'qualify' }))
+  })
+
+  it('says how many opportunities are hidden when the scope holds more than fit on one page', async () => {
+    api.brainCountOpportunities.mockResolvedValue(opportunities.length + 40)
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Opportunities' }))
+    await waitFor(() => expect(screen.getByText('Needs React help')).toBeTruthy())
+    expect(screen.getByText(/Showing the top 2 of 42 opportunities/)).toBeTruthy()
+  })
+
+  it('does not claim any opportunities are hidden when the count matches what is shown', async () => {
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Opportunities' }))
+    await waitFor(() => expect(screen.getByText('Needs React help')).toBeTruthy())
+    expect(screen.queryByText(/Showing the top/)).toBeNull()
+  })
+
+  it('re-fetches an opportunity\'s evidence after a later capture changes its evidence count', async () => {
+    let emit = () => {}
+    api.onBrainEvent.mockImplementation((handler: () => void) => { emit = handler; return () => undefined })
+
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Opportunities' }))
+    await waitFor(() => expect(screen.getByText('Needs React help')).toBeTruthy())
+    expandEvidence('1 evidence item')
+    await waitFor(() => expect(api.brainGetOpportunityEvidence).toHaveBeenCalledTimes(1))
+    // A later capture raised this opportunity's evidenceCount from 1 to 2. The
+    // cache used to key only on "have we ever fetched this id", so the rail
+    // kept showing the stale one-item list forever even as the count moved on.
+    api.brainListOpportunities.mockResolvedValue(opportunities.map(item => item.id === 'lead-1' ? { ...item, evidenceCount: 2 } : item))
+    emit()
+    await waitFor(() => expect(screen.getByText('2 evidence items')).toBeTruthy())
+    expandEvidence('2 evidence items')
+    await waitFor(() => expect(api.brainGetOpportunityEvidence).toHaveBeenCalledTimes(2))
+  })
+
+  it('sets an error instead of doing nothing when the consent check returns an unusable response', async () => {
+    api.brainRunSocialRecipe.mockResolvedValue({ requiresConsent: true })
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sources' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan unread' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Consent check returned an unusable response'))
+    expect(screen.queryByRole('heading', { name: 'Private source consent required' })).toBeNull()
+  })
+
+  it('lets the job-queued notice be dismissed, and auto-clears it so it cannot survive a tab switch forever', async () => {
+    api.brainRunSocialRecipe.mockResolvedValue({ requiresConsent: false, job: { id: 'job-42', status: 'queued' } })
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sources' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan unread' }))
+    await waitFor(() => expect(screen.getByText(/Job queued:/)).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByText(/Job queued:/)).toBeNull()
+
+    // The banner used to have no way to go away on its own — it survived
+    // every tab switch within Intelligence and only cleared on a full page
+    // remount (navigating to Brain and back). Fake time from here so a real
+    // ten seconds does not have to pass in the test.
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Scan unread' }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(screen.getByText(/Job queued:/)).toBeTruthy()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(screen.queryByText(/Job queued:/)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows real pain, trend and source state instead of placeholders', async () => {

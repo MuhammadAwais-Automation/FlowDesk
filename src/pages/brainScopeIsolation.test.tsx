@@ -43,7 +43,7 @@ const api = {
   brainListJobs: vi.fn(), onBrainEvent: vi.fn(), brainSearch: vi.fn(), brainGetArtifactManifest: vi.fn(),
   brainGetVaultStatus: vi.fn(), brainListVaultConflicts: vi.fn(), brainResolveVaultConflict: vi.fn(),
   brainRunSocialRecipe: vi.fn(), brainGrantConsent: vi.fn(),
-  brainListOpportunities: vi.fn(), brainGetOpportunityEvidence: vi.fn(), brainReviewOpportunity: vi.fn(),
+  brainListOpportunities: vi.fn(), brainCountOpportunities: vi.fn(), brainGetOpportunityEvidence: vi.fn(), brainReviewOpportunity: vi.fn(),
   brainBuildDecisionBrief: vi.fn(), brainListSourceMetrics: vi.fn(), brainGetConsent: vi.fn(),
   brainListMonitors: vi.fn(), brainCreateMonitor: vi.fn(), brainSetMonitorStatus: vi.fn(), brainDeleteMonitor: vi.fn(),
 }
@@ -71,6 +71,7 @@ beforeEach(() => {
   api.brainListVaultConflicts.mockImplementation(async (scopeId: string) => scopeId === 'b' ? [] : [conflict])
   api.brainResolveVaultConflict.mockResolvedValue(memory)
   api.brainListOpportunities.mockResolvedValue([])
+  api.brainCountOpportunities.mockResolvedValue(0)
   api.brainListMonitors.mockResolvedValue([])
   api.brainGetOpportunityEvidence.mockResolvedValue([])
   api.brainListSourceMetrics.mockResolvedValue([])
