@@ -28,5 +28,25 @@ export function recordsFromConnectorResult(value: unknown): Array<Record<string,
       return collection.filter(item => item && typeof item === 'object').slice(0, 5000) as Array<Record<string, unknown>>
     }
   }
+  // linkedin.search answers `{ clusters: [{ group, items: [...] }] }` — a
+  // shape none of the flat keys above match, so every search result was
+  // collapsing into a single opaque record with no text/url a recipe could
+  // read. Flatten every cluster's items and fold each item's separate title/
+  // subtitle/detail/summary fields into one `text` field so the normalize
+  // step's existing field lookup (['text', 'body', 'lastMessage', 'title'])
+  // finds real content, and its `url`/`externalId` lookups find the item's
+  // own navigationUrl/trackingUrn rather than the whole search response's.
+  const clusters = record.clusters
+  if (Array.isArray(clusters)) {
+    const items = clusters
+      .filter((cluster): cluster is Record<string, unknown> => !!cluster && typeof cluster === 'object')
+      .flatMap(cluster => (Array.isArray(cluster.items) ? cluster.items : []))
+      .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    return items.slice(0, 5000).map(item => ({
+      text: [item.title, item.subtitle, item.detail, item.summary].filter(part => typeof part === 'string' && part.length > 0).join(' — '),
+      url: item.url ?? null,
+      urn: item.urn ?? null,
+    }))
+  }
   return [record]
 }

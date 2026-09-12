@@ -49,6 +49,10 @@ export function feedScript(options: { limit?: number; start?: number; sortBy?: s
         // but never referred to again.
         activityId: activityIdOf(urn),
         postUrn: urn,
+        // The permalink Brain's capture pipeline reads as canonicalUrl. Without
+        // it every citation built from a feed post shows "Source link
+        // unavailable" — the post was real, but nothing pointed back to it.
+        url: urn ? 'https://www.linkedin.com/feed/update/' + urn + '/' : null,
         author: str(actor.name),
         authorHeadline: str(actor.description),
         authorUrn: mini.dashEntityUrn || null,

@@ -156,4 +156,22 @@ describe('the feed is not the feed the user sees', () => {
     // pipeline. Without this note an agent would report it as "your feed".
     expect(feedScript({})).toContain('not the feed rendered on screen')
   })
+
+  it('gives every post a permalink built from its own urn, not the whole feed a URL', () => {
+    // Every field on a mapped post used to be readable except one: nothing
+    // pointed back at the post itself. Brain's capture pipeline reads this as
+    // canonicalUrl — without it, every citation built from a feed post showed
+    // "Source link unavailable" even though the post was real.
+    const script = feedScript({})
+    expect(script).toContain("url: urn ? 'https://www.linkedin.com/feed/update/' + urn + '/' : null")
+
+    const buildUrl = new Function(`
+      return function (urn) {
+        return urn ? 'https://www.linkedin.com/feed/update/' + urn + '/' : null
+      }
+    `)() as (urn: string | null) => string | null
+
+    expect(buildUrl('urn:li:activity:7496813253121966080')).toBe('https://www.linkedin.com/feed/update/urn:li:activity:7496813253121966080/')
+    expect(buildUrl(null)).toBeNull()
+  })
 })
