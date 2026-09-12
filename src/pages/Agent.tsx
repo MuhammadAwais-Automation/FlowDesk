@@ -175,6 +175,12 @@ export default function Agent() {
       clearWatchdog()
       sendingRef.current = false
       setSending(false)
+      // A 'done' event is unambiguous proof the run finished. Nothing in this
+      // file ever cleared `error` on success — a stale watchdog warning, or
+      // "Cancelling the Agent run…" from Stop (agent:abort resolves and marks
+      // the run cancelled well before this terminal event actually arrives),
+      // sat on screen forever after the run it described was long over.
+      setError(null)
       setLiveText('')
       liveTextRef.current = ''
       setLiveToolCalls([])

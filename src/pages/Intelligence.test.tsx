@@ -60,6 +60,30 @@ function expandEvidence(summaryText: string) {
 }
 
 describe('Intelligence live views', () => {
+  it('shows a live per-recipe run status next to its own button, not only a top banner', async () => {
+    api.brainRunSocialRecipe.mockResolvedValue({ requiresConsent: false, job: { id: 'job-7', status: 'queued' } })
+    let emit = () => {}
+    api.onBrainEvent.mockImplementation((handler: () => void) => { emit = handler; return () => undefined })
+    render(<Intelligence />)
+    fireEvent.click(screen.getByRole('button', { name: 'Sources' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan unread' }))
+    await waitFor(() => expect(screen.getByText(/Job queued:/)).toBeTruthy())
+
+    // Enqueueing does not itself update the jobs list — a Brain event does,
+    // same as everywhere else on this page. The badge tracks the job live as
+    // it moves toward completion, next to the button that started it, not
+    // only in the top banner that needs a manual Dismiss.
+    api.brainListJobs.mockResolvedValue([{ id: 'job-7', scopeId: scope.id, recipeId: 'whatsapp.unread_intelligence', recipeVersion: 1, accountId: null, status: 'queued', parameters: {}, result: null, createdAt: scope.createdAt, updatedAt: '2026-09-12T00:00:00.000Z' }])
+    emit()
+    await waitFor(() => expect(screen.getByText('Queued')).toBeTruthy())
+
+    api.brainListJobs.mockResolvedValue([{ id: 'job-7', scopeId: scope.id, recipeId: 'whatsapp.unread_intelligence', recipeVersion: 1, accountId: null, status: 'completed', parameters: {}, result: { recordCount: 9 }, createdAt: scope.createdAt, updatedAt: '2026-09-12T00:05:00.000Z' }])
+    emit()
+    await waitFor(() => expect(screen.getByText('Completed')).toBeTruthy())
+    expect(screen.queryByText('Queued')).toBeNull()
+  })
+
+
   it('loads cited opportunities, filters statuses and reviews in the selected scope', async () => {
     render(<Intelligence />)
     fireEvent.click(screen.getByRole('button', { name: 'Opportunities' }))

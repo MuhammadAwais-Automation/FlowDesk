@@ -408,19 +408,50 @@ function Overview({ opportunities, metrics, jobs }: { opportunities: BrainOpport
   return <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">{cards.map(([label, value]) => <section key={label} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm"><p className="text-xs text-stone-500">{label}</p><p className="mt-2 text-3xl font-bold">{value}</p></section>)}</div>
 }
 
+/**
+ * Per-recipe run status, always visible next to its own button — not a
+ * top-of-page banner that has to be read, remembered and dismissed before it
+ * goes stale. `jobs` already refreshes live on every Brain event, so this
+ * updates on its own as a capture moves from queued to running to done.
+ */
+function RunStatusBadge({ job }: { job: BrainJob | undefined }) {
+  if (!job) return null
+  const label: Record<BrainJob['status'], string> = {
+    queued: 'Queued', running: 'Running', waiting_for_login: 'Waiting for login',
+    waiting_for_approval: 'Waiting for approval', processing: 'Processing', ready_for_agent: 'Ready',
+    retry_scheduled: 'Retrying', partially_completed: 'Partially completed', completed: 'Completed',
+    failed: 'Failed', cancelled: 'Cancelled',
+  }
+  const tone = job.status === 'completed' ? 'bg-emerald-100 text-emerald-700'
+    : job.status === 'failed' ? 'bg-red-100 text-red-700'
+    : job.status === 'cancelled' ? 'bg-stone-100 text-stone-500'
+    : 'bg-violet-100 text-violet-700'
+  return <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${tone}`}>
+    {!['completed', 'failed', 'cancelled'].includes(job.status) && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />}
+    {label[job.status]}
+  </span>
+}
+
 function Sources({ jobs, consents, onRun }: { jobs: BrainJob[]; consents: ConsentView; onRun: (recipe: MonitorableRecipeId) => void }) {
   return <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{INTELLIGENCE_SOURCES.map(source => {
     const sourceJobs = jobs.filter(job => sourceRecipes[source.id].includes(job.recipeId))
     const latest = [...sourceJobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
     const recordCount = typeof latest?.result?.recordCount === 'number' ? latest.result.recordCount : 0
     const sourceError = latest?.status === 'failed' && typeof latest.result?.error === 'string' ? latest.result.error : ''
-    return <section key={source.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm"><div className="flex items-center justify-between"><Radio size={18} className={source.status === 'available' ? 'text-emerald-600' : 'text-stone-400'} /><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${source.status === 'available' ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>{source.status === 'available' ? 'Available' : 'Not connected'}</span></div><h2 className="mt-4 font-semibold">{source.title}</h2><p className="mt-1 text-xs text-stone-500">{source.detail}</p>{source.status === 'available' && <dl className="mt-3 space-y-1 text-xs"><div className="flex justify-between gap-2"><dt className="text-stone-500">Consent</dt><dd>{consentLabels[consents.sources[source.id] ?? 'unknown']}</dd></div><div className="flex justify-between gap-2"><dt className="text-stone-500">Last capture</dt><dd>{latest ? new Date(latest.updatedAt).toLocaleDateString() : 'Never'}</dd></div><div className="flex justify-between gap-2"><dt className="text-stone-500">Records</dt><dd>{recordCount} records</dd></div></dl>}{sourceError && <p className="mt-3 flex items-start gap-1 rounded-lg bg-red-50 p-2 text-xs text-red-700"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {sourceError}</p>}{(sourceControls[source.id] ?? []).map(control => <div key={control.recipeId} className="mt-3">
-      <button onClick={() => onRun(control.recipeId)} className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">{control.actionLabel}</button>
+    return <section key={source.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm"><div className="flex items-center justify-between"><Radio size={18} className={source.status === 'available' ? 'text-emerald-600' : 'text-stone-400'} /><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${source.status === 'available' ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>{source.status === 'available' ? 'Available' : 'Not connected'}</span></div><h2 className="mt-4 font-semibold">{source.title}</h2><p className="mt-1 text-xs text-stone-500">{source.detail}</p>{source.status === 'available' && <dl className="mt-3 space-y-1 text-xs"><div className="flex justify-between gap-2"><dt className="text-stone-500">Consent</dt><dd>{consentLabels[consents.sources[source.id] ?? 'unknown']}</dd></div><div className="flex justify-between gap-2"><dt className="text-stone-500">Last capture</dt><dd>{latest ? new Date(latest.updatedAt).toLocaleDateString() : 'Never'}</dd></div><div className="flex justify-between gap-2"><dt className="text-stone-500">Records</dt><dd>{recordCount} records</dd></div></dl>}{sourceError && <p className="mt-3 flex items-start gap-1 rounded-lg bg-red-50 p-2 text-xs text-red-700"><AlertTriangle size={13} className="mt-0.5 shrink-0" /> {sourceError}</p>}{(sourceControls[source.id] ?? []).map(control => {
+      const recipeJobs = jobs.filter(job => job.recipeId === control.recipeId)
+      const latestRecipeJob = [...recipeJobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+      return <div key={control.recipeId} className="mt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => onRun(control.recipeId)} className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">{control.actionLabel}</button>
+        <RunStatusBadge job={latestRecipeJob} />
+      </div>
       {/* Per recipe, not per source: consent is keyed on scope + recipe +
           provider, so LinkedIn's two recipes each need their own state and
           their own way to be granted. Running the recipe opens the consent
           banner when the ledger has no grant yet. */}
       <p className="mt-1 text-[11px] text-stone-500">{control.recipeId}: {consentLabels[consents.recipes[control.recipeId] ?? 'unknown']}</p>
-    </div>)}{source.id === 'reddit' &&<p className="mt-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">Live capture excluded; fake data show nahi hogi.</p>}</section>
+    </div>
+    })}{source.id === 'reddit' &&<p className="mt-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">Live capture excluded; fake data show nahi hogi.</p>}</section>
   })}</div>
 }
