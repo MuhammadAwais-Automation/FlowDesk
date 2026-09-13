@@ -249,6 +249,28 @@ describe('DocumentStore', () => {
     expect(rows.filter(row => row.valid_to === null)).toHaveLength(1)
   })
 
+  it('retire sets valid_to on the active row and returns it, changing nothing else', () => {
+    const { scope, store } = createStore()
+    const document = store.upsert(documentInput(scope.id))
+
+    const retired = store.retire(scope.id, document.path)
+
+    expect(retired).toMatchObject({ id: document.id, validTo: expect.any(String) })
+    expect(store.read(scope.id, document.path)).toBeNull()
+    expect(store.list({ scopeId: scope.id, includeSuperseded: true })).toMatchObject([{ id: document.id }])
+  })
+
+  it('retire returns null and changes nothing when no document is active at the path', () => {
+    const { scope, store } = createStore()
+
+    expect(store.retire(scope.id, 'people/missing.md')).toBeNull()
+
+    const document = store.upsert(documentInput(scope.id))
+    store.retire(scope.id, document.path)
+    // Retiring an already-retired path is a no-op, not a second retirement.
+    expect(store.retire(scope.id, document.path)).toBeNull()
+  })
+
   it('rolls back all three tables when an upsert violates the scope foreign key', () => {
     const { brain, store } = createStore()
 

@@ -160,6 +160,26 @@ export class DocumentStore implements DocumentStorePort {
     }
   }
 
+  retire(scopeId: string, path: string): KnowledgeDocument | null {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const existingRow = this.db.prepare(
+        'SELECT * FROM knowledge_documents WHERE scope_id = ? AND path = ? AND valid_to IS NULL',
+      ).get(scopeId, path) as SqlRow | undefined
+      if (!existingRow) {
+        this.db.exec('COMMIT')
+        return null
+      }
+      const retiredAt = new Date().toISOString()
+      this.db.prepare('UPDATE knowledge_documents SET valid_to = ? WHERE id = ?').run(retiredAt, String(existingRow.id))
+      this.db.exec('COMMIT')
+      return mapDocument({ ...existingRow, valid_to: retiredAt })
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   list(input: ListDocumentsInput): KnowledgeDocument[] {
     const types = typeFilter(input.types, 'type')
     const active = input.includeSuperseded ? '' : ' AND valid_to IS NULL'

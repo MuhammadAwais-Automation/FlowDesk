@@ -138,6 +138,10 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
   z.object({ ...requestBase, method: z.literal('knowledge.decideCandidate'), payload: z.object({
     id, decision: z.enum(['accept', 'reject']), editedBody: text.optional(),
   }).strict() }),
+  // Phase 3: deterministic cleanup for orphan captures/*.md notes the write
+  // gate leaves behind. Timer-driven in service.ts; exposed here too so it
+  // can be triggered and verified on demand.
+  z.object({ ...requestBase, method: z.literal('knowledge.compact'), payload: z.object({ scopeId: id }).strict() }),
   z.object({ ...requestBase, method: z.literal('shutdown'), payload: z.object({}).strict() }),
 ])
 

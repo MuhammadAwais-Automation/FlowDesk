@@ -66,6 +66,10 @@ class FakeDocumentStore implements DocumentStorePort {
     throw new Error('Not used by vault importer tests')
   }
 
+  retire(_scopeId: string, _path: string): KnowledgeDocument | null {
+    throw new Error('Not used by vault importer tests')
+  }
+
   get(path: string) {
     return this.documents.get(`scope-1\0${path}`)
   }

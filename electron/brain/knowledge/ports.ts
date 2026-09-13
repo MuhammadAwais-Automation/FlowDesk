@@ -54,6 +54,14 @@ export interface DocumentStorePort {
    * never destroys the version it's replacing.
    */
   supersede(input: UpsertDocumentInput): { previous: KnowledgeDocument | null; next: KnowledgeDocument }
+  /**
+   * Retires the active document at `scopeId`+`path` with nothing replacing
+   * it — unlike `supersede`, which always inserts a `next` row at the same
+   * path. Returns null (and changes nothing) when no active document is
+   * there. Used by the compactor once a document's content has been folded
+   * into a *different* path and this one should stop existing on its own.
+   */
+  retire(scopeId: string, path: string): KnowledgeDocument | null
   /** Ordered by type, then updatedAt descending — the manifest relies on this. */
   list(input: ListDocumentsInput): KnowledgeDocument[]
   read(scopeId: string, path: string): { document: KnowledgeDocument; body: string } | null

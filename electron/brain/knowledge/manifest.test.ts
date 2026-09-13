@@ -40,6 +40,10 @@ class FakeDocumentStore implements DocumentStorePort {
     throw new Error('Not used by manifest tests')
   }
 
+  retire(_scopeId: string, _path: string): KnowledgeDocument | null {
+    throw new Error('Not used by manifest tests')
+  }
+
   list(input: ListDocumentsInput): KnowledgeDocument[] {
     this.listCalls.push(input)
     return this.documents.filter(item => (

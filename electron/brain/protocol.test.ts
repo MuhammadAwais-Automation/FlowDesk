@@ -111,6 +111,15 @@ describe('brain utility protocol', () => {
     })).toThrow()
   })
 
+  it('accepts the compactor method', () => {
+    expect(brainRequestSchema.parse({
+      id: '1', method: 'knowledge.compact', payload: { scopeId: 'scope' },
+    })).toMatchObject({ method: 'knowledge.compact' })
+    expect(() => brainRequestSchema.parse({
+      id: '2', method: 'knowledge.compact', payload: {},
+    })).toThrow()
+  })
+
   it('refuses a traversal path at the knowledge boundary, before any store sees it', () => {
     // The path can arrive from an agent tool call, so it is rejected here as
     // well as inside the store — a single check is one mistake away from a

@@ -9,6 +9,7 @@ import { socialRecipeDefinitions } from './recipeDefinitions'
 import { buildDecisionBrief } from './decisionBrief'
 import { MonitorScheduler, createMonitorSchedulerPort } from './scheduler'
 import { CandidateStore } from './knowledge/candidates'
+import { Compactor } from './knowledge/compactor'
 import { DocumentStore } from './knowledge/documents'
 import { ManifestBuilder } from './knowledge/manifest'
 import { VaultImporter } from './knowledge/vaultImporter'
@@ -26,7 +27,9 @@ export class BrainService {
   readonly manifest: ManifestBuilder
   readonly vaultImporter: VaultImporter
   readonly candidates: CandidateStore
+  readonly compactor: Compactor
   private readonly maintenanceTimer: ReturnType<typeof setInterval>
+  private readonly compactionTimer: ReturnType<typeof setInterval>
   private readonly monitors: MonitorScheduler
 
   constructor(databasePath: string) {
@@ -37,6 +40,7 @@ export class BrainService {
     this.manifest = new ManifestBuilder(this.documents)
     this.vaultImporter = new VaultImporter(this.documents)
     this.candidates = new CandidateStore(this.database.handle, this.documents)
+    this.compactor = new Compactor(this.documents)
     this.vault.reconcileAll()
     this.vault.start()
     this.database.registerRecipe({ id: 'notebooklm.research', version: 1, title: 'NotebookLM Research', steps: ['capture', 'normalize', 'summarize'] })
@@ -49,6 +53,16 @@ export class BrainService {
     this.monitors.start()
     this.maintenanceTimer = setInterval(() => this.runMaintenance(), 24 * 60 * 60 * 1000)
     this.maintenanceTimer.unref()
+    // Same shape as maintenanceTimer: a synchronous, transactional DB sweep
+    // with nothing to retry across a restart, not multi-step job/monitor work.
+    this.compactionTimer = setInterval(() => this.runCompaction(), 24 * 60 * 60 * 1000)
+    this.compactionTimer.unref()
+  }
+
+  /** Folds orphan captures/*.md notes into the real documents they're about,
+   *  scope by scope. Public for the same reason runMaintenance() is. */
+  runCompaction() {
+    for (const scope of this.database.listScopes()) this.compactor.compact(scope.id)
   }
 
   /**
@@ -207,6 +221,7 @@ export class BrainService {
       case 'knowledge.proposeCandidate': return this.candidates.propose(request.payload)
       case 'knowledge.listCandidates': return this.candidates.list(request.payload.scopeId)
       case 'knowledge.decideCandidate': return this.candidates.decide(request.payload)
+      case 'knowledge.compact': return this.compactor.compact(request.payload.scopeId)
       case 'shutdown': {
         this.close()
         return { closed: true }
@@ -216,6 +231,7 @@ export class BrainService {
 
   close() {
     clearInterval(this.maintenanceTimer)
+    clearInterval(this.compactionTimer)
     this.monitors.stop()
     this.vault.stop()
     this.database.checkpoint()

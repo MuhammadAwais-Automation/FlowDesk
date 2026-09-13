@@ -135,3 +135,27 @@ export interface DecideCandidateInput {
   decision: 'accept' | 'reject'
   editedBody?: string
 }
+
+/**
+ * The compactor (Phase 3). Deterministic housekeeping only: fold an orphan
+ * `captures/*.md` note into the real document it's about when the match is
+ * clear, retire the orphan, and leave it alone otherwise. Never guesses at
+ * patterns or generates insight — see docs/superpowers/plans for why.
+ */
+export interface CompactionDecision {
+  capturePath: string
+  outcome: 'merged' | 'left-standalone'
+  /** The document the capture was folded into, when `outcome` is 'merged'. */
+  targetPath: string | null
+  /** Best search match's score, or null if the capture had no search hits at all. */
+  topScore: number | null
+  /** Second-best match's score — the margin over this is what the confidence bar checks. */
+  secondScore: number | null
+}
+
+export interface CompactionReport {
+  scanned: number
+  merged: number
+  leftStandalone: number
+  decisions: CompactionDecision[]
+}
