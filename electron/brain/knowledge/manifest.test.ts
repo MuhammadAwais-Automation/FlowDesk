@@ -36,6 +36,10 @@ class FakeDocumentStore implements DocumentStorePort {
     throw new Error('Not used by manifest tests')
   }
 
+  supersede(_input: UpsertDocumentInput): { previous: KnowledgeDocument | null; next: KnowledgeDocument } {
+    throw new Error('Not used by manifest tests')
+  }
+
   list(input: ListDocumentsInput): KnowledgeDocument[] {
     this.listCalls.push(input)
     return this.documents.filter(item => (

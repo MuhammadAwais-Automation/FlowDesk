@@ -201,6 +201,13 @@ export class BrainService {
       case 'knowledge.search': return this.documents.search(request.payload)
       case 'knowledge.list': return this.documents.list(request.payload)
       case 'knowledge.importVault': return this.vaultImporter.import(request.payload)
+      // Stubs: candidates.ts (the CandidateStore) is a separate work package.
+      // These three keep the schema's protocol entries exhaustive and the
+      // build green until that package replaces them.
+      case 'knowledge.proposeCandidate':
+      case 'knowledge.listCandidates':
+      case 'knowledge.decideCandidate':
+        throw new Error('knowledge write gate not yet implemented')
       case 'shutdown': {
         this.close()
         return { closed: true }

@@ -62,6 +62,10 @@ class FakeDocumentStore implements DocumentStorePort {
     return []
   }
 
+  supersede(_input: UpsertDocumentInput): { previous: KnowledgeDocument | null; next: KnowledgeDocument } {
+    throw new Error('Not used by vault importer tests')
+  }
+
   get(path: string) {
     return this.documents.get(`scope-1\0${path}`)
   }

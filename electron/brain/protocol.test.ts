@@ -70,6 +70,47 @@ describe('brain utility protocol', () => {
     })).toThrow()
   })
 
+  it('accepts the write-gate methods and keeps them distinct from the memory-candidate methods of the same name', () => {
+    expect(brainRequestSchema.parse({
+      id: '1', method: 'knowledge.proposeCandidate', payload: {
+        scopeId: 'scope', type: 'note', title: 'Captured note', summary: '', body: 'Yasir confirmed the budget.',
+        origin: 'explicit-user', sessionRef: 'agent-session://s1/t1',
+      },
+    })).toMatchObject({ method: 'knowledge.proposeCandidate' })
+    expect(brainRequestSchema.parse({
+      id: '2', method: 'knowledge.listCandidates', payload: { scopeId: 'scope' },
+    })).toMatchObject({ method: 'knowledge.listCandidates' })
+    expect(brainRequestSchema.parse({
+      id: '3', method: 'knowledge.decideCandidate', payload: { id: 'candidate-1', decision: 'accept' },
+    })).toMatchObject({ method: 'knowledge.decideCandidate' })
+
+    // The old memory-candidate methods still parse under their own
+    // (unprefixed) literals — the two systems must not collide.
+    expect(brainRequestSchema.parse({
+      id: '4', method: 'listCandidates', payload: { scopeId: 'scope' },
+    })).toMatchObject({ method: 'listCandidates' })
+    expect(brainRequestSchema.parse({
+      id: '5', method: 'decideCandidate', payload: { id: 'candidate-1', decision: 'accept' },
+    })).toMatchObject({ method: 'decideCandidate' })
+
+    expect(() => brainRequestSchema.parse({
+      id: '6', method: 'knowledge.proposeCandidate', payload: {
+        scopeId: 'scope', type: 'note', title: '', summary: '', body: 'x', origin: 'explicit-user', sessionRef: 's',
+      },
+    })).toThrow()
+    expect(() => brainRequestSchema.parse({
+      id: '7', method: 'knowledge.proposeCandidate', payload: {
+        scopeId: 'scope', type: 'note', title: 'x', summary: '', body: 'x', origin: 'ai-said-so', sessionRef: 's',
+      },
+    })).toThrow()
+    expect(() => brainRequestSchema.parse({
+      id: '8', method: 'knowledge.proposeCandidate', payload: {
+        scopeId: 'scope', targetPath: '../escape.md', type: 'note', title: 'x', summary: '', body: 'x',
+        origin: 'explicit-user', sessionRef: 's',
+      },
+    })).toThrow()
+  })
+
   it('refuses a traversal path at the knowledge boundary, before any store sees it', () => {
     // The path can arrive from an agent tool call, so it is rejected here as
     // well as inside the store — a single check is one mistake away from a

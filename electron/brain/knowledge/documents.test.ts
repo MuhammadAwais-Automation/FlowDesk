@@ -201,6 +201,54 @@ describe('DocumentStore', () => {
       .toEqual([{ target_path: 'people/existing.md', resolved: 1 }])
   })
 
+  it('supersede creates a brand-new active row when nothing exists at the path yet', () => {
+    const { scope, store } = createStore()
+
+    const { previous, next } = store.supersede(documentInput(scope.id))
+
+    expect(previous).toBeNull()
+    expect(next).toMatchObject({ path: 'people/yasir.md', validTo: null })
+    expect(store.read(scope.id, 'people/yasir.md')?.document.id).toBe(next.id)
+  })
+
+  it('supersede retires the previous active row instead of overwriting it', () => {
+    const { brain, scope, store } = createStore()
+    const first = store.upsert(documentInput(scope.id))
+
+    const { previous, next } = store.supersede(documentInput(scope.id, {
+      title: 'Yasir Bhai — updated',
+      body: 'New budget confirmed: 3 lakh.',
+      contentHash: 'hash-2',
+      updatedAt: '2026-09-05T10:00:00.000Z',
+    }))
+
+    expect(previous).toMatchObject({ id: first.id })
+    expect(next.id).not.toBe(first.id)
+    expect(next).toMatchObject({ path: first.path, title: 'Yasir Bhai — updated', validTo: null })
+
+    // The old row survives, marked superseded, not deleted.
+    const historical = brain.handle.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(first.id) as { valid_to: string | null }
+    expect(historical.valid_to).not.toBeNull()
+
+    // Only the new row is reachable through the normal read paths.
+    expect(store.read(scope.id, first.path)?.document.id).toBe(next.id)
+    expect(store.list({ scopeId: scope.id })).toHaveLength(1)
+    expect(store.list({ scopeId: scope.id, includeSuperseded: true })).toHaveLength(2)
+  })
+
+  it('supersede lets a superseded row and its replacement coexist at the same path', () => {
+    const { brain, scope, store } = createStore()
+    store.upsert(documentInput(scope.id))
+
+    expect(() => store.supersede(documentInput(scope.id, { contentHash: 'hash-2', updatedAt: '2026-09-05T10:00:00.000Z' })))
+      .not.toThrow()
+
+    const rows = brain.handle.prepare('SELECT id, valid_to FROM knowledge_documents WHERE scope_id = ? AND path = ?')
+      .all(scope.id, 'people/yasir.md') as Array<{ id: string; valid_to: string | null }>
+    expect(rows).toHaveLength(2)
+    expect(rows.filter(row => row.valid_to === null)).toHaveLength(1)
+  })
+
   it('rolls back all three tables when an upsert violates the scope foreign key', () => {
     const { brain, store } = createStore()
 

@@ -94,3 +94,44 @@ export interface VaultImportReport {
   failures: Array<{ path: string; reason: string }>
   durationMs: number
 }
+
+/**
+ * The write gate. `explicit-user` proposals bypass this table entirely (the
+ * user said it themselves, so it supersedes straight into `knowledge_documents`);
+ * `machine-inferred` ones sit here as `pending` until a human decides.
+ */
+export type CandidateOrigin = 'explicit-user' | 'machine-inferred'
+export type CandidateStatus = 'pending' | 'accepted' | 'rejected'
+
+export interface KnowledgeCandidate {
+  id: string
+  scopeId: string
+  /** Null means "new document" — a path is assigned on accept. */
+  targetPath: string | null
+  type: KnowledgeDocType
+  title: string
+  summary: string
+  body: string
+  origin: CandidateOrigin
+  sessionRef: string
+  status: CandidateStatus
+  createdAt: string
+  decidedAt: string | null
+}
+
+export interface ProposeCandidateInput {
+  scopeId: string
+  targetPath?: string | null
+  type: KnowledgeDocType
+  title: string
+  summary: string
+  body: string
+  origin: CandidateOrigin
+  sessionRef: string
+}
+
+export interface DecideCandidateInput {
+  id: string
+  decision: 'accept' | 'reject'
+  editedBody?: string
+}

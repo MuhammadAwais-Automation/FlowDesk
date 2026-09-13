@@ -28,7 +28,7 @@ import type {
 } from '../../src/types/brain'
 
 /** SQLite schema version (`PRAGMA user_version`), not the backup archive's. */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 const TABLES = [
   'scopes', 'scope_links', 'memories', 'memory_revisions', 'memory_candidates',
@@ -38,7 +38,7 @@ const TABLES = [
   'agent_continuations', 'outbox_events', 'consents', 'audit_events',
   'vault_conflicts', 'processing_cache', 'schema_migrations',
   'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
-  'knowledge_documents', 'knowledge_fts', 'knowledge_links',
+  'knowledge_documents', 'knowledge_fts', 'knowledge_links', 'knowledge_candidates',
 ] as const
 
 type SqlRow = Record<string, unknown>
@@ -171,8 +171,19 @@ export class BrainDatabase {
     this.db = new DatabaseSync(databasePath)
     try {
       this.db.exec('PRAGMA journal_mode=WAL')
-      this.db.exec('PRAGMA foreign_keys=ON')
+      // node:sqlite defaults foreign_keys=ON (unlike the sqlite3 CLI/library
+      // default of OFF) -- confirmed by DROP TABLE cascade-deleting a
+      // referencing row even with no explicit PRAGMA. That's fatal for the
+      // v4 migration, which rebuilds knowledge_documents (dropping the old
+      // table so the new one can be renamed into its place, since ALTER
+      // TABLE can't drop the inline UNIQUE a partial index needs to replace)
+      // while knowledge_links still references it: ON DELETE CASCADE would
+      // wipe every link row the moment the old table is dropped. So foreign
+      // keys stay off for the migration transaction and turn on afterward,
+      // for normal runtime operation.
+      this.db.exec('PRAGMA foreign_keys=OFF')
       this.migrate()
+      this.db.exec('PRAGMA foreign_keys=ON')
     } catch (error) {
       // Opening a file that is not a SQLite database (a truncated or corrupt
       // one inside a backup archive, say) throws here — with the handle already
@@ -187,8 +198,49 @@ export class BrainDatabase {
   private migrate() {
     const current = Number((this.db.prepare('PRAGMA user_version').get() as SqlRow).user_version ?? 0)
     if (current >= SCHEMA_VERSION) return
+
+    // v3 created knowledge_documents with an inline UNIQUE(scope_id, path),
+    // which blocks the v4 supersession model (an active row plus a
+    // superseded one for the same path). Detected before the transaction
+    // starts, because the CREATE TABLE IF NOT EXISTS below is a no-op once
+    // the table already exists in its old shape.
+    const existingKnowledgeDocumentsDdl = (this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_documents'",
+    ).get() as { sql?: string } | undefined)?.sql
+    const needsKnowledgeDocumentsRebuild = existingKnowledgeDocumentsDdl?.includes('UNIQUE(scope_id, path)') ?? false
+
     this.db.exec('BEGIN IMMEDIATE')
     try {
+      if (needsKnowledgeDocumentsRebuild) {
+        // Renaming the live `knowledge_documents` table would make SQLite
+        // rewrite `knowledge_links`' REFERENCES clause to follow it to the
+        // new name -- and then dropping the renamed table leaves that clause
+        // pointing at nothing. So the replacement table is built and filled
+        // under a scratch name first, and swapped into place last: the name
+        // `knowledge_links` actually references only ever holds the old
+        // table (until this transaction commits) or the new one, never a
+        // renamed-away one.
+        this.db.exec(`
+          CREATE TABLE knowledge_documents_v4 (
+            id TEXT PRIMARY KEY, path TEXT NOT NULL, scope_id TEXT NOT NULL REFERENCES scopes(id),
+            type TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+            content_hash TEXT NOT NULL, byte_size INTEGER NOT NULL DEFAULT 0,
+            origin TEXT NOT NULL DEFAULT 'curated',
+            valid_from TEXT NOT NULL, valid_to TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+          );
+          INSERT INTO knowledge_documents_v4 (
+            id, path, scope_id, type, title, summary, content_hash, byte_size,
+            origin, valid_from, valid_to, created_at, updated_at
+          )
+          SELECT
+            id, path, scope_id, type, title, summary, content_hash, byte_size,
+            origin, valid_from, valid_to, created_at, updated_at
+          FROM knowledge_documents;
+          DROP TABLE knowledge_documents;
+          ALTER TABLE knowledge_documents_v4 RENAME TO knowledge_documents;
+        `)
+      }
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS scopes (
@@ -277,8 +329,11 @@ export class BrainDatabase {
           content_hash TEXT NOT NULL, byte_size INTEGER NOT NULL DEFAULT 0,
           origin TEXT NOT NULL DEFAULT 'curated',
           -- valid_to is how a document is superseded; nothing here is deleted.
+          -- Uniqueness on (scope_id, path) is enforced only for the active row
+          -- (see the partial index below), so a superseded row can keep the
+          -- same path as its replacement.
           valid_from TEXT NOT NULL, valid_to TEXT,
-          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(scope_id, path)
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(document_id UNINDEXED, title, summary, body, tokenize='unicode61');
         CREATE TABLE IF NOT EXISTS knowledge_links (
@@ -288,6 +343,27 @@ export class BrainDatabase {
           UNIQUE(document_id, target_path)
         );
         CREATE INDEX IF NOT EXISTS idx_knowledge_documents_scope_type ON knowledge_documents(scope_id, type, updated_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_knowledge_documents_active_path ON knowledge_documents(scope_id, path) WHERE valid_to IS NULL;
+
+        -- v4: the write gate. A proposed document write sits here until a
+        -- human accepts (promoting it into knowledge_documents, superseding
+        -- any existing active row at the same path) or rejects it. Explicit
+        -- user statements skip this table entirely -- see candidates.ts.
+        CREATE TABLE IF NOT EXISTS knowledge_candidates (
+          id TEXT PRIMARY KEY,
+          scope_id TEXT NOT NULL REFERENCES scopes(id),
+          target_path TEXT,
+          type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          body TEXT NOT NULL,
+          origin TEXT NOT NULL,
+          session_ref TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_at TEXT NOT NULL,
+          decided_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_candidates_scope_status ON knowledge_candidates(scope_id, status, created_at DESC);
       `)
       this.db.prepare('INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, now())
       this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)

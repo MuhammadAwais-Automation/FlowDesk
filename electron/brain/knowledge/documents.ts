@@ -114,6 +114,52 @@ export class DocumentStore implements DocumentStorePort {
     }
   }
 
+  supersede(input: UpsertDocumentInput): { previous: KnowledgeDocument | null; next: KnowledgeDocument } {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const existingRow = this.db.prepare(
+        'SELECT * FROM knowledge_documents WHERE scope_id = ? AND path = ? AND valid_to IS NULL',
+      ).get(input.scopeId, input.path) as SqlRow | undefined
+      const supersededAt = new Date().toISOString()
+      if (existingRow) {
+        this.db.prepare('UPDATE knowledge_documents SET valid_to = ? WHERE id = ?').run(supersededAt, String(existingRow.id))
+      }
+
+      const documentId = randomUUID()
+      this.db.prepare(`
+        INSERT INTO knowledge_documents(
+          id, path, scope_id, type, title, summary, content_hash, byte_size,
+          origin, valid_from, valid_to, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      `).run(
+        documentId, input.path, input.scopeId, input.type, input.title, input.summary,
+        input.contentHash, Buffer.byteLength(input.body, 'utf8'), input.origin,
+        supersededAt, supersededAt, input.updatedAt,
+      )
+      this.db.prepare('INSERT INTO knowledge_fts(document_id, title, summary, body) VALUES (?, ?, ?, ?)')
+        .run(documentId, input.title, input.summary, input.body)
+
+      const targetExists = this.db.prepare(`
+        SELECT 1 FROM knowledge_documents WHERE scope_id = ? AND path = ? AND valid_to IS NULL
+      `)
+      const insertLink = this.db.prepare(`
+        INSERT INTO knowledge_links(id, document_id, target_path, resolved)
+        VALUES (?, ?, ?, ?)
+      `)
+      for (const targetPath of new Set(input.links ?? [])) {
+        const resolved = targetExists.get(input.scopeId, targetPath) ? 1 : 0
+        insertLink.run(randomUUID(), documentId, targetPath, resolved)
+      }
+
+      const nextRow = this.db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(documentId) as SqlRow
+      this.db.exec('COMMIT')
+      return { previous: existingRow ? mapDocument(existingRow) : null, next: mapDocument(nextRow) }
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   list(input: ListDocumentsInput): KnowledgeDocument[] {
     const types = typeFilter(input.types, 'type')
     const active = input.includeSuperseded ? '' : ' AND valid_to IS NULL'

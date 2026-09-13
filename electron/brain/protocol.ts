@@ -124,6 +124,20 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     scopeId: id, vaultRoot: z.string().trim().min(1).max(4096),
     maxFileBytes: z.number().int().min(1).max(50_000_000).optional(),
   }).strict() }),
+  // The write gate (Phase 2). `explicit-user` proposals supersede straight
+  // into knowledge_documents; `machine-inferred` ones sit as a candidate
+  // until decideCandidate accepts or rejects them. Namespaced under
+  // `knowledge.` because `listCandidates`/`decideCandidate` above already
+  // name the older memory-candidate methods.
+  z.object({ ...requestBase, method: z.literal('knowledge.proposeCandidate'), payload: z.object({
+    scopeId: id, targetPath: knowledgePath.optional(), type: knowledgeDocType,
+    title: z.string().trim().min(1).max(200), summary: z.string().trim().max(500),
+    body: text, origin: z.enum(['explicit-user', 'machine-inferred']), sessionRef: text,
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.listCandidates'), payload: z.object({ scopeId: id }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.decideCandidate'), payload: z.object({
+    id, decision: z.enum(['accept', 'reject']), editedBody: text.optional(),
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('shutdown'), payload: z.object({}).strict() }),
 ])
 

@@ -46,6 +46,14 @@ export interface SearchDocumentsInput {
 export interface DocumentStorePort {
   /** Insert, or update in place when the content hash changed. */
   upsert(input: UpsertDocumentInput): KnowledgeDocument
+  /**
+   * Insert a new active document, retiring whatever was active at the same
+   * path rather than overwriting it. Unlike `upsert`, always creates a new
+   * row and a new id — the previous row's `valid_to` is set, not its title
+   * or body. Used by the write gate (candidates.ts) so an accepted proposal
+   * never destroys the version it's replacing.
+   */
+  supersede(input: UpsertDocumentInput): { previous: KnowledgeDocument | null; next: KnowledgeDocument }
   /** Ordered by type, then updatedAt descending — the manifest relies on this. */
   list(input: ListDocumentsInput): KnowledgeDocument[]
   read(scopeId: string, path: string): { document: KnowledgeDocument; body: string } | null

@@ -18,14 +18,95 @@ afterEach(() => {
 })
 
 describe('BrainDatabase', () => {
-  it('creates the complete v3 schema from an empty database', () => {
+  it('creates the complete v4 schema from an empty database', () => {
     const brain = createBrain()
-    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 3 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 4 })
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
       'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
-      'knowledge_documents', 'knowledge_fts', 'knowledge_links',
+      'knowledge_documents', 'knowledge_fts', 'knowledge_links', 'knowledge_candidates',
     ]))
     brain.close()
+  })
+
+  it('migrates a v3 database to v4, rebuilding knowledge_documents so a superseded row can coexist with its replacement', () => {
+    // v3 shipped knowledge_documents with an inline UNIQUE(scope_id, path),
+    // which blocks the v4 supersession model. Simulate a real v3 install
+    // (the exact DDL that version once created) rather than trusting the
+    // current code to reproduce its own bug.
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-v4-'))
+    roots.push(root)
+    const path = join(root, 'brain.sqlite')
+    const legacy = new DatabaseSync(path)
+    legacy.exec(`
+      PRAGMA user_version=3;
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE scopes (
+        id TEXT PRIMARY KEY, type TEXT NOT NULL, external_ref TEXT NOT NULL,
+        name TEXT NOT NULL, parent_id TEXT REFERENCES scopes(id), created_at TEXT NOT NULL,
+        UNIQUE(type, external_ref)
+      );
+      CREATE TABLE knowledge_documents (
+        id TEXT PRIMARY KEY, path TEXT NOT NULL, scope_id TEXT NOT NULL REFERENCES scopes(id),
+        type TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+        content_hash TEXT NOT NULL, byte_size INTEGER NOT NULL DEFAULT 0,
+        origin TEXT NOT NULL DEFAULT 'curated',
+        valid_from TEXT NOT NULL, valid_to TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(scope_id, path)
+      );
+      CREATE VIRTUAL TABLE knowledge_fts USING fts5(document_id UNINDEXED, title, summary, body, tokenize='unicode61');
+      CREATE TABLE knowledge_links (
+        id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+        target_path TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, UNIQUE(document_id, target_path)
+      );
+      INSERT INTO scopes VALUES ('client-v4', 'client', 'legacy-v4', 'Legacy V4', NULL, '2026-01-01T00:00:00.000Z');
+      INSERT INTO knowledge_documents VALUES (
+        'doc-v3', 'people/yasir.md', 'client-v4', 'person', 'Yasir Bhai', 'Client contact',
+        'hash-v3', 42, 'curated', '2026-08-01T00:00:00.000Z', NULL,
+        '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'
+      );
+      INSERT INTO knowledge_links VALUES ('link-v3', 'doc-v3', 'people/other.md', 0);
+    `)
+    legacy.close()
+
+    const migrated = new BrainDatabase(path)
+    expect(migrated.getStatus().schemaVersion).toBe(4)
+    expect(migrated.listSchemaTables()).toEqual(expect.arrayContaining(['knowledge_candidates']))
+
+    // The v3 row survived the rebuild with its id, and its link too.
+    const preserved = migrated.handle.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get('doc-v3') as { title: string; valid_to: string | null }
+    expect(preserved).toMatchObject({ title: 'Yasir Bhai', valid_to: null })
+    expect(migrated.handle.prepare('SELECT count(*) AS total FROM knowledge_links WHERE document_id = ?').get('doc-v3'))
+      .toMatchObject({ total: 1 })
+
+    // The old inline UNIQUE is gone: a second active row at the same path is
+    // now only prevented by the new partial index, and only while both are
+    // active. Superseding the row (old one retired, new one inserted) works.
+    migrated.handle.exec("UPDATE knowledge_documents SET valid_to = '2026-09-01T00:00:00.000Z' WHERE id = 'doc-v3'")
+    expect(() => migrated.handle.exec(`
+      INSERT INTO knowledge_documents VALUES (
+        'doc-v4', 'people/yasir.md', 'client-v4', 'person', 'Yasir Bhai (updated)', 'Client contact',
+        'hash-v4', 50, 'curated', '2026-09-01T00:00:00.000Z', NULL,
+        '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'
+      )
+    `)).not.toThrow()
+    const activeRows = migrated.handle.prepare(
+      "SELECT id FROM knowledge_documents WHERE scope_id = 'client-v4' AND path = 'people/yasir.md' AND valid_to IS NULL",
+    ).all()
+    expect(activeRows).toEqual([{ id: 'doc-v4' }])
+    expect(() => migrated.handle.exec(`
+      INSERT INTO knowledge_documents VALUES (
+        'doc-v4-dup', 'people/yasir.md', 'client-v4', 'person', 'Duplicate active row', 'Client contact',
+        'hash-v4-dup', 50, 'curated', '2026-09-01T00:00:00.000Z', NULL,
+        '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'
+      )
+    `)).toThrow(/UNIQUE constraint failed/)
+    migrated.close()
+
+    // Idempotent: reopening an already-v4 database changes nothing.
+    const reopened = new BrainDatabase(path)
+    expect(reopened.getStatus().schemaVersion).toBe(4)
+    expect(reopened.handle.prepare('SELECT count(*) AS total FROM knowledge_documents').get()).toMatchObject({ total: 2 })
+    reopened.close()
   })
 
   it('migrates a populated v2 database to v3 additively, keeping intelligence data intact', () => {
@@ -53,7 +134,7 @@ describe('BrainDatabase', () => {
     downgrade.close()
 
     const migrated = new BrainDatabase(path)
-    expect(migrated.getStatus().schemaVersion).toBe(3)
+    expect(migrated.getStatus().schemaVersion).toBe(4)
     expect(migrated.listSchemaTables()).toEqual(expect.arrayContaining([
       'knowledge_documents', 'knowledge_fts', 'knowledge_links',
     ]))
@@ -62,7 +143,7 @@ describe('BrainDatabase', () => {
 
     // Idempotent: reopening an already-v3 database changes nothing.
     const reopened = new BrainDatabase(path)
-    expect(reopened.getStatus().schemaVersion).toBe(3)
+    expect(reopened.getStatus().schemaVersion).toBe(4)
     expect(reopened.listOpportunities({ scopeId: scope.id })).toHaveLength(1)
     reopened.close()
   })
@@ -85,7 +166,7 @@ describe('BrainDatabase', () => {
     legacy.close()
 
     const brain = new BrainDatabase(path)
-    expect(brain.getStatus().schemaVersion).toBe(3)
+    expect(brain.getStatus().schemaVersion).toBe(4)
     expect(brain.listScopes(['client'])).toMatchObject([{ id: 'client-a', name: 'Legacy A' }])
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
       'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
@@ -116,14 +197,14 @@ describe('BrainDatabase', () => {
     partial.close()
 
     const first = new BrainDatabase(path)
-    expect(first.getStatus().schemaVersion).toBe(3)
+    expect(first.getStatus().schemaVersion).toBe(4)
     expect(first.listSchemaTables()).toEqual(expect.arrayContaining(['opportunity_evidence', 'monitors', 'source_metrics']))
     first.close()
     const versionCheck = new DatabaseSync(path)
-    expect((versionCheck.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3)
+    expect((versionCheck.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4)
     versionCheck.close()
     const reopened = new BrainDatabase(path)
-    expect(reopened.getStatus().schemaVersion).toBe(3)
+    expect(reopened.getStatus().schemaVersion).toBe(4)
     reopened.close()
   })
 
@@ -344,7 +425,7 @@ describe('BrainDatabase', () => {
 
   it('creates the complete v2 schema with WAL, foreign keys and FTS5', () => {
     const brain = createBrain()
-    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 3 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 4 })
     expect(brain.getJournalMode()).toBe('wal')
     expect(brain.getForeignKeysEnabled()).toBe(true)
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
@@ -366,7 +447,7 @@ describe('BrainDatabase', () => {
     partial.exec('CREATE TABLE scopes (id TEXT PRIMARY KEY, type TEXT NOT NULL, external_ref TEXT NOT NULL, name TEXT NOT NULL, parent_id TEXT REFERENCES scopes(id), created_at TEXT NOT NULL, UNIQUE(type, external_ref))')
     partial.close()
     const brain = new BrainDatabase(path)
-    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 3 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 4 })
     expect(brain.listSchemaTables()).toContain('jobs')
     brain.close()
   })
