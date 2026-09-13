@@ -8,6 +8,7 @@ import { ArtifactStore } from './artifactStore'
 import { socialRecipeDefinitions } from './recipeDefinitions'
 import { buildDecisionBrief } from './decisionBrief'
 import { MonitorScheduler, createMonitorSchedulerPort } from './scheduler'
+import { CandidateStore } from './knowledge/candidates'
 import { DocumentStore } from './knowledge/documents'
 import { ManifestBuilder } from './knowledge/manifest'
 import { VaultImporter } from './knowledge/vaultImporter'
@@ -24,6 +25,7 @@ export class BrainService {
   readonly documents: DocumentStore
   readonly manifest: ManifestBuilder
   readonly vaultImporter: VaultImporter
+  readonly candidates: CandidateStore
   private readonly maintenanceTimer: ReturnType<typeof setInterval>
   private readonly monitors: MonitorScheduler
 
@@ -34,6 +36,7 @@ export class BrainService {
     this.documents = new DocumentStore(this.database.handle)
     this.manifest = new ManifestBuilder(this.documents)
     this.vaultImporter = new VaultImporter(this.documents)
+    this.candidates = new CandidateStore(this.database.handle, this.documents)
     this.vault.reconcileAll()
     this.vault.start()
     this.database.registerRecipe({ id: 'notebooklm.research', version: 1, title: 'NotebookLM Research', steps: ['capture', 'normalize', 'summarize'] })
@@ -201,13 +204,9 @@ export class BrainService {
       case 'knowledge.search': return this.documents.search(request.payload)
       case 'knowledge.list': return this.documents.list(request.payload)
       case 'knowledge.importVault': return this.vaultImporter.import(request.payload)
-      // Stubs: candidates.ts (the CandidateStore) is a separate work package.
-      // These three keep the schema's protocol entries exhaustive and the
-      // build green until that package replaces them.
-      case 'knowledge.proposeCandidate':
-      case 'knowledge.listCandidates':
-      case 'knowledge.decideCandidate':
-        throw new Error('knowledge write gate not yet implemented')
+      case 'knowledge.proposeCandidate': return this.candidates.propose(request.payload)
+      case 'knowledge.listCandidates': return this.candidates.list(request.payload.scopeId)
+      case 'knowledge.decideCandidate': return this.candidates.decide(request.payload)
       case 'shutdown': {
         this.close()
         return { closed: true }
