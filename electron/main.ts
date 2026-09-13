@@ -12,6 +12,7 @@ import { configureBrainTools } from './agent/brainTools'
 import { brainModePolicy, normalizeAgentBrainMode } from './agent/brainMode'
 import { buildContinuationPrompt, planContinuationTurns } from './agent/continuations'
 import { withAgentAbortSlot } from './agent/agentRunAbortSlot'
+import { captureSessionTurns } from './agent/sessionCapture'
 
 // Initializes Crashpad so Windows dev runs are less likely to log "not connected" (harmless Chromium noise otherwise).
 crashReporter.start({ productName: 'FlowDesk', uploadToServer: false })
@@ -1752,6 +1753,18 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
       characterCount: assistantTurn.content.length,
       createdAt: assistantTurn.createdAt,
     }).catch(error => console.log(`[FlowDesk brain] turn reference unavailable: ${error instanceof Error ? error.message : String(error)}`))
+    // Write gate (Brain v2 Phase 2): propose this turn's text as knowledge
+    // candidates. Explicit-user text supersedes straight in; the assistant's
+    // reply sits in the review queue. Best-effort — capture failures must
+    // never break the turn, so sessionCapture swallows its own errors.
+    await captureSessionTurns({
+      scopeId: sessionBrainScope.id,
+      userText: userTurn.content,
+      userSessionRef: `agent-session://${sessionId}/${userTurn.id}`,
+      assistantText: assistantTurn.content,
+      assistantSessionRef: `agent-session://${sessionId}/${assistantTurn.id}`,
+      brainRequest,
+    })
   }
   // Advanced only after the turn completed: an aborted run must not mark
   // a provider as caught up on turns it never actually received.
