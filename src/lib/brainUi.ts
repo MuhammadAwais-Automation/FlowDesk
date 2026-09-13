@@ -1,4 +1,4 @@
-export const BRAIN_TABS = ['Overview', 'Ask Brain', 'Memories', 'Review Inbox', 'People & Organizations', 'Decisions & Goals', 'Opportunities', 'Timeline', 'Graph', 'Jobs', 'Vault', 'Settings'] as const
+export const BRAIN_TABS = ['Overview', 'Ask Brain', 'Memories', 'Review Inbox', 'Knowledge', 'People & Organizations', 'Decisions & Goals', 'Opportunities', 'Timeline', 'Graph', 'Jobs', 'Vault', 'Settings'] as const
 export const INTELLIGENCE_TABS = ['Overview', 'Sources', 'Monitors', 'Pain Points', 'Trends', 'Opportunities', 'Decision Briefs'] as const
 
 /**

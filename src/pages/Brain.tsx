@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Ban, BrainCircuit, Check, Database, FileText, GitBranch, RotateCcw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Ban, BrainCircuit, Check, Database, FileText, FolderOpen, GitBranch, Library, RotateCcw, Search, ShieldCheck, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
 import { BRAIN_TABS } from '@/lib/brainUi'
 import type { BrainCandidate, BrainContextPack, BrainJob, BrainMemory, BrainOpportunity, BrainScope, BrainStatus, MemoryKind } from '@/types/brain'
-import type { KnowledgeCandidate } from '@/types/brainKnowledge'
+import { KNOWLEDGE_DOC_TYPES } from '@/types/brainKnowledge'
+import type { CompactionReport, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, VaultImportReport } from '@/types/brainKnowledge'
 
 const api = window.electronAPI
 
@@ -39,11 +40,28 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const [vaultConflicts, setVaultConflicts] = useState<Array<Record<string, unknown>>>([])
   const [graph, setGraph] = useState<{ nodes: Array<{ id: string; type: string; name: string }>; edges: Array<{ id: string; from: string; to: string; relation: string; confidence: number; sourceRef: string }> }>({ nodes: [], edges: [] })
   const [artifact, setArtifact] = useState<Record<string, unknown> | null>(null)
+  const [knowledgeVaultRoot, setKnowledgeVaultRoot] = useState<string | null>(null)
+  const [knowledgeImportReport, setKnowledgeImportReport] = useState<VaultImportReport | null>(null)
+  const [knowledgeImporting, setKnowledgeImporting] = useState(false)
+  const [knowledgeQuery, setKnowledgeQuery] = useState('')
+  const [knowledgeTypeFilter, setKnowledgeTypeFilter] = useState<KnowledgeDocType | ''>('')
+  const [knowledgeSearchHits, setKnowledgeSearchHits] = useState<DocumentSearchHit[] | null>(null)
+  const [knowledgeList, setKnowledgeList] = useState<KnowledgeDocument[]>([])
+  const [knowledgeBusy, setKnowledgeBusy] = useState(false)
+  const [knowledgeSelected, setKnowledgeSelected] = useState<DocumentReadResult | null>(null)
+  const [knowledgeManifest, setKnowledgeManifest] = useState<ManifestRender | null>(null)
+  const [knowledgeCompactReport, setKnowledgeCompactReport] = useState<CompactionReport | null>(null)
+  const [knowledgeCompacting, setKnowledgeCompacting] = useState(false)
   const selectedScopeId = useRef<string | null>(null)
   selectedScopeId.current = scope?.id ?? null
   const searchRequest = useRef(0)
   const artifactRequest = useRef(0)
   const vaultRequest = useRef(0)
+  const knowledgeSearchRequest = useRef(0)
+  const knowledgeReadRequest = useRef(0)
+  const knowledgeManifestRequest = useRef(0)
+  const knowledgeImportRequest = useRef(0)
+  const knowledgeCompactRequest = useRef(0)
 
   const refresh = useCallback(async (activeScope: BrainScope) => {
     const [nextStatus, nextOverview, nextMemories, nextCandidates, nextJobs, nextOpportunities, nextKnowledgeCandidates] = await Promise.all([
@@ -82,6 +100,19 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     void api.brainGetGraph(scope.id).then(nextGraph => {
       if (active) setGraph(nextGraph)
     }).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))
+    return () => { active = false }
+  }, [scope, tab])
+
+  useEffect(() => {
+    void api.brainGetVaultRoot().then(setKnowledgeVaultRoot)
+  }, [])
+
+  useEffect(() => {
+    if (!scope || tab !== 'Knowledge') return
+    let active = true
+    void api.brainKnowledgeList({ scopeId: scope.id, limit: 200 }).then(docs => {
+      if (active) setKnowledgeList(docs)
+    })
     return () => { active = false }
   }, [scope, tab])
 
@@ -147,6 +178,72 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     await refresh(scope)
   }
 
+  async function chooseVaultFolder() {
+    const chosen = await api.brainChooseVaultFolder()
+    if (chosen) setKnowledgeVaultRoot(chosen)
+  }
+
+  async function importVault() {
+    if (!scope || !knowledgeVaultRoot || selectedScopeId.current !== scope.id) return
+    const request = ++knowledgeImportRequest.current
+    const isCurrent = () => selectedScopeId.current === scope.id && request === knowledgeImportRequest.current
+    setKnowledgeImporting(true)
+    try {
+      const report = await api.brainKnowledgeImportVault({ scopeId: scope.id, vaultRoot: knowledgeVaultRoot })
+      if (isCurrent()) setKnowledgeImportReport(report)
+      const docs = await api.brainKnowledgeList({ scopeId: scope.id, limit: 200 })
+      if (isCurrent()) setKnowledgeList(docs)
+    } finally {
+      if (isCurrent()) setKnowledgeImporting(false)
+    }
+  }
+
+  async function searchKnowledge() {
+    if (!scope) return
+    const request = ++knowledgeSearchRequest.current
+    const isCurrent = () => selectedScopeId.current === scope.id && request === knowledgeSearchRequest.current
+    setKnowledgeBusy(true)
+    try {
+      const types = knowledgeTypeFilter ? [knowledgeTypeFilter] : undefined
+      if (knowledgeQuery.trim()) {
+        const hits = await api.brainKnowledgeSearch({ scopeId: scope.id, query: knowledgeQuery.trim(), types, limit: 20 })
+        if (isCurrent()) setKnowledgeSearchHits(hits)
+      } else {
+        const docs = await api.brainKnowledgeList({ scopeId: scope.id, types, limit: 200 })
+        if (isCurrent()) { setKnowledgeList(docs); setKnowledgeSearchHits(null) }
+      }
+    } finally {
+      if (isCurrent()) setKnowledgeBusy(false)
+    }
+  }
+
+  async function readKnowledgeDocument(path: string) {
+    if (!scope) return
+    const request = ++knowledgeReadRequest.current
+    const document = await api.brainKnowledgeRead({ scopeId: scope.id, path })
+    if (selectedScopeId.current === scope.id && request === knowledgeReadRequest.current) setKnowledgeSelected(document)
+  }
+
+  async function loadKnowledgeManifest() {
+    if (!scope) return
+    const request = ++knowledgeManifestRequest.current
+    const manifest = await api.brainKnowledgeManifest({ scopeId: scope.id })
+    if (selectedScopeId.current === scope.id && request === knowledgeManifestRequest.current) setKnowledgeManifest(manifest)
+  }
+
+  async function runCompaction() {
+    if (!scope || selectedScopeId.current !== scope.id) return
+    const request = ++knowledgeCompactRequest.current
+    const isCurrent = () => selectedScopeId.current === scope.id && request === knowledgeCompactRequest.current
+    setKnowledgeCompacting(true)
+    try {
+      const report = await api.brainKnowledgeCompact({ scopeId: scope.id })
+      if (isCurrent()) setKnowledgeCompactReport(report)
+    } finally {
+      if (isCurrent()) setKnowledgeCompacting(false)
+    }
+  }
+
   const metricCards = [
     ['Accepted memories', overview.memories], ['Review inbox', overview.candidates],
     ['Durable jobs', overview.jobs], ['Active jobs', overview.activeJobs],
@@ -194,6 +291,76 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
           {knowledgeCandidates.map(candidate => <Card key={candidate.id}><div className="flex items-start gap-3"><div className="flex-1"><p className="text-xs text-stone-500"><span className="mr-2 rounded-full bg-blue-100 px-2 py-0.5 font-semibold text-blue-700">Knowledge</span>{candidate.origin} · {candidate.type}</p><p className="mt-1 text-sm font-medium">{candidate.title}</p><p className="mt-1 text-sm text-stone-600">{candidate.body}</p></div><button onClick={() => void reviewKnowledge(candidate.id, 'accept')} className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Check size={16} /></button><button onClick={() => void reviewKnowledge(candidate.id, 'reject')} className="rounded-lg bg-red-100 p-2 text-red-700"><X size={16} /></button></div></Card>)}
         </div>}
 
+        {tab === 'Knowledge' && <div className="space-y-4">
+          <Card>
+            <h2 className="flex items-center gap-2 font-semibold"><FolderOpen size={17} /> Vault import</h2>
+            <p className="mt-2 break-all text-sm text-stone-500">{knowledgeVaultRoot ?? 'Koi vault folder select nahi hua'}</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button onClick={() => void chooseVaultFolder()} className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">Choose folder…</button>
+              <button onClick={() => void importVault()} disabled={!knowledgeVaultRoot || knowledgeImporting} className="flex items-center gap-1 rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><Upload size={14} /> {knowledgeImporting ? 'Importing…' : 'Import now'}</button>
+            </div>
+            {knowledgeImportReport && <p className="mt-3 text-xs text-stone-600">Scanned {knowledgeImportReport.scanned} · Imported {knowledgeImportReport.imported} · Updated {knowledgeImportReport.updated} · Unchanged {knowledgeImportReport.unchanged} · Skipped {knowledgeImportReport.skipped}{knowledgeImportReport.failures.length > 0 && ` · ${knowledgeImportReport.failures.length} failures`}</p>}
+          </Card>
+
+          <Card>
+            <h2 className="flex items-center gap-2 font-semibold"><Library size={17} /> Document library</h2>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <input value={knowledgeQuery} onChange={event => setKnowledgeQuery(event.target.value)} onKeyDown={event => event.key === 'Enter' && void searchKnowledge()} placeholder="Search knowledge documents…" className="min-w-0 flex-1 rounded-xl border border-stone-300 px-4 py-2 text-sm outline-none focus:border-amber-500" />
+              <select value={knowledgeTypeFilter} onChange={event => setKnowledgeTypeFilter(event.target.value as KnowledgeDocType | '')} className="rounded-xl border border-stone-300 px-3 py-2 text-sm">
+                <option value="">All types</option>
+                {KNOWLEDGE_DOC_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+              </select>
+              <button onClick={() => void searchKnowledge()} disabled={knowledgeBusy} className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white"><Search size={16} /></button>
+            </div>
+            <div className="mt-3 space-y-2">
+              {(knowledgeSearchHits ?? knowledgeList).length === 0 && <p className="text-sm text-stone-500">{knowledgeBusy ? 'Load ho raha hai…' : 'Koi document nahi mila. Pehle vault import karein.'}</p>}
+              {knowledgeSearchHits?.map(hit => <button key={hit.path} onClick={() => void readKnowledgeDocument(hit.path)} className="block w-full rounded-lg bg-stone-50 p-3 text-left hover:bg-stone-100">
+                <p className="text-xs text-stone-500">{hit.type} · {hit.path}</p>
+                <p className="mt-1 text-sm font-medium">{hit.title}</p>
+                <p className="mt-1 text-xs text-stone-600">{hit.snippet}</p>
+              </button>)}
+              {!knowledgeSearchHits && knowledgeList.map(document => <button key={document.id} onClick={() => void readKnowledgeDocument(document.path)} className="block w-full rounded-lg bg-stone-50 p-3 text-left hover:bg-stone-100">
+                <p className="text-xs text-stone-500">{document.type} · {document.path}</p>
+                <p className="mt-1 text-sm font-medium">{document.title}</p>
+                {document.summary && <p className="mt-1 text-xs text-stone-600">{document.summary}</p>}
+              </button>)}
+            </div>
+          </Card>
+
+          {knowledgeSelected && <Card>
+            <div className="flex items-center justify-between"><h2 className="font-semibold">{knowledgeSelected.title}</h2><button onClick={() => setKnowledgeSelected(null)}><X size={16} /></button></div>
+            <p className="mt-1 text-xs text-stone-500">{knowledgeSelected.type} · {knowledgeSelected.path} · updated {knowledgeSelected.updatedAt}</p>
+            <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-xs text-stone-700">{knowledgeSelected.text}</pre>
+          </Card>}
+
+          <Card>
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold">Manifest — agent ko yeh dikhta hai</h2>
+              <button onClick={() => void loadKnowledgeManifest()} className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">Load manifest</button>
+            </div>
+            {knowledgeManifest && <>
+              <p className="mt-2 text-xs text-stone-500">{knowledgeManifest.entryCount} entries · ~{knowledgeManifest.estimatedTokens} tokens{knowledgeManifest.truncated ? ' · truncated' : ''}</p>
+              <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-stone-600">{knowledgeManifest.text}</pre>
+            </>}
+          </Card>
+
+          <Card>
+            <div className="flex items-center justify-between">
+              <h2 className="flex items-center gap-2 font-semibold"><Sparkles size={17} /> Compaction</h2>
+              <button onClick={() => void runCompaction()} disabled={knowledgeCompacting} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{knowledgeCompacting ? 'Running…' : 'Run cleanup now'}</button>
+            </div>
+            {knowledgeCompactReport && <>
+              <p className="mt-2 text-xs text-stone-500">Scanned {knowledgeCompactReport.scanned} · Merged {knowledgeCompactReport.merged} · Left standalone {knowledgeCompactReport.leftStandalone}</p>
+              <div className="mt-3 space-y-2">
+                {knowledgeCompactReport.decisions.map(decision => <div key={decision.capturePath} className="rounded-lg bg-stone-50 p-3 text-xs">
+                  <p className="font-medium">{decision.capturePath}</p>
+                  <p className="mt-1 text-stone-500">{decision.outcome === 'merged' ? `→ merged into ${decision.targetPath}` : 'left standalone'} · top {decision.topScore?.toFixed(6) ?? '—'} · second {decision.secondScore?.toFixed(6) ?? '—'}</p>
+                </div>)}
+              </div>
+            </>}
+          </Card>
+        </div>}
+
         {tab === 'Opportunities' && <div className="space-y-3">{opportunities.length === 0 ? <Card><p className="text-sm text-stone-500">Is scope mein abhi koi cited opportunity nahi.</p></Card> : opportunities.map(opportunity => <Card key={opportunity.id}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs text-stone-500">{opportunity.category.replaceAll('_', ' ')} · {opportunity.status}</p><h2 className="mt-1 font-semibold">{opportunity.title}</h2><p className="mt-2 text-sm text-stone-600">{opportunity.summary}</p></div><div className="text-right"><p className="text-2xl font-bold text-amber-700">{Math.round(opportunity.score)}</p><p className="text-xs text-stone-500">{opportunity.evidenceCount} cited signals</p></div></div></Card>)}</div>}
 
         {tab === 'Jobs' && <div className="space-y-3">{jobs.length === 0 ? <Card><p className="text-sm text-stone-500">Abhi koi durable job nahi.</p></Card> : jobs.map(job => <Card key={job.id}><div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="font-semibold">{job.recipeId}</p><p className="truncate text-xs text-stone-500">{job.id}</p></div><div className="flex items-center gap-2"><span className="rounded-full bg-stone-100 px-3 py-1 text-xs">{job.status}</span><button title="Artifact manifest" onClick={() => void loadArtifact(job.id)} className="rounded-lg bg-blue-50 p-2 text-blue-700"><FileText size={15} /></button>{!['completed', 'failed', 'cancelled'].includes(job.status) && <button title="Cancel" onClick={async () => { await api.brainControlJob({ id: job.id, action: 'cancel' }); if (scope) await refresh(scope) }} className="rounded-lg bg-red-50 p-2 text-red-700"><Ban size={15} /></button>}{['failed', 'cancelled'].includes(job.status) && <button title="Retry" onClick={async () => { await api.brainControlJob({ id: job.id, action: 'retry' }); if (scope) await refresh(scope) }} className="rounded-lg bg-amber-50 p-2 text-amber-700"><RotateCcw size={15} /></button>}</div></div></Card>)}{artifact && <Card><div className="flex items-center justify-between"><h2 className="font-semibold">Artifact manifest</h2><button onClick={() => setArtifact(null)}><X size={16} /></button></div><pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs text-stone-600">{JSON.stringify(artifact, null, 2)}</pre></Card>}</div>}
@@ -204,7 +371,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
 
         {tab === 'Settings' && <Card><h2 className="font-semibold">Backup & portability</h2><p className="mt-2 text-sm text-stone-500">Export mein consistent SQLite snapshot aur curated vault hota hai. Credentials, cookies aur raw artifacts include nahi hote.</p><div className="mt-4 flex gap-2"><button onClick={() => void api.brainExportBackup()} className="rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white">Export backup</button><button onClick={() => void api.brainImportBackup()} className="rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold text-red-700">Import backup</button></div></Card>}
 
-        {!['Overview', 'Ask Brain', 'Memories', 'Review Inbox', 'Opportunities', 'Graph', 'Jobs', 'Vault', 'Settings'].includes(tab) && <Card><h2 className="font-semibold">{tab}</h2><p className="mt-2 text-sm text-stone-500">Yeh view Brain ke same scoped knowledge ledger se driven hai. Data available hone par curated items yahan appear honge; raw social messages graph mein auto-load nahi honge.</p></Card>}
+        {!['Overview', 'Ask Brain', 'Memories', 'Review Inbox', 'Knowledge', 'Opportunities', 'Graph', 'Jobs', 'Vault', 'Settings'].includes(tab) && <Card><h2 className="font-semibold">{tab}</h2><p className="mt-2 text-sm text-stone-500">Yeh view Brain ke same scoped knowledge ledger se driven hai. Data available hone par curated items yahan appear honge; raw social messages graph mein auto-load nahi honge.</p></Card>}
       </div>
     </div>
   )

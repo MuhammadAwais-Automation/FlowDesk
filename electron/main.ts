@@ -405,6 +405,7 @@ ipcMain.handle('brain:knowledgeImportVault', (_e, input: unknown) => brainReques
 ipcMain.handle('brain:knowledgeProposeCandidate', (_e, input: unknown) => brainRequest('knowledge.proposeCandidate', input))
 ipcMain.handle('brain:knowledgeListCandidates', (_e, input: unknown) => brainRequest('knowledge.listCandidates', input))
 ipcMain.handle('brain:knowledgeDecideCandidate', (_e, input: unknown) => brainRequest('knowledge.decideCandidate', input))
+ipcMain.handle('brain:knowledgeCompact', (_e, input: unknown) => brainRequest('knowledge.compact', input))
 ipcMain.handle('brain:getOpportunityEvidence', (_e, input: unknown) => brainRequest('getOpportunityEvidence', input))
 ipcMain.handle('brain:reviewOpportunity', (_e, input: unknown) => brainRequest('reviewOpportunity', input))
 ipcMain.handle('brain:buildDecisionBrief', (_e, input: unknown) => brainRequest('buildDecisionBrief', input))
@@ -1274,6 +1275,19 @@ function saveProjects(projects: ProjectSessionRecord[], activeProjectId: string 
   store.set('activeProjectId' as never, activeProjectId as never)
   return { projects, activeProjectId }
 }
+
+ipcMain.handle('brain:chooseVaultFolder', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openDirectory'],
+    title: 'Choose your knowledge vault folder',
+  })
+  if (result.canceled || !result.filePaths[0]) return null
+  const vaultRoot = result.filePaths[0]
+  store.set('brainVaultRoot' as never, vaultRoot as never)
+  return vaultRoot
+})
+
+ipcMain.handle('brain:getVaultRoot', () => (store.get('brainVaultRoot' as never) as string | undefined) ?? null)
 
 ipcMain.handle('project:list', () => projectSnapshot())
 

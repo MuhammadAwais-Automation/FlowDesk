@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { ComponentType } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BrainCandidate, BrainContextPack, BrainJob, BrainMemory, BrainScope } from '@/types/brain'
-import type { KnowledgeCandidate } from '@/types/brainKnowledge'
+import type { CompactionReport, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocument, VaultImportReport } from '@/types/brainKnowledge'
 import Intelligence from './Intelligence'
 
 const scopes: BrainScope[] = ['global', 'a', 'b'].map(id => ({
@@ -25,6 +25,21 @@ const knowledgeCandidate: KnowledgeCandidate = {
   title: 'Private knowledge candidate A', summary: '', body: 'Private knowledge body A',
   origin: 'machine-inferred', sessionRef: 'agent-session://s1/t1', status: 'pending',
   createdAt: scopes[0].createdAt, decidedAt: null,
+}
+const knowledgeDocument: KnowledgeDocument = {
+  id: 'doc-a', path: 'wiki/clients/private-a.md', scopeId: 'a', type: 'client',
+  title: 'Private client A', summary: 'Scoped document', contentHash: 'hash-a', byteSize: 10,
+  origin: 'curated', validFrom: scopes[0].createdAt, validTo: null,
+  createdAt: scopes[0].createdAt, updatedAt: scopes[0].createdAt,
+}
+const searchHit: DocumentSearchHit = {
+  path: 'wiki/clients/private-a.md', title: 'Private client A', type: 'client',
+  snippet: 'Private [match] A', score: 1, updatedAt: scopes[0].createdAt,
+}
+const importReport: VaultImportReport = { scanned: 5, imported: 3, updated: 1, unchanged: 1, skipped: 0, failures: [], durationMs: 12 }
+const compactionReport: CompactionReport = {
+  scanned: 2, merged: 1, leftStandalone: 1,
+  decisions: [{ capturePath: 'captures/x.md', outcome: 'merged', targetPath: 'wiki/clients/private-a.md', topScore: 0.5, secondScore: null }],
 }
 const job: BrainJob = {
   id: 'job-a', scopeId: 'a', recipeId: 'Private job A', recipeVersion: 1, accountId: null,
@@ -54,6 +69,9 @@ const api = {
   brainBuildDecisionBrief: vi.fn(), brainListSourceMetrics: vi.fn(), brainGetConsent: vi.fn(),
   brainListMonitors: vi.fn(), brainCreateMonitor: vi.fn(), brainSetMonitorStatus: vi.fn(), brainDeleteMonitor: vi.fn(),
   brainKnowledgeListCandidates: vi.fn(), brainKnowledgeDecideCandidate: vi.fn(),
+  brainGetVaultRoot: vi.fn(), brainChooseVaultFolder: vi.fn(), brainKnowledgeList: vi.fn(),
+  brainKnowledgeSearch: vi.fn(), brainKnowledgeRead: vi.fn(), brainKnowledgeManifest: vi.fn(),
+  brainKnowledgeImportVault: vi.fn(), brainKnowledgeCompact: vi.fn(),
 }
 let Brain: ComponentType
 
@@ -75,6 +93,8 @@ beforeEach(() => {
   api.brainListCandidates.mockImplementation(async (id: string) => id === 'a' ? [candidate] : [])
   api.brainKnowledgeListCandidates.mockImplementation(async ({ scopeId }: { scopeId: string }) => scopeId === 'a' ? [knowledgeCandidate] : [])
   api.brainKnowledgeDecideCandidate.mockResolvedValue({ candidate: { ...knowledgeCandidate, status: 'accepted' }, document: null })
+  api.brainGetVaultRoot.mockResolvedValue(null)
+  api.brainKnowledgeList.mockResolvedValue([])
   api.brainListJobs.mockResolvedValue([job])
   api.onBrainEvent.mockReturnValue(() => undefined)
   api.brainGetVaultStatus.mockResolvedValue({ root: 'vault', watching: true, conflicts: 1 })
@@ -134,8 +154,8 @@ describe('Brain scope transitions', () => {
     await waitFor(() => expect(screen.getByText('Private knowledge candidate A')).toBeTruthy())
     expect(screen.getByText('Private candidate A')).toBeTruthy()
     expect(screen.getByText('Memory')).toBeTruthy()
-    expect(screen.getByText('Knowledge')).toBeTruthy()
     const knowledgeCard = screen.getByText('Private knowledge candidate A').closest('section')!
+    expect(within(knowledgeCard).getByText('Knowledge')).toBeTruthy()
     const [acceptButton] = within(knowledgeCard).getAllByRole('button')
     fireEvent.click(acceptButton)
     await waitFor(() => expect(api.brainKnowledgeDecideCandidate).toHaveBeenCalledWith({ id: 'knowledge-candidate-a', decision: 'accept' }))
@@ -208,6 +228,65 @@ describe('Brain scope transitions', () => {
     switchScope()
     await act(async () => response.resolve([conflict]))
     expect(screen.queryByText('Private vault A')).toBeNull()
+  })
+
+  it('loads the knowledge document list only for the selected scope and discards a stale response after switching', async () => {
+    const response = deferred<KnowledgeDocument[]>()
+    api.brainKnowledgeList.mockReturnValueOnce(response.promise).mockResolvedValue([])
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
+    expect(api.brainKnowledgeList).toHaveBeenCalledWith({ scopeId: 'a', limit: 200 })
+    switchScope()
+    await act(async () => response.resolve([knowledgeDocument]))
+    expect(screen.queryByText('Private client A')).toBeNull()
+  })
+
+  it('searches knowledge documents and shows matching hits with their snippet', async () => {
+    api.brainKnowledgeSearch.mockResolvedValue([searchHit])
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
+    fireEvent.change(screen.getByPlaceholderText('Search knowledge documents…'), { target: { value: 'private' } })
+    fireEvent.keyDown(screen.getByPlaceholderText('Search knowledge documents…'), { key: 'Enter' })
+    await waitFor(() => expect(screen.getByText('Private client A')).toBeTruthy())
+    expect(api.brainKnowledgeSearch).toHaveBeenCalledWith({ scopeId: 'a', query: 'private', types: undefined, limit: 20 })
+    expect(screen.getByText('Private [match] A')).toBeTruthy()
+  })
+
+  it('reads a document on click and shows its full text', async () => {
+    api.brainKnowledgeList.mockResolvedValue([knowledgeDocument])
+    api.brainKnowledgeRead.mockResolvedValue({
+      path: knowledgeDocument.path, title: knowledgeDocument.title, type: 'client',
+      text: 'Full private body A', updatedAt: knowledgeDocument.updatedAt, estimatedTokens: 5, truncated: false,
+    })
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
+    await waitFor(() => expect(screen.getByText('Private client A')).toBeTruthy())
+    fireEvent.click(screen.getByText('Private client A'))
+    await waitFor(() => expect(screen.getByText('Full private body A')).toBeTruthy())
+    expect(api.brainKnowledgeRead).toHaveBeenCalledWith({ scopeId: 'a', path: knowledgeDocument.path })
+  })
+
+  it('shows a vault import report after Import now, scoped to the selected scope', async () => {
+    api.brainChooseVaultFolder.mockResolvedValue('E:/vault')
+    api.brainKnowledgeImportVault.mockResolvedValue(importReport)
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose folder…' }))
+    await waitFor(() => expect(screen.getByText('E:/vault')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Import now' }))
+    await waitFor(() => expect(api.brainKnowledgeImportVault).toHaveBeenCalledWith({ scopeId: 'a', vaultRoot: 'E:/vault' }))
+    await waitFor(() => expect(screen.getByText(/Scanned 5/)).toBeTruthy())
+  })
+
+  it('shows a compaction report with its per-capture decisions after Run cleanup now', async () => {
+    api.brainKnowledgeCompact.mockResolvedValue(compactionReport)
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Run cleanup now' }))
+    await waitFor(() => expect(api.brainKnowledgeCompact).toHaveBeenCalledWith({ scopeId: 'a' }))
+    await waitFor(() => expect(screen.getByText(/Merged 1/)).toBeTruthy())
+    expect(screen.getByText('captures/x.md')).toBeTruthy()
+    expect(screen.getByText(/merged into wiki\/clients\/private-a\.md/)).toBeTruthy()
   })
 })
 
