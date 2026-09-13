@@ -3,6 +3,7 @@ import { Ban, BrainCircuit, Check, Database, FileText, GitBranch, RotateCcw, Sea
 import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
 import { BRAIN_TABS } from '@/lib/brainUi'
 import type { BrainCandidate, BrainContextPack, BrainJob, BrainMemory, BrainOpportunity, BrainScope, BrainStatus, MemoryKind } from '@/types/brain'
+import type { KnowledgeCandidate } from '@/types/brainKnowledge'
 
 const api = window.electronAPI
 
@@ -25,6 +26,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const [overview, setOverview] = useState({ memories: 0, candidates: 0, jobs: 0, activeJobs: 0 })
   const [memories, setMemories] = useState<BrainMemory[]>([])
   const [candidates, setCandidates] = useState<BrainCandidate[]>([])
+  const [knowledgeCandidates, setKnowledgeCandidates] = useState<KnowledgeCandidate[]>([])
   const [jobs, setJobs] = useState<BrainJob[]>([])
   const [opportunities, setOpportunities] = useState<BrainOpportunity[]>([])
   const [query, setQuery] = useState('')
@@ -44,9 +46,10 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const vaultRequest = useRef(0)
 
   const refresh = useCallback(async (activeScope: BrainScope) => {
-    const [nextStatus, nextOverview, nextMemories, nextCandidates, nextJobs, nextOpportunities] = await Promise.all([
+    const [nextStatus, nextOverview, nextMemories, nextCandidates, nextJobs, nextOpportunities, nextKnowledgeCandidates] = await Promise.all([
       api.brainGetStatus(), api.brainGetOverview(activeScope.id), api.brainListMemories(activeScope.id),
       api.brainListCandidates(activeScope.id), api.brainListJobs(), api.brainListOpportunities({ scopeId: activeScope.id, limit: 100 }),
+      api.brainKnowledgeListCandidates({ scopeId: activeScope.id }),
     ])
     if (selectedScopeId.current !== activeScope.id) return
     setStatus(nextStatus)
@@ -55,6 +58,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     setCandidates(nextCandidates)
     setJobs(nextJobs.filter(job => job.scopeId === activeScope.id))
     setOpportunities(nextOpportunities)
+    setKnowledgeCandidates(nextKnowledgeCandidates)
   }, [])
 
   useEffect(() => {
@@ -137,6 +141,12 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     await refresh(scope)
   }
 
+  async function reviewKnowledge(id: string, decision: 'accept' | 'reject') {
+    if (!scope) return
+    await api.brainKnowledgeDecideCandidate({ id, decision })
+    await refresh(scope)
+  }
+
   const metricCards = [
     ['Accepted memories', overview.memories], ['Review inbox', overview.candidates],
     ['Durable jobs', overview.jobs], ['Active jobs', overview.activeJobs],
@@ -178,7 +188,11 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
           <div className="space-y-3">{memories.map(memory => <Card key={memory.id}><div className="flex gap-3"><Database size={17} className="mt-0.5 text-amber-600" /><div className="min-w-0 flex-1"><div className="flex gap-2 text-xs text-stone-500"><span>{memory.kind}</span><span>·</span><span>{memory.status}</span></div><p className="mt-1 text-sm">{memory.text}</p><p className="mt-2 truncate text-xs text-amber-700">{memory.sourceRef}</p></div><button title="Forget" onClick={async () => { await api.brainForget(memory.id); if (scope) await refresh(scope) }} className="text-stone-400 hover:text-red-600"><Trash2 size={16} /></button></div></Card>)}</div>
         </div>}
 
-        {tab === 'Review Inbox' && <div className="space-y-3">{candidates.length === 0 ? <Card><p className="text-sm text-stone-500">Review Inbox empty hai.</p></Card> : candidates.map(candidate => <Card key={candidate.id}><div className="flex items-start gap-3"><div className="flex-1"><p className="text-xs text-stone-500">{candidate.origin} · {candidate.kind}</p><p className="mt-1 text-sm">{candidate.text}</p></div><button onClick={() => void review(candidate.id, 'accept')} className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Check size={16} /></button><button onClick={() => void review(candidate.id, 'reject')} className="rounded-lg bg-red-100 p-2 text-red-700"><X size={16} /></button></div></Card>)}</div>}
+        {tab === 'Review Inbox' && <div className="space-y-3">
+          {candidates.length === 0 && knowledgeCandidates.length === 0 && <Card><p className="text-sm text-stone-500">Review Inbox empty hai.</p></Card>}
+          {candidates.map(candidate => <Card key={candidate.id}><div className="flex items-start gap-3"><div className="flex-1"><p className="text-xs text-stone-500"><span className="mr-2 rounded-full bg-stone-100 px-2 py-0.5 font-semibold text-stone-600">Memory</span>{candidate.origin} · {candidate.kind}</p><p className="mt-1 text-sm">{candidate.text}</p></div><button onClick={() => void review(candidate.id, 'accept')} className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Check size={16} /></button><button onClick={() => void review(candidate.id, 'reject')} className="rounded-lg bg-red-100 p-2 text-red-700"><X size={16} /></button></div></Card>)}
+          {knowledgeCandidates.map(candidate => <Card key={candidate.id}><div className="flex items-start gap-3"><div className="flex-1"><p className="text-xs text-stone-500"><span className="mr-2 rounded-full bg-blue-100 px-2 py-0.5 font-semibold text-blue-700">Knowledge</span>{candidate.origin} · {candidate.type}</p><p className="mt-1 text-sm font-medium">{candidate.title}</p><p className="mt-1 text-sm text-stone-600">{candidate.body}</p></div><button onClick={() => void reviewKnowledge(candidate.id, 'accept')} className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><Check size={16} /></button><button onClick={() => void reviewKnowledge(candidate.id, 'reject')} className="rounded-lg bg-red-100 p-2 text-red-700"><X size={16} /></button></div></Card>)}
+        </div>}
 
         {tab === 'Opportunities' && <div className="space-y-3">{opportunities.length === 0 ? <Card><p className="text-sm text-stone-500">Is scope mein abhi koi cited opportunity nahi.</p></Card> : opportunities.map(opportunity => <Card key={opportunity.id}><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs text-stone-500">{opportunity.category.replaceAll('_', ' ')} · {opportunity.status}</p><h2 className="mt-1 font-semibold">{opportunity.title}</h2><p className="mt-2 text-sm text-stone-600">{opportunity.summary}</p></div><div className="text-right"><p className="text-2xl font-bold text-amber-700">{Math.round(opportunity.score)}</p><p className="text-xs text-stone-500">{opportunity.evidenceCount} cited signals</p></div></div></Card>)}</div>}
 
