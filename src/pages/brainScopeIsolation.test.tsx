@@ -1,9 +1,10 @@
 /** @vitest-environment jsdom */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BrainCandidate, BrainContextPack, BrainJob, BrainMemory, BrainScope } from '@/types/brain'
+import type { KnowledgeCandidate } from '@/types/brainKnowledge'
 import Intelligence from './Intelligence'
 
 const scopes: BrainScope[] = ['global', 'a', 'b'].map(id => ({
@@ -18,6 +19,12 @@ const memory: BrainMemory = {
 const candidate: BrainCandidate = {
   id: 'candidate-a', scopeId: 'a', kind: 'fact', text: 'Private candidate A',
   status: 'candidate', origin: 'external', createdAt: scopes[0].createdAt,
+}
+const knowledgeCandidate: KnowledgeCandidate = {
+  id: 'knowledge-candidate-a', scopeId: 'a', targetPath: null, type: 'note',
+  title: 'Private knowledge candidate A', summary: '', body: 'Private knowledge body A',
+  origin: 'machine-inferred', sessionRef: 'agent-session://s1/t1', status: 'pending',
+  createdAt: scopes[0].createdAt, decidedAt: null,
 }
 const job: BrainJob = {
   id: 'job-a', scopeId: 'a', recipeId: 'Private job A', recipeVersion: 1, accountId: null,
@@ -46,6 +53,7 @@ const api = {
   brainListOpportunities: vi.fn(), brainCountOpportunities: vi.fn(), brainGetOpportunityEvidence: vi.fn(), brainReviewOpportunity: vi.fn(),
   brainBuildDecisionBrief: vi.fn(), brainListSourceMetrics: vi.fn(), brainGetConsent: vi.fn(),
   brainListMonitors: vi.fn(), brainCreateMonitor: vi.fn(), brainSetMonitorStatus: vi.fn(), brainDeleteMonitor: vi.fn(),
+  brainKnowledgeListCandidates: vi.fn(), brainKnowledgeDecideCandidate: vi.fn(),
 }
 let Brain: ComponentType
 
@@ -65,6 +73,8 @@ beforeEach(() => {
   api.brainGetOverview.mockResolvedValue({ memories: 1, candidates: 1, jobs: 1, activeJobs: 1 })
   api.brainListMemories.mockImplementation(async (id: string) => id === 'a' ? [memory] : [])
   api.brainListCandidates.mockImplementation(async (id: string) => id === 'a' ? [candidate] : [])
+  api.brainKnowledgeListCandidates.mockImplementation(async ({ scopeId }: { scopeId: string }) => scopeId === 'a' ? [knowledgeCandidate] : [])
+  api.brainKnowledgeDecideCandidate.mockResolvedValue({ candidate: { ...knowledgeCandidate, status: 'accepted' }, document: null })
   api.brainListJobs.mockResolvedValue([job])
   api.onBrainEvent.mockReturnValue(() => undefined)
   api.brainGetVaultStatus.mockResolvedValue({ root: 'vault', watching: true, conflicts: 1 })
@@ -116,6 +126,19 @@ describe('Brain scope transitions', () => {
     await act(async () => refresh.reject(new Error('Refresh unavailable')))
     expect(screen.queryByText(text)).toBeNull()
     expect(screen.getByText('Refresh unavailable')).toBeTruthy()
+  })
+
+  it('shows knowledge candidates alongside memory candidates in Review Inbox, tagged by system, and accepts via the knowledge decide call', async () => {
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Review Inbox' }))
+    await waitFor(() => expect(screen.getByText('Private knowledge candidate A')).toBeTruthy())
+    expect(screen.getByText('Private candidate A')).toBeTruthy()
+    expect(screen.getByText('Memory')).toBeTruthy()
+    expect(screen.getByText('Knowledge')).toBeTruthy()
+    const knowledgeCard = screen.getByText('Private knowledge candidate A').closest('section')!
+    const [acceptButton] = within(knowledgeCard).getAllByRole('button')
+    fireEvent.click(acceptButton)
+    await waitFor(() => expect(api.brainKnowledgeDecideCandidate).toHaveBeenCalledWith({ id: 'knowledge-candidate-a', decision: 'accept' }))
   })
 
   it('does not restore an answer from the previous scope', async () => {

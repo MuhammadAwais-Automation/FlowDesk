@@ -1,7 +1,7 @@
 import type { CustomTool } from './browser'
 import type { ProjectSessionSnapshot } from './project'
 import type { BrainCandidate, BrainContextPack, BrainDecisionBrief, BrainJob, BrainMemory, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainQuery, BrainScope, BrainScopeQuery, BrainSourceMetric, BrainStatus, MemoryKind, OpportunityEvidence } from './brain'
-import type { DocumentReadResult, DocumentSearchHit, KnowledgeDocType, KnowledgeDocument, ManifestRender, VaultImportReport } from './brainKnowledge'
+import type { DecideCandidateInput, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, ProposeCandidateInput, VaultImportReport } from './brainKnowledge'
 
 export interface GmailSession {
   email: string
@@ -194,6 +194,14 @@ export interface ElectronAPI {
   brainKnowledgeSearch: (input: { scopeId: string; query: string; types?: KnowledgeDocType[]; limit?: number }) => Promise<DocumentSearchHit[]>
   brainKnowledgeList: (input: { scopeId: string; types?: KnowledgeDocType[]; limit?: number }) => Promise<KnowledgeDocument[]>
   brainKnowledgeImportVault: (input: { scopeId: string; vaultRoot: string; maxFileBytes?: number }) => Promise<VaultImportReport>
+  // NOTE: P2-A's real candidates.ts is still landing in parallel (its service.ts
+  // case arms currently throw). propose's return shape isn't confirmed yet —
+  // the plan says it's either the KnowledgeCandidate (machine-inferred, pending)
+  // or the resulting KnowledgeDocument (explicit-user, superseded immediately) —
+  // narrow this once candidates.ts lands rather than guessing the discriminant.
+  brainKnowledgeProposeCandidate: (input: ProposeCandidateInput) => Promise<KnowledgeCandidate | KnowledgeDocument>
+  brainKnowledgeListCandidates: (input: { scopeId: string }) => Promise<KnowledgeCandidate[]>
+  brainKnowledgeDecideCandidate: (input: DecideCandidateInput) => Promise<{ candidate: KnowledgeCandidate; document: KnowledgeDocument | null }>
   brainGetOpportunityEvidence: (input: { id: string; scopeId: string }) => Promise<OpportunityEvidence[]>
   brainReviewOpportunity: (input: { id: string; scopeId: string; decision: 'qualify' | 'dismiss' | 'convert' }) => Promise<BrainOpportunity>
   brainBuildDecisionBrief: (input: { scopeId: string; question: string; tokenBudget?: number }) => Promise<BrainDecisionBrief>
