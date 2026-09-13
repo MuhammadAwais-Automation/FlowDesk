@@ -182,7 +182,22 @@ export class BrainService {
         return this.artifacts.ingestBatch({ ...request.payload, accountId: request.payload.accountId ?? null })
       }
       case 'knowledge.manifest': return this.manifest.build(request.payload)
-      case 'knowledge.read': return this.documents.read(request.payload.scopeId, request.payload.path)
+      case 'knowledge.read': {
+        const stored = this.documents.read(request.payload.scopeId, request.payload.path)
+        if (!stored) return null
+        const characterLimit = (request.payload.tokenBudget ?? 4000) * 4
+        const truncated = stored.body.length > characterLimit
+        const text = truncated ? stored.body.slice(0, characterLimit) : stored.body
+        return {
+          path: stored.document.path,
+          title: stored.document.title,
+          type: stored.document.type,
+          text,
+          updatedAt: stored.document.updatedAt,
+          estimatedTokens: Math.ceil(text.length / 4),
+          truncated,
+        }
+      }
       case 'knowledge.search': return this.documents.search(request.payload)
       case 'knowledge.list': return this.documents.list(request.payload)
       case 'knowledge.importVault': return this.vaultImporter.import(request.payload)

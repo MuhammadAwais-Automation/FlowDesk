@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { strToU8, zipSync } from 'fflate'
 import { afterEach, describe, expect, it } from 'vitest'
+import { readBrainDocument } from '../agent/brainNavigation'
 import { BrainService } from './service'
 
 const roots: string[] = []
@@ -186,5 +187,52 @@ describe('BrainService', () => {
     expect(service.handle({ id: '3', method: 'overview', payload: { scopeId: scope.id } })).toMatchObject({ memories: 1, candidates: 0, jobs: 0 })
     expect(() => service.handle({ id: '4', method: 'rawSql', payload: {} })).toThrow()
     service.close()
+  })
+
+  it('maps stored documents to the bounded public read contract used by agent navigation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-knowledge-read-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain.sqlite'))
+    try {
+      const scope = service.database.ensureScope({ type: 'workspace', externalRef: 'knowledge-read', name: 'Knowledge Read' })
+      const updatedAt = '2026-09-13T00:00:00.000Z'
+      service.documents.upsert({
+        scopeId: scope.id,
+        path: 'wiki/projects/flowdesk.md',
+        type: 'project',
+        title: 'FlowDesk',
+        summary: 'Local-first AI workstation',
+        body: 'abcdefghij',
+        origin: 'curated',
+        contentHash: 'knowledge-read-hash',
+        updatedAt,
+      })
+
+      const request = async (method: 'knowledge.read' | 'knowledge.search', payload: unknown) => service.handle({
+        id: 'knowledge-read',
+        method,
+        payload,
+      })
+      expect(await request('knowledge.read', {
+        scopeId: scope.id,
+        path: 'wiki/projects/flowdesk.md',
+        tokenBudget: 2,
+      })).toEqual({
+        path: 'wiki/projects/flowdesk.md',
+        title: 'FlowDesk',
+        type: 'project',
+        text: 'abcdefgh',
+        updatedAt,
+        estimatedTokens: 2,
+        truncated: true,
+      })
+
+      const agentOutput = await readBrainDocument(request, scope.id, 'wiki/projects/flowdesk.md', 2)
+      expect(agentOutput).toContain('FlowDesk (project)')
+      expect(agentOutput).toContain('Path: wiki/projects/flowdesk.md')
+      expect(agentOutput).toContain('abcdefgh')
+      expect(agentOutput).toMatch(/truncated/i)
+      expect(agentOutput).not.toMatch(/unavailable/i)
+    } finally { service.close() }
   })
 })
