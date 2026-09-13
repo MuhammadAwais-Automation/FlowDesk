@@ -62,10 +62,11 @@ git worktree add .worktrees/w4-vault-import  -b brain-v2/w4-vault-import
 Give each agent: its own worktree path, its own package file, and
 `00-contracts.md` for reference. Nothing else from this conversation.
 
-Each agent installs nothing. `node_modules` is shared via the main checkout;
-if a worktree needs it, symlink rather than reinstall — a second
-`npm install` will produce `package-lock.json` churn and a guaranteed
-conflict.
+Each agent installs nothing. The worktrees sit inside `E:\FlowDesk\`, so Node
+resolves `node_modules` by walking up to the main checkout — verified:
+`npx vitest run` and `npm run typecheck` both work in a fresh worktree with no
+setup. A second `npm install` would only produce `package-lock.json` churn and
+a guaranteed conflict.
 
 ---
 
