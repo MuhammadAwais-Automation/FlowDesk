@@ -1,0 +1,3 @@
+# Journal Day
+
+Journal entry.
