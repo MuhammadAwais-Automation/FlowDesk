@@ -176,6 +176,7 @@ export interface ElectronAPI {
   storeSet: (key: string, value: unknown) => Promise<void>
 
   brainGetStatus: () => Promise<BrainStatus>
+  brainGetActiveScope: () => Promise<BrainScope | null>
   brainGetOverview: (scopeId?: string) => Promise<{ memories: number; candidates: number; jobs: number; activeJobs: number }>
   brainEnsureScope: (input: { type: BrainScope['type']; externalRef: string; name: string; parentId?: string | null }) => Promise<BrainScope>
   brainListScopes: (input?: BrainScopeQuery) => Promise<BrainScope[]>

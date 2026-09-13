@@ -901,7 +901,13 @@ export class BrainDatabase {
     }
   }
 
-  private scopePath(scopeId: string): BrainScope[] {
+  /**
+   * The scope chain from `scopeId` up to its root ancestor, nearest first.
+   * Used both by `search()` below and by `BrainService` to give the
+   * knowledge-document store (which has no notion of scope topology of its
+   * own) the ordered scope list a "read inherits from ancestors" query needs.
+   */
+  scopePath(scopeId: string): BrainScope[] {
     const path: BrainScope[] = []
     let currentId: string | null = scopeId
     const visited = new Set<string>()

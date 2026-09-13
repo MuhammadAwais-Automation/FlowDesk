@@ -251,7 +251,7 @@ export class VaultImporter {
 
       const parsed = parseMarkdown(readResult.text)
       const contentHash = createHash('sha256').update(readResult.bytes).digest('hex')
-      const existing = this.documents.read(input.scopeId, path)
+      const existing = this.documents.read([input.scopeId], path)
       this.documents.upsert({
         scopeId: input.scopeId,
         path,

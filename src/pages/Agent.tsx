@@ -54,6 +54,7 @@ export default function Agent() {
   const [bypassPermissions, setBypassPermissions] = useState(false)
   const [showToolsPanel, setShowToolsPanel] = useState(false)
   const [hasActiveProject, setHasActiveProject] = useState(false)
+  const [brainScope, setBrainScope] = useState<{ type: string; name: string } | null>(null)
   const [brainMode, setBrainMode] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('agentBrainMode') ?? '{}') as Partial<{ use: boolean; learn: boolean; temporary: boolean }>
@@ -224,6 +225,11 @@ export default function Agent() {
       // not only after a send has happened to look it up.
       api.projectList()
         .then(scope => { if (!cancelled) setHasActiveProject(Boolean(scope.activeProjectId)) })
+        .catch(() => {})
+      // Which Brain scope a turn actually uses used to be invisible — the
+      // session-scope bug this surfaces meant Use/Learn silently did nothing.
+      api.brainGetActiveScope()
+        .then(scope => { if (!cancelled) setBrainScope(scope) })
         .catch(() => {})
       if (list.length === 0) {
         const created = await api.agentSessionCreate()
@@ -508,6 +514,14 @@ export default function Agent() {
         <div className="flex items-center gap-3">
           <ProviderStatusStrip status={toolStatus} />
 
+          {brainScope && !brainMode.temporary && (
+            <span
+              title={`This turn's Brain scope: ${brainScope.name} (${brainScope.type})`}
+              className="hidden items-center gap-1 px-2 py-1 font-retro-mono text-[10px] font-bold uppercase text-stone-400 sm:flex"
+            >
+              Scope: {brainScope.name}
+            </span>
+          )}
           <div className="flex items-center rounded-lg border-2 border-[#281E14] bg-white shadow-[2px_2px_0px_0px_rgba(40,30,20,0.22)] overflow-hidden" aria-label="Brain controls">
             <button
               type="button"

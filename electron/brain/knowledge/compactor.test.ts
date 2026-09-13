@@ -59,21 +59,21 @@ describe('Compactor', () => {
     ])
 
     // The capture is retired, not left active or deleted.
-    expect(store.read(scope.id, 'captures/capture-1.md')).toBeNull()
-    expect(store.list({ scopeId: scope.id, includeSuperseded: true }).some(d => d.path === 'captures/capture-1.md')).toBe(true)
+    expect(store.read([scope.id], 'captures/capture-1.md')).toBeNull()
+    expect(store.list({ scopeIds: [scope.id], includeSuperseded: true }).some(d => d.path === 'captures/capture-1.md')).toBe(true)
 
     // The target's new active body has both the original and the captured text.
-    const merged = store.read(scope.id, target.path)
+    const merged = store.read([scope.id], target.path)
     expect(merged?.body).toContain('Yasir bhai runs Together We Go trade finance business')
     expect(merged?.body).toContain('Yasir bhai confirmed the Together trade finance budget, 3 lakh.')
 
     // The target's pre-merge version still exists, superseded, not lost.
-    const history = store.list({ scopeId: scope.id, includeSuperseded: true })
+    const history = store.list({ scopeIds: [scope.id], includeSuperseded: true })
     expect(history.filter(d => d.path === target.path)).toHaveLength(2)
     expect(history.find(d => d.id === target.id)?.validTo).not.toBeNull()
 
     // The unrelated decoy document is untouched.
-    expect(store.read(scope.id, 'wiki/clients/other-client.md')?.body).toContain('office rent')
+    expect(store.read([scope.id], 'wiki/clients/other-client.md')?.body).toContain('office rent')
   })
 
   it('leaves a capture standalone when no document shares more than one distinctive word', () => {
@@ -89,7 +89,7 @@ describe('Compactor', () => {
 
     expect(report).toMatchObject({ scanned: 1, merged: 0, leftStandalone: 1 })
     expect(report.decisions[0]).toMatchObject({ capturePath: 'captures/capture-2.md', outcome: 'left-standalone', targetPath: null })
-    expect(store.read(scope.id, 'captures/capture-2.md')).not.toBeNull()
+    expect(store.read([scope.id], 'captures/capture-2.md')).not.toBeNull()
   })
 
   it('never merges a capture into another capture, even when they share many words', () => {
@@ -107,8 +107,8 @@ describe('Compactor', () => {
 
     expect(report.merged).toBe(0)
     expect(report.decisions.every(decision => decision.outcome === 'left-standalone')).toBe(true)
-    expect(store.read(scope.id, 'captures/capture-a.md')).not.toBeNull()
-    expect(store.read(scope.id, 'captures/capture-b.md')).not.toBeNull()
+    expect(store.read([scope.id], 'captures/capture-a.md')).not.toBeNull()
+    expect(store.read([scope.id], 'captures/capture-b.md')).not.toBeNull()
   })
 
   it('reports zero scanned when a scope has no captures', () => {

@@ -50,7 +50,7 @@ describe('CandidateStore', () => {
     expect(result.document.path).toMatch(/^captures\/[0-9a-f-]+\.md$/)
 
     expect(store.list(scope.id)).toEqual([])
-    expect(documents.read(scope.id, result.document.path)?.body).toBe('Yasir prefers async updates over calls.')
+    expect(documents.read([scope.id], result.document.path)?.body).toBe('Yasir prefers async updates over calls.')
   })
 
   it('creates a pending candidate for a machine-inferred proposal and writes no document', () => {
@@ -62,7 +62,7 @@ describe('CandidateStore', () => {
     if (result.kind !== 'queued') throw new Error('expected queued result')
     expect(result.candidate).toMatchObject({ scopeId: scope.id, status: 'pending', origin: 'machine-inferred' })
     expect(store.list(scope.id)).toHaveLength(1)
-    expect(documents.list({ scopeId: scope.id })).toEqual([])
+    expect(documents.list({ scopeIds: [scope.id] })).toEqual([])
   })
 
   it('accepting a pending candidate creates the document and marks it accepted', () => {
@@ -77,7 +77,7 @@ describe('CandidateStore', () => {
     expect(decided.document).not.toBeNull()
     expect(decided.document?.origin).toBe('machine')
     expect(decided.document?.path).toBe(`captures/${queued.candidate.id}.md`)
-    expect(documents.read(scope.id, decided.document!.path)?.body).toBe('Yasir prefers async updates over calls.')
+    expect(documents.read([scope.id], decided.document!.path)?.body).toBe('Yasir prefers async updates over calls.')
     expect(store.list(scope.id)).toEqual([])
   })
 
@@ -91,7 +91,7 @@ describe('CandidateStore', () => {
     expect(decided.candidate.status).toBe('rejected')
     expect(decided.candidate.decidedAt).not.toBeNull()
     expect(decided.document).toBeNull()
-    expect(documents.list({ scopeId: scope.id })).toEqual([])
+    expect(documents.list({ scopeIds: [scope.id] })).toEqual([])
     expect(store.list(scope.id)).toEqual([])
   })
 
@@ -128,7 +128,7 @@ describe('CandidateStore', () => {
     const historical = brain.handle.prepare('SELECT valid_to FROM knowledge_documents WHERE id = ?')
       .get(original.id) as { valid_to: string | null }
     expect(historical.valid_to).not.toBeNull()
-    expect(documents.read(scope.id, 'clients/yasir.md')?.document.id).toBe(decided.document?.id)
+    expect(documents.read([scope.id], 'clients/yasir.md')?.document.id).toBe(decided.document?.id)
   })
 
   it('editedBody overrides the candidate body when accepting', () => {
@@ -138,6 +138,6 @@ describe('CandidateStore', () => {
 
     const decided = store.decide({ id: queued.candidate.id, decision: 'accept', editedBody: 'Edited body wins.' })
 
-    expect(documents.read(scope.id, decided.document!.path)?.body).toBe('Edited body wins.')
+    expect(documents.read([scope.id], decided.document!.path)?.body).toBe('Edited body wins.')
   })
 })

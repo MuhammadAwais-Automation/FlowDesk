@@ -60,7 +60,7 @@ describe('DocumentStore', () => {
       createdAt: expect.any(String),
       updatedAt: input.updatedAt,
     })
-    expect(store.read(scope.id, input.path)).toEqual({ document: inserted, body: input.body })
+    expect(store.read([scope.id], input.path)).toEqual({ document: inserted, body: input.body })
   })
 
   it('returns the existing row without changing metadata or duplicating FTS when the hash is unchanged', () => {
@@ -74,7 +74,7 @@ describe('DocumentStore', () => {
     }))
 
     expect(unchanged).toEqual(first)
-    expect(store.read(scope.id, first.path)?.body).toBe('Yasir coordinates the cobalt launch.')
+    expect(store.read([scope.id], first.path)?.body).toBe('Yasir coordinates the cobalt launch.')
     expect((brain.handle.prepare('SELECT count(*) AS total FROM knowledge_fts WHERE document_id = ?').get(first.id) as { total: number }).total).toBe(1)
   })
 
@@ -91,9 +91,9 @@ describe('DocumentStore', () => {
     }))
 
     expect(updated).toMatchObject({ id: first.id, title: 'Yasir Launch Owner', contentHash: 'hash-2', updatedAt: '2026-09-03T10:00:00.000Z' })
-    expect(store.read(scope.id, first.path)?.body).toBe('The revised body contains amber only.')
-    expect(store.search({ scopeId: scope.id, query: 'amber' })).toHaveLength(1)
-    expect(store.search({ scopeId: scope.id, query: 'cobalt' })).toEqual([])
+    expect(store.read([scope.id], first.path)?.body).toBe('The revised body contains amber only.')
+    expect(store.search({ scopeIds: [scope.id], query: 'amber' })).toHaveLength(1)
+    expect(store.search({ scopeIds: [scope.id], query: 'cobalt' })).toEqual([])
     expect((brain.handle.prepare('SELECT count(*) AS total FROM knowledge_fts WHERE document_id = ?').get(first.id) as { total: number }).total).toBe(1)
   })
 
@@ -103,8 +103,8 @@ describe('DocumentStore', () => {
     brain.handle.prepare('UPDATE knowledge_documents SET valid_to = ? WHERE id = ?')
       .run('2026-09-04T10:00:00.000Z', document.id)
 
-    expect(store.list({ scopeId: scope.id })).toEqual([])
-    expect(store.list({ scopeId: scope.id, includeSuperseded: true })).toMatchObject([{ id: document.id }])
+    expect(store.list({ scopeIds: [scope.id] })).toEqual([])
+    expect(store.list({ scopeIds: [scope.id], includeSuperseded: true })).toMatchObject([{ id: document.id }])
   })
 
   it('orders by type and then updatedAt descending and supports type and limit filters', () => {
@@ -113,11 +113,11 @@ describe('DocumentStore', () => {
     store.upsert(documentInput(scope.id, { path: 'projects/project.md', type: 'project', title: 'Project', contentHash: 'project', updatedAt: '2026-09-03T00:00:00.000Z' }))
     store.upsert(documentInput(scope.id, { path: 'notes/newer.md', type: 'note', title: 'Newer', contentHash: 'newer', updatedAt: '2026-09-02T00:00:00.000Z' }))
 
-    expect(store.list({ scopeId: scope.id }).map(document => document.path)).toEqual([
+    expect(store.list({ scopeIds: [scope.id] }).map(document => document.path)).toEqual([
       'notes/newer.md', 'notes/older.md', 'projects/project.md',
     ])
-    expect(store.list({ scopeId: scope.id, types: ['project'] }).map(document => document.path)).toEqual(['projects/project.md'])
-    expect(store.list({ scopeId: scope.id, limit: 1 })).toHaveLength(1)
+    expect(store.list({ scopeIds: [scope.id], types: ['project'] }).map(document => document.path)).toEqual(['projects/project.md'])
+    expect(store.list({ scopeIds: [scope.id], limit: 1 })).toHaveLength(1)
   })
 
   it('keeps list, read and search isolated to the requested scope', () => {
@@ -125,32 +125,32 @@ describe('DocumentStore', () => {
     const other = brain.ensureScope({ type: 'client', externalRef: 'other-client', name: 'Other Client' })
     store.upsert(documentInput(scope.id))
 
-    expect(store.list({ scopeId: other.id })).toEqual([])
-    expect(store.read(other.id, 'people/yasir.md')).toBeNull()
-    expect(store.search({ scopeId: other.id, query: 'cobalt' })).toEqual([])
+    expect(store.list({ scopeIds: [other.id] })).toEqual([])
+    expect(store.read([other.id], 'people/yasir.md')).toBeNull()
+    expect(store.search({ scopeIds: [other.id], query: 'cobalt' })).toEqual([])
   })
 
   it.each(['../etc/passwd', '/etc/passwd', 'missing.md'])('returns null for unsafe or unknown path %s', path => {
     const { scope, store } = createStore()
     store.upsert(documentInput(scope.id))
-    expect(store.read(scope.id, path)).toBeNull()
+    expect(store.read([scope.id], path)).toBeNull()
   })
 
   it('finds words in either the body or title and filters search by type', () => {
     const { scope, store } = createStore()
     store.upsert(documentInput(scope.id))
 
-    expect(store.search({ scopeId: scope.id, query: 'cobalt' })).toMatchObject([{ path: 'people/yasir.md' }])
-    expect(store.search({ scopeId: scope.id, query: 'Yasir' })).toMatchObject([{ title: 'Yasir Bhai' }])
-    expect(store.search({ scopeId: scope.id, query: 'Yasir', types: ['project'] })).toEqual([])
+    expect(store.search({ scopeIds: [scope.id], query: 'cobalt' })).toMatchObject([{ path: 'people/yasir.md' }])
+    expect(store.search({ scopeIds: [scope.id], query: 'Yasir' })).toMatchObject([{ title: 'Yasir Bhai' }])
+    expect(store.search({ scopeIds: [scope.id], query: 'Yasir', types: ['project'] })).toEqual([])
   })
 
   it('sanitises FTS operators and returns an empty result for a query without terms', () => {
     const { scope, store } = createStore()
     store.upsert(documentInput(scope.id))
 
-    expect(() => store.search({ scopeId: scope.id, query: 'yasir "bhai* OR' })).not.toThrow()
-    expect(store.search({ scopeId: scope.id, query: '  " * : - ^  ' })).toEqual([])
+    expect(() => store.search({ scopeIds: [scope.id], query: 'yasir "bhai* OR' })).not.toThrow()
+    expect(store.search({ scopeIds: [scope.id], query: '  " * : - ^  ' })).toEqual([])
   })
 
   it('returns a bounded snippet containing the matched term', () => {
@@ -159,7 +159,7 @@ describe('DocumentStore', () => {
       body: `${'intro '.repeat(50)}ultraviolet ${'closing '.repeat(50)}`,
     }))
 
-    const [hit] = store.search({ scopeId: scope.id, query: 'ultraviolet' })
+    const [hit] = store.search({ scopeIds: [scope.id], query: 'ultraviolet' })
     expect(hit.snippet.toLowerCase()).toContain('ultraviolet')
     expect(hit.snippet.length).toBeLessThanOrEqual(200)
   })
@@ -169,7 +169,7 @@ describe('DocumentStore', () => {
     store.upsert(documentInput(scope.id, { path: 'notes/strong.md', type: 'note', title: 'Signal signal', body: 'signal signal signal signal signal', contentHash: 'strong' }))
     store.upsert(documentInput(scope.id, { path: 'notes/weak.md', type: 'note', title: 'Weak', body: `signal ${'background '.repeat(80)}`, contentHash: 'weak' }))
 
-    const hits = store.search({ scopeId: scope.id, query: 'signal' })
+    const hits = store.search({ scopeIds: [scope.id], query: 'signal' })
     expect(hits.map(hit => hit.path)).toEqual(['notes/strong.md', 'notes/weak.md'])
     expect(hits.every(hit => hit.score > 0)).toBe(true)
     expect(hits[0].score).toBeGreaterThan(hits[1].score)
@@ -208,7 +208,7 @@ describe('DocumentStore', () => {
 
     expect(previous).toBeNull()
     expect(next).toMatchObject({ path: 'people/yasir.md', validTo: null })
-    expect(store.read(scope.id, 'people/yasir.md')?.document.id).toBe(next.id)
+    expect(store.read([scope.id], 'people/yasir.md')?.document.id).toBe(next.id)
   })
 
   it('supersede retires the previous active row instead of overwriting it', () => {
@@ -231,9 +231,9 @@ describe('DocumentStore', () => {
     expect(historical.valid_to).not.toBeNull()
 
     // Only the new row is reachable through the normal read paths.
-    expect(store.read(scope.id, first.path)?.document.id).toBe(next.id)
-    expect(store.list({ scopeId: scope.id })).toHaveLength(1)
-    expect(store.list({ scopeId: scope.id, includeSuperseded: true })).toHaveLength(2)
+    expect(store.read([scope.id], first.path)?.document.id).toBe(next.id)
+    expect(store.list({ scopeIds: [scope.id] })).toHaveLength(1)
+    expect(store.list({ scopeIds: [scope.id], includeSuperseded: true })).toHaveLength(2)
   })
 
   it('supersede lets a superseded row and its replacement coexist at the same path', () => {
@@ -256,8 +256,8 @@ describe('DocumentStore', () => {
     const retired = store.retire(scope.id, document.path)
 
     expect(retired).toMatchObject({ id: document.id, validTo: expect.any(String) })
-    expect(store.read(scope.id, document.path)).toBeNull()
-    expect(store.list({ scopeId: scope.id, includeSuperseded: true })).toMatchObject([{ id: document.id }])
+    expect(store.read([scope.id], document.path)).toBeNull()
+    expect(store.list({ scopeIds: [scope.id], includeSuperseded: true })).toMatchObject([{ id: document.id }])
   })
 
   it('retire returns null and changes nothing when no document is active at the path', () => {
@@ -269,6 +269,46 @@ describe('DocumentStore', () => {
     store.retire(scope.id, document.path)
     // Retiring an already-retired path is a no-op, not a second retirement.
     expect(store.retire(scope.id, document.path)).toBeNull()
+  })
+
+  it('list/read/search inherit across an ancestor chain, nearest scope winning on a shared path', () => {
+    const { brain, scope, store } = createStore()
+    const child = brain.ensureScope({ type: 'project', externalRef: 'child', name: 'Child', parentId: scope.id })
+    store.upsert(documentInput(scope.id, { path: 'wiki/only-in-parent.md', title: 'Only in parent', contentHash: 'parent-only' }))
+    store.upsert(documentInput(scope.id, {
+      path: 'wiki/shared.md', title: 'Parent version', contentHash: 'parent-shared',
+      body: 'Parent body.',
+    }))
+    store.upsert(documentInput(child.id, {
+      path: 'wiki/shared.md', title: 'Child version', contentHash: 'child-shared',
+      body: 'Child body with distinctive wording.',
+    }))
+
+    // Nearest-first chain: child before parent.
+    const chain = [child.id, scope.id]
+
+    const listed = store.list({ scopeIds: chain })
+    expect(listed.map(d => d.path).sort()).toEqual(['wiki/only-in-parent.md', 'wiki/shared.md'])
+    expect(listed.find(d => d.path === 'wiki/shared.md')).toMatchObject({ title: 'Child version', scopeId: child.id })
+
+    expect(store.read(chain, 'wiki/shared.md')).toMatchObject({ document: { title: 'Child version' }, body: 'Child body with distinctive wording.' })
+    expect(store.read(chain, 'wiki/only-in-parent.md')).toMatchObject({ document: { title: 'Only in parent' } })
+
+    const hits = store.search({ scopeIds: chain, query: 'distinctive' })
+    expect(hits).toMatchObject([{ path: 'wiki/shared.md', title: 'Child version' }])
+
+    // Reversed order: parent wins instead, proving this is chain-order-driven, not a fixed rule.
+    const reversedHits = store.list({ scopeIds: [scope.id, child.id] }).find(d => d.path === 'wiki/shared.md')
+    expect(reversedHits).toMatchObject({ title: 'Parent version', scopeId: scope.id })
+  })
+
+  it('list/read/search return nothing for an empty scope chain', () => {
+    const { scope, store } = createStore()
+    store.upsert(documentInput(scope.id))
+
+    expect(store.list({ scopeIds: [] })).toEqual([])
+    expect(store.read([], 'people/yasir.md')).toBeNull()
+    expect(store.search({ scopeIds: [], query: 'cobalt' })).toEqual([])
   })
 
   it('rolls back all three tables when an upsert violates the scope foreign key', () => {

@@ -235,4 +235,93 @@ describe('BrainService', () => {
       expect(agentOutput).not.toMatch(/unavailable/i)
     } finally { service.close() }
   })
+
+  describe('scope inheritance (the bug this regression test exists to catch)', () => {
+    // Mirrors electron/main.ts's real runAgentMessage flow exactly:
+    // ensureScope(global) -> ensureScope(project, parent=global) -> every
+    // knowledge call uses the PROJECT scope, never a fresh per-session one.
+    // A reproduction against the pre-fix code showed the agent's manifest
+    // was always empty, brain_read_document/brain_search_documents always
+    // came back empty, and "Learn" output landed in a scope nothing could
+    // ever select in the UI. This test is red on that code and green here.
+    it('gives an agent turn in the project scope full visibility into documents imported at the global scope', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-scope-inheritance-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const globalScope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        const projectScope = service.database.ensureScope({ type: 'project', externalRef: 'proj-1', name: 'FlowDesk', parentId: globalScope.id })
+
+        // The vault import a user actually runs lands in the global scope.
+        service.documents.upsert({
+          scopeId: globalScope.id, path: 'wiki/clients/yasir-bhai.md', type: 'client',
+          title: 'Yasir Bhai', summary: 'Client contact',
+          body: 'Yasir bhai runs Together We Go trade finance.',
+          origin: 'curated', contentHash: 'vault-1', updatedAt: '2026-09-01T00:00:00.000Z',
+        })
+
+        // An Agent turn in the project scope -- the manifest must not be empty.
+        const manifest = service.handle({
+          id: '1', method: 'knowledge.manifest', payload: { scopeId: projectScope.id },
+        }) as { entryCount: number; text: string }
+        expect(manifest.entryCount).toBe(1)
+        expect(manifest.text).toContain('wiki/clients/yasir-bhai.md')
+
+        // Both navigation tools must actually reach the document.
+        const request = async (method: 'knowledge.read' | 'knowledge.search', payload: unknown) => service.handle({ id: '2', method, payload })
+        const read = await readBrainDocument(request, projectScope.id, 'wiki/clients/yasir-bhai.md')
+        expect(read).toContain('Yasir bhai runs Together We Go trade finance.')
+        const searchHits = service.handle({
+          id: '3', method: 'knowledge.search', payload: { scopeId: projectScope.id, query: 'Yasir' },
+        }) as Array<{ path: string }>
+        expect(searchHits).toMatchObject([{ path: 'wiki/clients/yasir-bhai.md' }])
+
+        // "Learn" output (explicit-user, written straight through) must land
+        // somewhere the same project scope -- and therefore the Brain UI --
+        // can immediately see, not an invisible per-session scope.
+        const proposed = service.handle({
+          id: '4', method: 'knowledge.proposeCandidate', payload: {
+            scopeId: projectScope.id, type: 'note', title: 'Captured note', summary: '',
+            body: 'Captured during an agent turn.', origin: 'explicit-user', sessionRef: 'agent-session://s/t1',
+          },
+        }) as { kind: string }
+        expect(proposed.kind).toBe('written')
+        const manifestAfterCapture = service.handle({
+          id: '5', method: 'knowledge.manifest', payload: { scopeId: projectScope.id },
+        }) as { entryCount: number }
+        expect(manifestAfterCapture.entryCount).toBe(2)
+      } finally { service.close() }
+    })
+
+    it('lets a project scope override a document it shares with the global scope, without hiding the rest of the global vault', () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-scope-inheritance-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const globalScope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        const projectScope = service.database.ensureScope({ type: 'project', externalRef: 'proj-1', name: 'FlowDesk', parentId: globalScope.id })
+
+        service.documents.upsert({
+          scopeId: globalScope.id, path: 'wiki/me/skills.md', type: 'me', title: 'Skills', summary: '',
+          body: 'Flutter, Supabase, Next.js.', origin: 'curated', contentHash: 'global-1', updatedAt: '2026-09-01T00:00:00.000Z',
+        })
+        service.documents.upsert({
+          scopeId: globalScope.id, path: 'wiki/projects/flowdesk.md', type: 'project', title: 'FlowDesk (global draft)', summary: '',
+          body: 'Stale global draft.', origin: 'curated', contentHash: 'global-2', updatedAt: '2026-09-01T00:00:00.000Z',
+        })
+        service.documents.upsert({
+          scopeId: projectScope.id, path: 'wiki/projects/flowdesk.md', type: 'project', title: 'FlowDesk (project version)', summary: '',
+          body: 'Current project-owned version.', origin: 'curated', contentHash: 'project-1', updatedAt: '2026-09-02T00:00:00.000Z',
+        })
+
+        const list = service.handle({ id: '1', method: 'knowledge.list', payload: { scopeId: projectScope.id } }) as Array<{ path: string; title: string }>
+        expect(list).toHaveLength(2)
+        expect(list.find(d => d.path === 'wiki/me/skills.md')).toBeTruthy()
+        expect(list.find(d => d.path === 'wiki/projects/flowdesk.md')?.title).toBe('FlowDesk (project version)')
+
+        const read = service.handle({ id: '2', method: 'knowledge.read', payload: { scopeId: projectScope.id, path: 'wiki/projects/flowdesk.md' } }) as { text: string }
+        expect(read.text).toBe('Current project-owned version.')
+      } finally { service.close() }
+    })
+  })
 })

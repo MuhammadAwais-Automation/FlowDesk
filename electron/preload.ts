@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   storeSet: (key: string, value: unknown) => ipcRenderer.invoke('store:set', key, value),
 
   brainGetStatus: () => ipcRenderer.invoke('brain:getStatus'),
+  brainGetActiveScope: () => ipcRenderer.invoke('brain:getActiveScope'),
   brainGetOverview: (scopeId?: string) => ipcRenderer.invoke('brain:getOverview', scopeId),
   brainEnsureScope: (input: unknown) => ipcRenderer.invoke('brain:ensureScope', input),
   brainListScopes: (input?: unknown) => ipcRenderer.invoke('brain:listScopes', input),

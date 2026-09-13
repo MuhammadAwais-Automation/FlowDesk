@@ -80,15 +80,18 @@ export class Compactor {
   constructor(private readonly documents: DocumentStorePort) {}
 
   compact(scopeId: string): CompactionReport {
+    // Compaction is deliberately exact-scope, not ancestor-inheriting: an
+    // orphan capture in a project scope should only ever fold into a
+    // document that same scope owns, never into (or across) an ancestor's.
     const captures = this.documents
-      .list({ scopeId, limit: 5000 })
+      .list({ scopeIds: [scopeId], limit: 5000 })
       .filter(document => document.path.startsWith(CAPTURE_PATH_PREFIX))
 
     const decisions: CompactionDecision[] = []
     let merged = 0
 
     for (const capture of captures) {
-      const stored = this.documents.read(scopeId, capture.path)
+      const stored = this.documents.read([scopeId], capture.path)
       // Retired or superseded by something else mid-sweep (e.g. an earlier
       // merge in this same pass folded it away already) -- skip safely.
       if (!stored) continue
@@ -112,7 +115,7 @@ export class Compactor {
     const aggregates = new Map<string, CandidateAggregate>()
 
     for (const word of words) {
-      for (const hit of this.documents.search({ scopeId, query: word, limit: 10 })) {
+      for (const hit of this.documents.search({ scopeIds: [scopeId], query: word, limit: 10 })) {
         if (hit.path.startsWith(CAPTURE_PATH_PREFIX)) continue // never merge capture into capture
         const existing = aggregates.get(hit.path)
         if (existing) {
@@ -132,7 +135,7 @@ export class Compactor {
       && (second === null || top.score >= second.score * CONFIDENCE_MARGIN)
 
     if (confident && top) {
-      const target = this.documents.read(scopeId, top.path)
+      const target = this.documents.read([scopeId], top.path)
       if (target) {
         const mergedBody = [
           target.body,

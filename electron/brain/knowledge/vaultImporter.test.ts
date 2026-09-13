@@ -50,12 +50,15 @@ class FakeDocumentStore implements DocumentStorePort {
   list(input: ListDocumentsInput): KnowledgeDocument[] {
     return [...this.documents.values()]
       .map(({ document }) => document)
-      .filter((document) => document.scopeId === input.scopeId)
+      .filter((document) => input.scopeIds.includes(document.scopeId))
   }
 
-  read(scopeId: string, path: string): { document: KnowledgeDocument; body: string } | null {
-    const stored = this.documents.get(`${scopeId}\0${path}`)
-    return stored ? { document: stored.document, body: stored.body } : null
+  read(scopeIds: string[], path: string): { document: KnowledgeDocument; body: string } | null {
+    for (const scopeId of scopeIds) {
+      const stored = this.documents.get(`${scopeId}\0${path}`)
+      if (stored) return { document: stored.document, body: stored.body }
+    }
+    return null
   }
 
   search(_input: SearchDocumentsInput): DocumentSearchHit[] {

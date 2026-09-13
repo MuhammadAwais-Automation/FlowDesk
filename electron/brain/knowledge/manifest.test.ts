@@ -52,7 +52,7 @@ class FakeDocumentStore implements DocumentStorePort {
     ))
   }
 
-  read(_scopeId: string, _path: string): { document: KnowledgeDocument; body: string } | null {
+  read(_scopeIds: string[], _path: string): { document: KnowledgeDocument; body: string } | null {
     throw new Error('Not used by manifest tests')
   }
 
@@ -69,7 +69,7 @@ describe('ManifestBuilder', () => {
       document({ id: 'project-new', path: 'projects/new.md', title: 'New', summary: '', updatedAt: '2026-09-03T00:00:00.000Z' }),
     ])
 
-    const result = new ManifestBuilder(store).build({ scopeId: 'scope-1' })
+    const result = new ManifestBuilder(store).build({ scopeIds: ['scope-1'] })
 
     expect(result.text).toBe([
       '<flowdesk_knowledge_manifest count="3">',
@@ -87,8 +87,8 @@ describe('ManifestBuilder', () => {
   it('produces byte-identical output for the same document set', () => {
     const builder = new ManifestBuilder(new FakeDocumentStore([document()]))
 
-    expect(builder.build({ scopeId: 'scope-1' }).text)
-      .toBe(builder.build({ scopeId: 'scope-1' }).text)
+    expect(builder.build({ scopeIds: ['scope-1'] }).text)
+      .toBe(builder.build({ scopeIds: ['scope-1'] }).text)
   })
 
   it('sanitises field delimiters and line breaks', () => {
@@ -97,7 +97,7 @@ describe('ManifestBuilder', () => {
       summary: 'Local-first\nAI | workstation',
     })])
 
-    const result = new ManifestBuilder(store).build({ scopeId: 'scope-1' })
+    const result = new ManifestBuilder(store).build({ scopeIds: ['scope-1'] })
     const entry = result.text.split('\n')[4]
 
     expect(entry).toBe('wiki/projects/flowdesk.md | project | FlowDesk desktop | Local-first AI workstation')
@@ -108,7 +108,7 @@ describe('ManifestBuilder', () => {
     const summary = `${'tenletters '.repeat(12)}trailing`
     const result = new ManifestBuilder(new FakeDocumentStore([
       document({ summary }),
-    ])).build({ scopeId: 'scope-1' })
+    ])).build({ scopeIds: ['scope-1'] })
     const renderedSummary = result.text.split('\n')[4].split(' | ')[3]
 
     expect(summary.length).toBeGreaterThan(130)
@@ -123,16 +123,16 @@ describe('ManifestBuilder', () => {
       document({ id: 'old', path: 'projects/superseded.md', validTo: '2026-09-05T00:00:00.000Z' }),
     ])
 
-    const result = new ManifestBuilder(store).build({ scopeId: 'scope-1' })
+    const result = new ManifestBuilder(store).build({ scopeIds: ['scope-1'] })
 
-    expect(store.listCalls[0]).toMatchObject({ scopeId: 'scope-1', includeSuperseded: false })
+    expect(store.listCalls[0]).toMatchObject({ scopeIds: ['scope-1'], includeSuperseded: false })
     expect(result.text).not.toContain('projects/superseded.md')
   })
 
   it('passes the type filter through to the port', () => {
     const store = new FakeDocumentStore([document()])
 
-    new ManifestBuilder(store).build({ scopeId: 'scope-1', types: ['client', 'project'] })
+    new ManifestBuilder(store).build({ scopeIds: ['scope-1'], types: ['client', 'project'] })
 
     expect(store.listCalls[0].types).toEqual(['client', 'project'])
   })
@@ -144,7 +144,7 @@ describe('ManifestBuilder', () => {
       document({ id: 'middle', path: 'clients/middle.md', type: 'client', summary: 'x '.repeat(50), updatedAt: '2026-09-02T00:00:00.000Z' }),
     ])
 
-    const result = new ManifestBuilder(store).build({ scopeId: 'scope-1', tokenBudget: 140 })
+    const result = new ManifestBuilder(store).build({ scopeIds: ['scope-1'], tokenBudget: 140 })
 
     expect(result.truncated).toBe(true)
     expect(result.entryCount).toBe(1)
@@ -156,7 +156,7 @@ describe('ManifestBuilder', () => {
 
   it('does not add an omission line when the render is under budget', () => {
     const result = new ManifestBuilder(new FakeDocumentStore([document()]))
-      .build({ scopeId: 'scope-1', tokenBudget: 4000 })
+      .build({ scopeIds: ['scope-1'], tokenBudget: 4000 })
 
     expect(result.truncated).toBe(false)
     expect(result.text).not.toContain('documents omitted')
@@ -164,7 +164,7 @@ describe('ManifestBuilder', () => {
 
   it('estimates tokens from the final rendered text', () => {
     const result = new ManifestBuilder(new FakeDocumentStore([document()]))
-      .build({ scopeId: 'scope-1' })
+      .build({ scopeIds: ['scope-1'] })
 
     expect(result.estimatedTokens).toBe(Math.ceil(result.text.length / 4))
   })
@@ -172,10 +172,10 @@ describe('ManifestBuilder', () => {
   it('lists on every build so newly added documents appear immediately', () => {
     const store = new FakeDocumentStore([document()])
     const builder = new ManifestBuilder(store)
-    builder.build({ scopeId: 'scope-1' })
+    builder.build({ scopeIds: ['scope-1'] })
     store.documents.push(document({ id: 'new', path: 'projects/new.md', title: 'New' }))
 
-    const refreshed = builder.build({ scopeId: 'scope-1' })
+    const refreshed = builder.build({ scopeIds: ['scope-1'] })
 
     expect(store.listCalls).toHaveLength(2)
     expect(refreshed.text).toContain('projects/new.md')
@@ -192,7 +192,7 @@ describe('ManifestBuilder', () => {
     }))
 
     const result = new ManifestBuilder(new FakeDocumentStore(documents))
-      .build({ scopeId: 'scope-1', tokenBudget: 8000 })
+      .build({ scopeIds: ['scope-1'], tokenBudget: 8000 })
 
     expect(result.estimatedTokens).toBeGreaterThan(7000)
     expect(result.estimatedTokens).toBeLessThanOrEqual(8000)

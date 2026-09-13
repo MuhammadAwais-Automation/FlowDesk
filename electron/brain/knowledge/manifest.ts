@@ -17,7 +17,8 @@ export const MANIFEST_DEFAULT_TOKEN_BUDGET = 4000
 export const MANIFEST_MAX_TOKEN_BUDGET = 8000
 
 export interface BuildManifestInput {
-  scopeId: string
+  /** Nearest-first scope chain — see `ListDocumentsInput.scopeIds`. */
+  scopeIds: string[]
   types?: KnowledgeDocType[]
   tokenBudget?: number
 }
@@ -84,7 +85,7 @@ export class ManifestBuilder {
 
   build(input: BuildManifestInput): ManifestRender {
     const documents = this.documents.list({
-      scopeId: input.scopeId,
+      scopeIds: input.scopeIds,
       types: input.types,
       includeSuperseded: false,
     })

@@ -54,6 +54,26 @@ function safeFtsQuery(query: string): string {
   return terms.map(term => `"${term}"`).join(' ')
 }
 
+/**
+ * Nearest-scope-wins shadowing: when the same `path` appears in more than one
+ * scope in the chain, keep only the rows from whichever scope is earliest in
+ * `scopeIds` (nearest). A project's own version of a document must not be
+ * shadowed by an ancestor's, so this runs before any limit/truncation.
+ */
+function shadowByNearestScope(rows: SqlRow[], scopeIds: string[]): SqlRow[] {
+  const rank = new Map(scopeIds.map((id, index) => [id, index]))
+  const winningScopeForPath = new Map<string, string>()
+  for (const row of rows) {
+    const path = String(row.path)
+    const scopeId = String(row.scope_id)
+    const current = winningScopeForPath.get(path)
+    if (current === undefined || (rank.get(scopeId) ?? Infinity) < (rank.get(current) ?? Infinity)) {
+      winningScopeForPath.set(path, scopeId)
+    }
+  }
+  return rows.filter(row => winningScopeForPath.get(String(row.path)) === String(row.scope_id))
+}
+
 export class DocumentStore implements DocumentStorePort {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -181,50 +201,58 @@ export class DocumentStore implements DocumentStorePort {
   }
 
   list(input: ListDocumentsInput): KnowledgeDocument[] {
+    if (input.scopeIds.length === 0) return []
     const types = typeFilter(input.types, 'type')
     const active = input.includeSuperseded ? '' : ' AND valid_to IS NULL'
+    const scopePlaceholders = input.scopeIds.map(() => '?').join(', ')
     const rows = this.db.prepare(`
       SELECT * FROM knowledge_documents
-      WHERE scope_id = ?${active}${types.sql}
+      WHERE scope_id IN (${scopePlaceholders})${active}${types.sql}
       ORDER BY type, updated_at DESC, path
-      LIMIT ?
-    `).all(input.scopeId, ...types.parameters, boundedLimit(input.limit, 1000, 5000)) as SqlRow[]
-    return rows.map(mapDocument)
+    `).all(...input.scopeIds, ...types.parameters) as SqlRow[]
+    return shadowByNearestScope(rows, input.scopeIds)
+      .slice(0, boundedLimit(input.limit, 1000, 5000))
+      .map(mapDocument)
   }
 
-  read(scopeId: string, path: string): { document: KnowledgeDocument; body: string } | null {
+  read(scopeIds: string[], path: string): { document: KnowledgeDocument; body: string } | null {
     if (path.includes('..') || path.startsWith('/') || isAbsolute(path)) return null
-    const row = this.db.prepare(`
-      SELECT d.*, f.body
-      FROM knowledge_documents d
-      JOIN knowledge_fts f ON f.document_id = d.id
-      WHERE d.scope_id = ? AND d.path = ? AND d.valid_to IS NULL
-    `).get(scopeId, path) as SqlRow | undefined
-    if (!row) return null
-    return { document: mapDocument(row), body: String(row.body) }
+    for (const scopeId of scopeIds) {
+      const row = this.db.prepare(`
+        SELECT d.*, f.body
+        FROM knowledge_documents d
+        JOIN knowledge_fts f ON f.document_id = d.id
+        WHERE d.scope_id = ? AND d.path = ? AND d.valid_to IS NULL
+      `).get(scopeId, path) as SqlRow | undefined
+      if (row) return { document: mapDocument(row), body: String(row.body) }
+    }
+    return null
   }
 
   search(input: SearchDocumentsInput): DocumentSearchHit[] {
+    if (input.scopeIds.length === 0) return []
     const query = safeFtsQuery(input.query)
     if (!query) return []
     const types = typeFilter(input.types, 'd.type')
+    const scopePlaceholders = input.scopeIds.map(() => '?').join(', ')
     const rows = this.db.prepare(`
-      SELECT d.path, d.title, d.type, d.updated_at,
+      SELECT d.path, d.title, d.type, d.updated_at, d.scope_id,
         substr(snippet(knowledge_fts, -1, '[', ']', '…', 32), 1, 200) AS snippet,
         -bm25(knowledge_fts) AS score
       FROM knowledge_fts
       JOIN knowledge_documents d ON d.id = knowledge_fts.document_id
-      WHERE knowledge_fts MATCH ? AND d.scope_id = ? AND d.valid_to IS NULL${types.sql}
+      WHERE knowledge_fts MATCH ? AND d.scope_id IN (${scopePlaceholders}) AND d.valid_to IS NULL${types.sql}
       ORDER BY bm25(knowledge_fts), d.updated_at DESC, d.path
-      LIMIT ?
-    `).all(query, input.scopeId, ...types.parameters, boundedLimit(input.limit, 10, 50)) as SqlRow[]
-    return rows.map(row => ({
-      path: String(row.path),
-      title: String(row.title),
-      type: String(row.type) as KnowledgeDocType,
-      snippet: String(row.snippet),
-      score: Number(row.score),
-      updatedAt: String(row.updated_at),
-    }))
+    `).all(query, ...input.scopeIds, ...types.parameters) as SqlRow[]
+    return shadowByNearestScope(rows, input.scopeIds)
+      .slice(0, boundedLimit(input.limit, 10, 50))
+      .map(row => ({
+        path: String(row.path),
+        title: String(row.title),
+        type: String(row.type) as KnowledgeDocType,
+        snippet: String(row.snippet),
+        score: Number(row.score),
+        updatedAt: String(row.updated_at),
+      }))
   }
 }

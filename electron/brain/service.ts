@@ -66,6 +66,18 @@ export class BrainService {
   }
 
   /**
+   * The ancestor chain for a knowledge read, nearest scope first. A document
+   * imported at the global scope must still be visible from a project scope
+   * — `DocumentStorePort` has no notion of scope topology of its own (by
+   * design, so the knowledge modules stay decoupled from `BrainDatabase`),
+   * so this is the one place that expands a caller's single scope id into
+   * the chain the store's `scopeIds` parameters expect.
+   */
+  private knowledgeScopeChain(scopeId: string): string[] {
+    return this.database.scopePath(scopeId).map(scope => scope.id)
+  }
+
+  /**
    * Retention sweep: expired raw captures leave the ledger and their artifact
    * files leave the disk. Public so the release-gate acceptance test can run it
    * at a chosen clock instead of waiting out the 24-hour interval timer; the
@@ -198,9 +210,9 @@ export class BrainService {
         this.assertProtocolMayMutateJob(request.payload.jobId)
         return this.artifacts.ingestBatch({ ...request.payload, accountId: request.payload.accountId ?? null })
       }
-      case 'knowledge.manifest': return this.manifest.build(request.payload)
+      case 'knowledge.manifest': return this.manifest.build({ ...request.payload, scopeIds: this.knowledgeScopeChain(request.payload.scopeId) })
       case 'knowledge.read': {
-        const stored = this.documents.read(request.payload.scopeId, request.payload.path)
+        const stored = this.documents.read(this.knowledgeScopeChain(request.payload.scopeId), request.payload.path)
         if (!stored) return null
         const characterLimit = (request.payload.tokenBudget ?? 4000) * 4
         const truncated = stored.body.length > characterLimit
@@ -215,8 +227,8 @@ export class BrainService {
           truncated,
         }
       }
-      case 'knowledge.search': return this.documents.search(request.payload)
-      case 'knowledge.list': return this.documents.list(request.payload)
+      case 'knowledge.search': return this.documents.search({ ...request.payload, scopeIds: this.knowledgeScopeChain(request.payload.scopeId) })
+      case 'knowledge.list': return this.documents.list({ ...request.payload, scopeIds: this.knowledgeScopeChain(request.payload.scopeId) })
       case 'knowledge.importVault': return this.vaultImporter.import(request.payload)
       case 'knowledge.proposeCandidate': return this.candidates.propose(request.payload)
       case 'knowledge.listCandidates': return this.candidates.list(request.payload.scopeId)

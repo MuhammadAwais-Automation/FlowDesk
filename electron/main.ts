@@ -372,6 +372,25 @@ ipcMain.handle('store:set', (_e, key: string, value: unknown) => {
   }
 })
 
+// Mirrors the scope resolution in runAgentMessage (global scope, else the
+// active project's scope as its child) so the Agent page can show which
+// scope a turn will actually use, next to the Use/Learn/Temp controls.
+// A visible answer to "which scope am I in" is what the earlier session-scope
+// bug hid entirely.
+ipcMain.handle('brain:getActiveScope', async () => {
+  if (!brainClient) return null
+  try {
+    const globalScope = await brainRequest('ensureScope', { type: 'global', externalRef: 'global', name: 'Global' }) as BrainScope
+    const { projects: brainProjects, activeProjectId: brainProjectId } = projectSnapshot()
+    const brainProject = brainProjects.find(project => project.id === brainProjectId)
+    return brainProject
+      ? await brainRequest('ensureScope', { type: 'project', externalRef: brainProject.id, name: brainProject.title, parentId: globalScope.id }) as BrainScope
+      : globalScope
+  } catch {
+    return null
+  }
+})
+
 ipcMain.handle('brain:getStatus', () => brainRequest('status', {}))
 ipcMain.handle('brain:getOverview', (_e, scopeId?: string) => brainRequest('overview', { scopeId }))
 ipcMain.handle('brain:ensureScope', (_e, input: unknown) => brainRequest('ensureScope', input))
@@ -1657,26 +1676,31 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
   const userTurn = await agentSessions.appendTurn(sessionId, { role: 'user', content: prompt, toolCalls: [] })
 
   let brainManifest: ManifestRender | null = null
-  let sessionBrainScope: BrainScope | null = null
+  let knowledgeScope: BrainScope | null = null
   if ((configuredSettings as Partial<AppSettings> & { brainEnabled?: boolean }).brainEnabled !== false && brainClient) {
     try {
       const globalScope = await brainRequest('ensureScope', { type: 'global', externalRef: 'global', name: 'Global' }) as BrainScope
       const { projects: brainProjects, activeProjectId: brainProjectId } = projectSnapshot()
       const brainProject = brainProjects.find(project => project.id === brainProjectId)
+      // The project scope (else global), never a fresh per-session scope: a
+      // session scope was invisible to the Brain UI (only global/project/
+      // client are selectable there) and knowledge queries have no ancestor
+      // inheritance, so every session started blind to the vault and every
+      // "Learn" capture landed somewhere nothing could ever read it back
+      // from. Temporary mode already disables durable writes and automatic
+      // context via brainPolicy below; it does not need a separate scope to
+      // achieve that.
       const parentScope = brainProject
         ? await brainRequest('ensureScope', { type: 'project', externalRef: brainProject.id, name: brainProject.title, parentId: globalScope.id }) as BrainScope
         : globalScope
-      const scope = brainMode.temporary
-        ? parentScope
-        : await brainRequest('ensureScope', { type: 'session', externalRef: sessionId, name: `Agent session ${sessionId}`, parentId: parentScope.id }) as BrainScope
-      activeBrainScopeId = scope.id
+      activeBrainScopeId = parentScope.id
       activeBrainWritesAllowed = brainPolicy.durableWrites
       if (brainPolicy.durableWrites) {
-        sessionBrainScope = scope
+        knowledgeScope = parentScope
         await brainRequest('recordConversationTurn', {
           turnId: userTurn.id,
           sessionId,
-          scopeId: scope.id,
+          scopeId: parentScope.id,
           role: 'user',
           sourceRef: `agent-session://${sessionId}/${userTurn.id}`,
           contentHash: createHash('sha256').update(userTurn.content).digest('hex'),
@@ -1688,9 +1712,11 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
         // Brain v2: the turn carries a flat index of what exists, and the agent
         // asks for the documents it decides it needs. Retrieved content is no
         // longer spliced in on the agent's behalf — that guessed what mattered,
-        // and measured worse than letting the agent choose.
+        // and measured worse than letting the agent choose. service.ts expands
+        // this single scope id into its full ancestor chain, so a project scope
+        // still sees everything imported at global.
         brainManifest = await brainRequest('knowledge.manifest', {
-          scopeId: scope.id,
+          scopeId: parentScope.id,
           tokenBudget: 4000,
         }) as ManifestRender
       }
@@ -1759,11 +1785,11 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
     toolCalls: [...pendingToolCalls.values()],
     ...(providerKey ? { provider: providerKey } : {}),
   })
-  if (sessionBrainScope) {
+  if (knowledgeScope) {
     await brainRequest('recordConversationTurn', {
       turnId: assistantTurn.id,
       sessionId,
-      scopeId: sessionBrainScope.id,
+      scopeId: knowledgeScope.id,
       role: 'assistant',
       sourceRef: `agent-session://${sessionId}/${assistantTurn.id}`,
       contentHash: createHash('sha256').update(assistantTurn.content).digest('hex'),
@@ -1775,7 +1801,7 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
     // reply sits in the review queue. Best-effort — capture failures must
     // never break the turn, so sessionCapture swallows its own errors.
     await captureSessionTurns({
-      scopeId: sessionBrainScope.id,
+      scopeId: knowledgeScope.id,
       userText: userTurn.content,
       userSessionRef: `agent-session://${sessionId}/${userTurn.id}`,
       assistantText: assistantTurn.content,
