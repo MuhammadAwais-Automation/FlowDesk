@@ -95,6 +95,8 @@ function inferType(path: string, frontmatter: Map<string, string>): KnowledgeDoc
     ['wiki/clients/', 'client'],
     ['wiki/me/', 'me'],
     ['wiki/research/', 'research'],
+    ['wiki/business/', 'research'],
+    ['wiki/learning/', 'skill'],
     ['wiki/skills/', 'skill'],
     ['wiki/toolkits/', 'skill'],
     ['wiki/ai-tooling/', 'skill'],

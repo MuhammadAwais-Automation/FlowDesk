@@ -111,6 +111,8 @@ describe('VaultImporter', () => {
     const cases = [
       ['wiki/me', 'me'],
       ['wiki/research', 'research'],
+      ['wiki/business', 'research'],
+      ['wiki/learning', 'skill'],
       ['wiki/skills', 'skill'],
       ['wiki/toolkits', 'skill'],
       ['wiki/ai-tooling', 'skill'],
