@@ -1,6 +1,7 @@
 import type { CustomTool } from './browser'
 import type { ProjectSessionSnapshot } from './project'
 import type { BrainCandidate, BrainContextPack, BrainDecisionBrief, BrainJob, BrainMemory, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainQuery, BrainScope, BrainScopeQuery, BrainSourceMetric, BrainStatus, MemoryKind, OpportunityEvidence } from './brain'
+import type { DocumentReadResult, DocumentSearchHit, KnowledgeDocType, KnowledgeDocument, ManifestRender, VaultImportReport } from './brainKnowledge'
 
 export interface GmailSession {
   email: string
@@ -188,6 +189,11 @@ export interface ElectronAPI {
   brainListJobs: () => Promise<BrainJob[]>
   brainListOpportunities: (input: { scopeId: string; status?: BrainOpportunityStatus; limit?: number }) => Promise<BrainOpportunity[]>
   brainCountOpportunities: (input: { scopeId: string; status?: BrainOpportunityStatus }) => Promise<number>
+  brainKnowledgeManifest: (input: { scopeId: string; types?: KnowledgeDocType[]; tokenBudget?: number }) => Promise<ManifestRender>
+  brainKnowledgeRead: (input: { scopeId: string; path: string; tokenBudget?: number }) => Promise<DocumentReadResult | null>
+  brainKnowledgeSearch: (input: { scopeId: string; query: string; types?: KnowledgeDocType[]; limit?: number }) => Promise<DocumentSearchHit[]>
+  brainKnowledgeList: (input: { scopeId: string; types?: KnowledgeDocType[]; limit?: number }) => Promise<KnowledgeDocument[]>
+  brainKnowledgeImportVault: (input: { scopeId: string; vaultRoot: string; maxFileBytes?: number }) => Promise<VaultImportReport>
   brainGetOpportunityEvidence: (input: { id: string; scopeId: string }) => Promise<OpportunityEvidence[]>
   brainReviewOpportunity: (input: { id: string; scopeId: string; decision: 'qualify' | 'dismiss' | 'convert' }) => Promise<BrainOpportunity>
   brainBuildDecisionBrief: (input: { scopeId: string; question: string; tokenBudget?: number }) => Promise<BrainDecisionBrief>

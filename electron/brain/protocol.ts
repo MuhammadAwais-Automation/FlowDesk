@@ -6,6 +6,17 @@ const text = z.string().trim().min(1).max(100_000)
 const scopeType = z.enum(['global', 'workspace', 'project', 'client', 'session'])
 const memoryKind = z.enum(['fact', 'preference', 'decision', 'goal', 'person', 'organization', 'opportunity', 'procedure', 'note'])
 const opportunityStatus = z.enum(['new', 'reviewing', 'qualified', 'dismissed', 'converted'])
+const knowledgeDocType = z.enum(['note', 'project', 'client', 'person', 'decision', 'skill', 'source', 'me', 'research'])
+/**
+ * A vault-relative document path. Traversal, absolute paths and drive letters
+ * are refused here as well as inside the store: this value can arrive straight
+ * from an agent tool call, and one check is one mistake away from a read
+ * outside the vault.
+ */
+const knowledgePath = z.string().trim().min(1).max(512)
+  .refine(value => !value.split(/[\\/]/).includes('..'), 'path may not traverse')
+  .refine(value => !value.startsWith('/') && !value.startsWith('\\'), 'path must be vault-relative')
+  .refine(value => !/^[A-Za-z]:/.test(value), 'path must be vault-relative')
 
 const requestBase = { id }
 
@@ -90,6 +101,28 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     source: z.enum(['whatsapp', 'linkedin', 'reddit']), jobId: id, stepId: id, scopeId: id,
     accountId: id.nullish(), connectorVersion: id, retentionDays: z.number().int().min(1).max(365).optional(),
     records: z.array(z.record(z.string(), z.unknown())).max(5000),
+  }).strict() }),
+  // Brain v2 knowledge layer — see docs/brain-v2/. Implemented by the modules
+  // in electron/brain/knowledge/, which four work packages build in parallel.
+  z.object({ ...requestBase, method: z.literal('knowledge.manifest'), payload: z.object({
+    scopeId: id, types: z.array(knowledgeDocType).max(9).optional(),
+    tokenBudget: z.number().int().min(1).max(8000).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.read'), payload: z.object({
+    scopeId: id, path: knowledgePath, tokenBudget: z.number().int().min(1).max(8000).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.search'), payload: z.object({
+    scopeId: id, query: z.string().trim().min(1).max(500),
+    types: z.array(knowledgeDocType).max(9).optional(),
+    limit: z.number().int().min(1).max(50).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.list'), payload: z.object({
+    scopeId: id, types: z.array(knowledgeDocType).max(9).optional(),
+    limit: z.number().int().min(1).max(5000).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.importVault'), payload: z.object({
+    scopeId: id, vaultRoot: z.string().trim().min(1).max(4096),
+    maxFileBytes: z.number().int().min(1).max(50_000_000).optional(),
   }).strict() }),
   z.object({ ...requestBase, method: z.literal('shutdown'), payload: z.object({}).strict() }),
 ])

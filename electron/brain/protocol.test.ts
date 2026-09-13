@@ -42,6 +42,45 @@ describe('brain utility protocol', () => {
     })).toThrow()
   })
 
+  it('accepts the knowledge methods and enforces their budgets and limits', () => {
+    expect(brainRequestSchema.parse({
+      id: '1', method: 'knowledge.manifest', payload: { scopeId: 'scope', types: ['project', 'client'], tokenBudget: 4000 },
+    })).toMatchObject({ method: 'knowledge.manifest' })
+    expect(brainRequestSchema.parse({
+      id: '2', method: 'knowledge.read', payload: { scopeId: 'scope', path: 'wiki/projects/flowdesk.md' },
+    })).toMatchObject({ method: 'knowledge.read' })
+    expect(brainRequestSchema.parse({
+      id: '3', method: 'knowledge.search', payload: { scopeId: 'scope', query: 'yasir dashboard', limit: 10 },
+    })).toMatchObject({ method: 'knowledge.search' })
+    expect(brainRequestSchema.parse({
+      id: '4', method: 'knowledge.list', payload: { scopeId: 'scope' },
+    })).toMatchObject({ method: 'knowledge.list' })
+    expect(brainRequestSchema.parse({
+      id: '5', method: 'knowledge.importVault', payload: { scopeId: 'scope', vaultRoot: 'E:/Claude Workspace/Second-Brain' },
+    })).toMatchObject({ method: 'knowledge.importVault' })
+
+    expect(() => brainRequestSchema.parse({
+      id: '6', method: 'knowledge.manifest', payload: { scopeId: 'scope', tokenBudget: 8001 },
+    })).toThrow()
+    expect(() => brainRequestSchema.parse({
+      id: '7', method: 'knowledge.search', payload: { scopeId: 'scope', query: 'x', limit: 51 },
+    })).toThrow()
+    expect(() => brainRequestSchema.parse({
+      id: '8', method: 'knowledge.list', payload: { scopeId: 'scope', limit: 5001 },
+    })).toThrow()
+  })
+
+  it('refuses a traversal path at the knowledge boundary, before any store sees it', () => {
+    // The path can arrive from an agent tool call, so it is rejected here as
+    // well as inside the store — a single check is one mistake away from a
+    // read outside the vault.
+    for (const path of ['../etc/passwd', 'wiki/../../secrets.md', '/etc/passwd', '']) {
+      expect(() => brainRequestSchema.parse({
+        id: '9', method: 'knowledge.read', payload: { scopeId: 'scope', path },
+      })).toThrow()
+    }
+  })
+
   it('accepts at most five known scope types', () => {
     expect(brainRequestSchema.parse({
       id: '1', method: 'listScopes', payload: { types: ['global', 'workspace', 'project', 'client', 'session'] },

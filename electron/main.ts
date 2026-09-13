@@ -5,8 +5,9 @@ import { mkdir, writeFile, copyFile } from 'fs/promises'
 import { pathToFileURL } from 'url'
 import { createElectronBrainClient } from './brain/electronClient'
 import type { BrainClient } from './brain/client'
-import { composePromptWithBrain } from './agent/brainContext'
-import type { BrainContextPack, BrainScope } from '../src/types/brain'
+import { composePromptWithManifest } from './agent/brainContext'
+import type { BrainScope } from '../src/types/brain'
+import type { ManifestRender } from '../src/types/brainKnowledge'
 import { configureBrainTools } from './agent/brainTools'
 import { brainModePolicy, normalizeAgentBrainMode } from './agent/brainMode'
 import { buildContinuationPrompt, planContinuationTurns } from './agent/continuations'
@@ -395,6 +396,11 @@ ipcMain.handle('brain:decideCandidate', (_e, input: unknown) => brainRequest('de
 ipcMain.handle('brain:listJobs', () => brainRequest('listJobs', {}))
 ipcMain.handle('brain:listOpportunities', (_e, input: unknown) => brainRequest('listOpportunities', input))
 ipcMain.handle('brain:countOpportunities', (_e, input: unknown) => brainRequest('countOpportunities', input))
+ipcMain.handle('brain:knowledgeManifest', (_e, input: unknown) => brainRequest('knowledge.manifest', input))
+ipcMain.handle('brain:knowledgeRead', (_e, input: unknown) => brainRequest('knowledge.read', input))
+ipcMain.handle('brain:knowledgeSearch', (_e, input: unknown) => brainRequest('knowledge.search', input))
+ipcMain.handle('brain:knowledgeList', (_e, input: unknown) => brainRequest('knowledge.list', input))
+ipcMain.handle('brain:knowledgeImportVault', (_e, input: unknown) => brainRequest('knowledge.importVault', input))
 ipcMain.handle('brain:getOpportunityEvidence', (_e, input: unknown) => brainRequest('getOpportunityEvidence', input))
 ipcMain.handle('brain:reviewOpportunity', (_e, input: unknown) => brainRequest('reviewOpportunity', input))
 ipcMain.handle('brain:buildDecisionBrief', (_e, input: unknown) => brainRequest('buildDecisionBrief', input))
@@ -1632,7 +1638,7 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
   // a turn is captured even if the window is closed mid-run.
   const userTurn = await agentSessions.appendTurn(sessionId, { role: 'user', content: prompt, toolCalls: [] })
 
-  let brainContext: BrainContextPack | null = null
+  let brainManifest: ManifestRender | null = null
   let sessionBrainScope: BrainScope | null = null
   if ((configuredSettings as Partial<AppSettings> & { brainEnabled?: boolean }).brainEnabled !== false && brainClient) {
     try {
@@ -1661,13 +1667,14 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
         })
       }
       if (brainPolicy.automaticContext) {
-        brainContext = await brainRequest('search', {
-          text: prompt,
+        // Brain v2: the turn carries a flat index of what exists, and the agent
+        // asks for the documents it decides it needs. Retrieved content is no
+        // longer spliced in on the agent's behalf — that guessed what mattered,
+        // and measured worse than letting the agent choose.
+        brainManifest = await brainRequest('knowledge.manifest', {
           scopeId: scope.id,
-          includeParents: true,
-          tokenBudget: 1200,
-          limit: 12,
-        }) as BrainContextPack
+          tokenBudget: 4000,
+        }) as ManifestRender
       }
     } catch (error) {
       console.log(`[FlowDesk brain] context unavailable: ${error instanceof Error ? error.message : String(error)}`)
@@ -1688,7 +1695,7 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
     const catchUp = buildCatchUp(turns.slice(0, -1), link?.syncedThroughTurn ?? 0)
     if (catchUp) promptToSend = `${catchUp}\n\n${prompt}`
   }
-  if (brainContext) promptToSend = composePromptWithBrain(promptToSend, brainContext)
+  if (brainManifest) promptToSend = composePromptWithManifest(promptToSend, brainManifest)
 
   const bypassPermissions = configuredSettings.agentBypassPermissions === true
   const requestApproval = makeRequestApproval(runId, sessionId, bypassPermissions)

@@ -8,11 +8,22 @@ import { ArtifactStore } from './artifactStore'
 import { socialRecipeDefinitions } from './recipeDefinitions'
 import { buildDecisionBrief } from './decisionBrief'
 import { MonitorScheduler, createMonitorSchedulerPort } from './scheduler'
+import { DocumentStore } from './knowledge/documents'
+import { ManifestBuilder } from './knowledge/manifest'
+import { VaultImporter } from './knowledge/vaultImporter'
 
 export class BrainService {
   readonly database: BrainDatabase
   readonly vault: VaultManager
   readonly artifacts: ArtifactStore
+  /**
+   * Brain v2 knowledge layer. Each module owns its own SQL against the shared
+   * handle, so the four work packages in docs/brain-v2/ can be built in
+   * parallel without any of them editing this file or database.ts.
+   */
+  readonly documents: DocumentStore
+  readonly manifest: ManifestBuilder
+  readonly vaultImporter: VaultImporter
   private readonly maintenanceTimer: ReturnType<typeof setInterval>
   private readonly monitors: MonitorScheduler
 
@@ -20,6 +31,9 @@ export class BrainService {
     this.database = new BrainDatabase(databasePath)
     this.vault = new VaultManager(this.database, join(dirname(databasePath), 'vault'))
     this.artifacts = new ArtifactStore(this.database, join(dirname(databasePath), 'artifacts'))
+    this.documents = new DocumentStore(this.database.handle)
+    this.manifest = new ManifestBuilder(this.documents)
+    this.vaultImporter = new VaultImporter(this.documents)
     this.vault.reconcileAll()
     this.vault.start()
     this.database.registerRecipe({ id: 'notebooklm.research', version: 1, title: 'NotebookLM Research', steps: ['capture', 'normalize', 'summarize'] })
@@ -167,6 +181,11 @@ export class BrainService {
         this.assertProtocolMayMutateJob(request.payload.jobId)
         return this.artifacts.ingestBatch({ ...request.payload, accountId: request.payload.accountId ?? null })
       }
+      case 'knowledge.manifest': return this.manifest.build(request.payload)
+      case 'knowledge.read': return this.documents.read(request.payload.scopeId, request.payload.path)
+      case 'knowledge.search': return this.documents.search(request.payload)
+      case 'knowledge.list': return this.documents.list(request.payload)
+      case 'knowledge.importVault': return this.vaultImporter.import(request.payload)
       case 'shutdown': {
         this.close()
         return { closed: true }

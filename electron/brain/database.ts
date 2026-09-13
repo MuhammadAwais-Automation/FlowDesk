@@ -28,7 +28,7 @@ import type {
 } from '../../src/types/brain'
 
 /** SQLite schema version (`PRAGMA user_version`), not the backup archive's. */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 const TABLES = [
   'scopes', 'scope_links', 'memories', 'memory_revisions', 'memory_candidates',
@@ -38,6 +38,7 @@ const TABLES = [
   'agent_continuations', 'outbox_events', 'consents', 'audit_events',
   'vault_conflicts', 'processing_cache', 'schema_migrations',
   'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
+  'knowledge_documents', 'knowledge_fts', 'knowledge_links',
 ] as const
 
 type SqlRow = Record<string, unknown>
@@ -266,6 +267,27 @@ export class BrainDatabase {
         CREATE INDEX IF NOT EXISTS idx_opportunity_evidence_opportunity ON opportunity_evidence(opportunity_id);
         CREATE INDEX IF NOT EXISTS idx_monitors_due ON monitors(status, next_run_at);
         CREATE INDEX IF NOT EXISTS idx_source_metrics_scope_platform ON source_metrics(scope_id, platform, observed_at);
+
+        -- v3: the knowledge layer. Documents are the corpus an agent navigates
+        -- by manifest; these tables are a derived index over files on disk, and
+        -- the modules in electron/brain/knowledge/ own the SQL against them.
+        CREATE TABLE IF NOT EXISTS knowledge_documents (
+          id TEXT PRIMARY KEY, path TEXT NOT NULL, scope_id TEXT NOT NULL REFERENCES scopes(id),
+          type TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+          content_hash TEXT NOT NULL, byte_size INTEGER NOT NULL DEFAULT 0,
+          origin TEXT NOT NULL DEFAULT 'curated',
+          -- valid_to is how a document is superseded; nothing here is deleted.
+          valid_from TEXT NOT NULL, valid_to TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(scope_id, path)
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(document_id UNINDEXED, title, summary, body, tokenize='unicode61');
+        CREATE TABLE IF NOT EXISTS knowledge_links (
+          id TEXT PRIMARY KEY,
+          document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+          target_path TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(document_id, target_path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_documents_scope_type ON knowledge_documents(scope_id, type, updated_at DESC);
       `)
       this.db.prepare('INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, now())
       this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
@@ -274,6 +296,17 @@ export class BrainDatabase {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /**
+   * The shared connection, for the knowledge modules only.
+   *
+   * Those modules own their own SQL rather than adding methods here, so that
+   * several of them can be built in parallel without every one editing this
+   * file. Everything else must go through a method on this class.
+   */
+  get handle(): DatabaseSync {
+    return this.db
   }
 
   close() {

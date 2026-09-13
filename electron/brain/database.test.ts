@@ -18,13 +18,53 @@ afterEach(() => {
 })
 
 describe('BrainDatabase', () => {
-  it('creates the complete v2 intelligence schema from an empty database', () => {
+  it('creates the complete v3 schema from an empty database', () => {
     const brain = createBrain()
-    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 2 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 3 })
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
       'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
+      'knowledge_documents', 'knowledge_fts', 'knowledge_links',
     ]))
     brain.close()
+  })
+
+  it('migrates a populated v2 database to v3 additively, keeping intelligence data intact', () => {
+    // v3 adds the knowledge layer beside the intelligence tables rather than
+    // reshaping them: an existing profile must gain the new tables and lose
+    // nothing. The v2 rows below are the ones a real profile would hold.
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-v3-'))
+    roots.push(root)
+    const path = join(root, 'brain.sqlite')
+    const brain = new BrainDatabase(path)
+    const scope = brain.ensureScope({ type: 'client', externalRef: 'client-v3', name: 'Client V3' })
+    const opportunity = brain.upsertOpportunity({
+      scopeId: scope.id, fingerprint: 'lead-v3', category: 'direct_lead', title: 'Existing lead',
+      summary: 'Survives the migration.', score: 77, confidence: 0.8, freshness: '2026-09-05T00:00:00.000Z',
+    })
+    brain.close()
+
+    // Force the stored version back to 2 so reopening runs the v2 → v3 step
+    // against real data rather than an empty file.
+    const downgrade = new DatabaseSync(path)
+    downgrade.exec('PRAGMA user_version=2')
+    downgrade.exec('DROP TABLE IF EXISTS knowledge_links')
+    downgrade.exec('DROP TABLE IF EXISTS knowledge_fts')
+    downgrade.exec('DROP TABLE IF EXISTS knowledge_documents')
+    downgrade.close()
+
+    const migrated = new BrainDatabase(path)
+    expect(migrated.getStatus().schemaVersion).toBe(3)
+    expect(migrated.listSchemaTables()).toEqual(expect.arrayContaining([
+      'knowledge_documents', 'knowledge_fts', 'knowledge_links',
+    ]))
+    expect(migrated.listOpportunities({ scopeId: scope.id })).toMatchObject([{ id: opportunity.id, title: 'Existing lead' }])
+    migrated.close()
+
+    // Idempotent: reopening an already-v3 database changes nothing.
+    const reopened = new BrainDatabase(path)
+    expect(reopened.getStatus().schemaVersion).toBe(3)
+    expect(reopened.listOpportunities({ scopeId: scope.id })).toHaveLength(1)
+    reopened.close()
   })
 
   it('migrates an existing v1 database to v2 without losing scopes', () => {
@@ -45,7 +85,7 @@ describe('BrainDatabase', () => {
     legacy.close()
 
     const brain = new BrainDatabase(path)
-    expect(brain.getStatus().schemaVersion).toBe(2)
+    expect(brain.getStatus().schemaVersion).toBe(3)
     expect(brain.listScopes(['client'])).toMatchObject([{ id: 'client-a', name: 'Legacy A' }])
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
       'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
@@ -53,7 +93,7 @@ describe('BrainDatabase', () => {
     brain.close()
   })
 
-  it('finishes a half-created v2 migration idempotently and records version 2 exactly', () => {
+  it('finishes a half-created migration idempotently and records the current version exactly', () => {
     const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-v2-partial-'))
     roots.push(root)
     const path = join(root, 'brain.sqlite')
@@ -76,14 +116,14 @@ describe('BrainDatabase', () => {
     partial.close()
 
     const first = new BrainDatabase(path)
-    expect(first.getStatus().schemaVersion).toBe(2)
+    expect(first.getStatus().schemaVersion).toBe(3)
     expect(first.listSchemaTables()).toEqual(expect.arrayContaining(['opportunity_evidence', 'monitors', 'source_metrics']))
     first.close()
     const versionCheck = new DatabaseSync(path)
-    expect((versionCheck.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2)
+    expect((versionCheck.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3)
     versionCheck.close()
     const reopened = new BrainDatabase(path)
-    expect(reopened.getStatus().schemaVersion).toBe(2)
+    expect(reopened.getStatus().schemaVersion).toBe(3)
     reopened.close()
   })
 
@@ -304,7 +344,7 @@ describe('BrainDatabase', () => {
 
   it('creates the complete v2 schema with WAL, foreign keys and FTS5', () => {
     const brain = createBrain()
-    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 2 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 3 })
     expect(brain.getJournalMode()).toBe('wal')
     expect(brain.getForeignKeysEnabled()).toBe(true)
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
@@ -326,7 +366,7 @@ describe('BrainDatabase', () => {
     partial.exec('CREATE TABLE scopes (id TEXT PRIMARY KEY, type TEXT NOT NULL, external_ref TEXT NOT NULL, name TEXT NOT NULL, parent_id TEXT REFERENCES scopes(id), created_at TEXT NOT NULL, UNIQUE(type, external_ref))')
     partial.close()
     const brain = new BrainDatabase(path)
-    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 2 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 3 })
     expect(brain.listSchemaTables()).toContain('jobs')
     brain.close()
   })
