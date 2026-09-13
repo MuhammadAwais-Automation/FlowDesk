@@ -16,6 +16,8 @@ describe('Brain agent tools', () => {
   it('publishes the complete narrow tool contract', () => {
     expect(BRAIN_TOOL_NAMES).toEqual([
       'mcp__workers__brain_search',
+      'mcp__workers__brain_read_document',
+      'mcp__workers__brain_search_documents',
       'mcp__workers__brain_remember',
       'mcp__workers__brain_forget',
       'mcp__workers__brain_explain_source',
@@ -27,6 +29,28 @@ describe('Brain agent tools', () => {
       'mcp__workers__brain_build_decision_brief',
       'mcp__workers__brain_review_opportunity',
     ])
+  })
+
+  it('binds document navigation to the active scope', async () => {
+    const request = vi.fn(async (method: string) => method === 'knowledge.read'
+      ? {
+          path: 'wiki/client.md', title: 'Client', type: 'client', text: 'Scope-safe body.',
+          updatedAt: '2026-09-13T00:00:00.000Z', estimatedTokens: 4, truncated: false,
+        }
+      : [])
+    configureBrainTools({ request, getScopeId: () => 'client-a', allowWrites: () => true })
+
+    const readOutput = JSON.parse((await getTool('brain_read_document').tool.handler({ path: 'wiki/client.md' })).content[0].text)
+    const searchOutput = JSON.parse((await getTool('brain_search_documents').tool.handler({ query: 'client', limit: 4 })).content[0].text)
+
+    expect(readOutput).toContain('Scope-safe body.')
+    expect(searchOutput).toMatch(/no matches/i)
+    expect(request).toHaveBeenNthCalledWith(1, 'knowledge.read', {
+      scopeId: 'client-a', path: 'wiki/client.md', tokenBudget: 4000,
+    })
+    expect(request).toHaveBeenNthCalledWith(2, 'knowledge.search', {
+      scopeId: 'client-a', query: 'client', limit: 4,
+    })
   })
 
   it('uses the typed decision brief endpoint instead of generic memory search', async () => {
