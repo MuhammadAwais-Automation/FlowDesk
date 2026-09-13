@@ -194,12 +194,12 @@ export interface ElectronAPI {
   brainKnowledgeSearch: (input: { scopeId: string; query: string; types?: KnowledgeDocType[]; limit?: number }) => Promise<DocumentSearchHit[]>
   brainKnowledgeList: (input: { scopeId: string; types?: KnowledgeDocType[]; limit?: number }) => Promise<KnowledgeDocument[]>
   brainKnowledgeImportVault: (input: { scopeId: string; vaultRoot: string; maxFileBytes?: number }) => Promise<VaultImportReport>
-  // NOTE: P2-A's real candidates.ts is still landing in parallel (its service.ts
-  // case arms currently throw). propose's return shape isn't confirmed yet —
-  // the plan says it's either the KnowledgeCandidate (machine-inferred, pending)
-  // or the resulting KnowledgeDocument (explicit-user, superseded immediately) —
-  // narrow this once candidates.ts lands rather than guessing the discriminant.
-  brainKnowledgeProposeCandidate: (input: ProposeCandidateInput) => Promise<KnowledgeCandidate | KnowledgeDocument>
+  // Discriminated on `kind`, matching CandidateStore.propose's real return
+  // type: 'written' when an explicit-user proposal superseded straight into
+  // knowledge_documents, 'queued' when a machine-inferred one is now pending.
+  brainKnowledgeProposeCandidate: (input: ProposeCandidateInput) => Promise<
+    { kind: 'written'; document: KnowledgeDocument } | { kind: 'queued'; candidate: KnowledgeCandidate }
+  >
   brainKnowledgeListCandidates: (input: { scopeId: string }) => Promise<KnowledgeCandidate[]>
   brainKnowledgeDecideCandidate: (input: DecideCandidateInput) => Promise<{ candidate: KnowledgeCandidate; document: KnowledgeDocument | null }>
   brainGetOpportunityEvidence: (input: { id: string; scopeId: string }) => Promise<OpportunityEvidence[]>
