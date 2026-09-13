@@ -110,16 +110,32 @@ At the current corpus (156 docs, ~3.4k tokens) truncation will not trigger at
 the 4000 default. It must still be correct — the corpus grows, and at ~1000
 documents the manifest reaches roughly 22k tokens.
 
-## Caching
+## No caching — build fresh every time
 
-Rebuilding on every turn is wasteful; serving a stale manifest is worse.
+**Corrected 2026-09-13.** An earlier version of this document asked for a
+cache that did not call `list()` on a hit, while also deriving its
+invalidation signal from what `list()` returns. That is self-contradictory —
+you cannot detect the change without making the call — and the agent working
+this package was right to stop rather than work around it.
 
-- Cache the rendered result keyed on `scopeId + types + tokenBudget`.
-- Invalidate when the underlying document set changes. Derive a cheap
-  validity signal from what the port gives you — e.g. entry count plus the
-  maximum `updatedAt` across the listed documents. If either changes, rebuild.
+The resolution is to drop the cache, not to add an API to rescue it:
+
+- Call `list()` and render on every `build()`. No memoisation, no signature,
+  no revision counter.
+- Do not add a method to `DocumentStorePort` for this. W2 is complete; the
+  port stays as it is.
 - Do not add a file watcher. W4 owns import; document changes arrive through
   the store.
+
+The cache was speculative. `list()` is one indexed query and the render is a
+string join over a few hundred short rows — sub-millisecond work, called once
+per agent turn, sitting in front of an LLM call that takes seconds and costs
+thousands of tokens. There is nothing here worth caching, and a stale manifest
+(the failure a cache invites) is far more expensive than rebuilding.
+
+If profiling ever shows the rebuild actually matters, adding a cheap
+`revision(scopeId)` to the port at that point is a small additive change. Do
+it on evidence, not in advance.
 
 ## Acceptance tests (write these first, watch them fail)
 
@@ -136,8 +152,9 @@ Rebuilding on every turn is wasteful; serving a stale manifest is worse.
    the omission line states the real dropped count.
 8. Under budget: `truncated` is false and no omission line is present.
 9. `estimatedTokens` equals `Math.ceil(text.length / 4)`.
-10. Cache: a second build with an unchanged fake store does not re-list;
-    changing the fake's max `updatedAt` forces a rebuild.
+10. Freshness: after the fake store gains a document, the next `build()`
+    includes it without any explicit invalidation step — assert `list()` is
+    called on every build.
 11. Scale: with a generated fake of 1000 documents, the build completes and
     reports a sane token count (assert it is within a broad band, e.g.
     15k–30k — this is a regression guard on line length, not a precise claim).
@@ -156,6 +173,5 @@ All three clean. Commit on your branch only.
 
 Write `docs/brain-v2/reports/w1-manifest.md` covering: the final render
 format if it differs at all from this spec and why, the real measured token
-count for 156 and 1000 documents, how you invalidate the cache, and anything
-the integrator must know. If any part of this spec turned out wrong or
+count for 156 and 1000 documents, and anything the integrator must know. If any part of this spec turned out wrong or
 impossible, say so plainly there rather than working around it silently.
