@@ -311,6 +311,26 @@ describe('DocumentStore', () => {
     expect(store.search({ scopeIds: [], query: 'cobalt' })).toEqual([])
   })
 
+  it('lists unresolved links across the scope chain, excluding resolved ones', () => {
+    const { scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { path: 'people/existing.md', title: 'Existing', contentHash: 'target' }))
+    store.upsert(documentInput(scope.id, {
+      path: 'projects/source.md', type: 'project', contentHash: 'source-1',
+      links: ['people/existing.md', 'people/ghost.md'],
+    }))
+
+    const unresolved = store.listUnresolvedLinks([scope.id])
+
+    expect(unresolved).toEqual([{ documentPath: 'projects/source.md', documentTitle: 'Yasir Bhai', targetPath: 'people/ghost.md' }])
+  })
+
+  it('listUnresolvedLinks returns nothing for an empty scope chain', () => {
+    const { scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { links: ['people/ghost.md'] }))
+
+    expect(store.listUnresolvedLinks([])).toEqual([])
+  })
+
   it('rolls back all three tables when an upsert violates the scope foreign key', () => {
     const { brain, store } = createStore()
 

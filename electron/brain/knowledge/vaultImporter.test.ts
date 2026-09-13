@@ -73,6 +73,10 @@ class FakeDocumentStore implements DocumentStorePort {
     throw new Error('Not used by vault importer tests')
   }
 
+  listUnresolvedLinks(_scopeIds: string[]): never {
+    throw new Error('Not used by vault importer tests')
+  }
+
   get(path: string) {
     return this.documents.get(`scope-1\0${path}`)
   }

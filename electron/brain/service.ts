@@ -12,6 +12,7 @@ import { CandidateStore } from './knowledge/candidates'
 import { Compactor } from './knowledge/compactor'
 import { DocumentStore } from './knowledge/documents'
 import { ManifestBuilder } from './knowledge/manifest'
+import { migrateMemories } from './knowledge/memoriesMigration'
 import { VaultImporter } from './knowledge/vaultImporter'
 
 export class BrainService {
@@ -41,8 +42,17 @@ export class BrainService {
     this.vaultImporter = new VaultImporter(this.documents)
     this.candidates = new CandidateStore(this.database.handle, this.documents)
     this.compactor = new Compactor(this.documents)
-    this.vault.reconcileAll()
-    this.vault.start()
+    // Part 1: memories are folded into knowledge_documents (see
+    // knowledge/memoriesMigration.ts) rather than staying a second store this
+    // vault keeps in sync with. Nothing new writes to `memories` any more, so
+    // there is nothing left for this to reconcile or watch -- running it
+    // unconditionally was also a real hazard: a user pointing
+    // brain:chooseVaultFolder at this same directory (guarded against in
+    // main.ts, but nothing stopped it before) would have re-imported the
+    // entire memory ledger as knowledge_documents, or the watcher would have
+    // fired on every edit under it once the folder became selectable. The
+    // instance and its files stay (`vaultStatus`/`vaultSync`/backup export
+    // still read `this.vault.root`); it simply never runs on its own.
     this.database.registerRecipe({ id: 'notebooklm.research', version: 1, title: 'NotebookLM Research', steps: ['capture', 'normalize', 'summarize'] })
     this.database.registerRecipe({ id: 'notebooklm.artifact', version: 1, title: 'NotebookLM Artifact', steps: ['generate', 'capture_manifest'] })
     for (const recipe of socialRecipeDefinitions) this.database.registerRecipe(recipe)
@@ -234,6 +244,9 @@ export class BrainService {
       case 'knowledge.listCandidates': return this.candidates.list(request.payload.scopeId)
       case 'knowledge.decideCandidate': return this.candidates.decide(request.payload)
       case 'knowledge.compact': return this.compactor.compact(request.payload.scopeId)
+      case 'knowledge.migrateMemories':
+        return migrateMemories(this.documents, { memories: this.database.listMemories(), dryRun: request.payload.dryRun })
+      case 'knowledge.listUnresolvedLinks': return this.documents.listUnresolvedLinks(this.knowledgeScopeChain(request.payload.scopeId))
       case 'shutdown': {
         this.close()
         return { closed: true }

@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   brainKnowledgeListCandidates: (input: unknown) => ipcRenderer.invoke('brain:knowledgeListCandidates', input),
   brainKnowledgeDecideCandidate: (input: unknown) => ipcRenderer.invoke('brain:knowledgeDecideCandidate', input),
   brainKnowledgeCompact: (input: unknown) => ipcRenderer.invoke('brain:knowledgeCompact', input),
+  brainKnowledgeMigrateMemories: (input: unknown) => ipcRenderer.invoke('brain:knowledgeMigrateMemories', input),
+  brainKnowledgeListUnresolvedLinks: (input: unknown) => ipcRenderer.invoke('brain:knowledgeListUnresolvedLinks', input),
   brainChooseVaultFolder: () => ipcRenderer.invoke('brain:chooseVaultFolder'),
   brainGetVaultRoot: () => ipcRenderer.invoke('brain:getVaultRoot'),
   brainGetOpportunityEvidence: (input: unknown) => ipcRenderer.invoke('brain:getOpportunityEvidence', input),

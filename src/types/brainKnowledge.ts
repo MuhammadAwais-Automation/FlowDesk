@@ -159,3 +159,16 @@ export interface CompactionReport {
   leftStandalone: number
   decisions: CompactionDecision[]
 }
+
+/**
+ * A wiki-link whose target didn't resolve to a real document at write time
+ * (Obsidian calls this an "unlinked mention" from the target's point of
+ * view — a candidate connection with no maintenance cost until you act on
+ * it). Read-only for now: promoting one into a real link means editing the
+ * source document's body, which is future work, not this.
+ */
+export interface UnresolvedLink {
+  documentPath: string
+  documentTitle: string
+  targetPath: string
+}

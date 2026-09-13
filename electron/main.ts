@@ -74,7 +74,7 @@ interface PromptCategory {
   color: string
 }
 
-import { join, basename } from 'path'
+import { join, basename, resolve, sep } from 'path'
 import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView, findAnyViewByUrl, findWorkerViewByTool } from './sessions'
 import { attachShellLinkPolicy } from './shellLinkPolicy'
@@ -425,6 +425,8 @@ ipcMain.handle('brain:knowledgeProposeCandidate', (_e, input: unknown) => brainR
 ipcMain.handle('brain:knowledgeListCandidates', (_e, input: unknown) => brainRequest('knowledge.listCandidates', input))
 ipcMain.handle('brain:knowledgeDecideCandidate', (_e, input: unknown) => brainRequest('knowledge.decideCandidate', input))
 ipcMain.handle('brain:knowledgeCompact', (_e, input: unknown) => brainRequest('knowledge.compact', input))
+ipcMain.handle('brain:knowledgeMigrateMemories', (_e, input: unknown) => brainRequest('knowledge.migrateMemories', input))
+ipcMain.handle('brain:knowledgeListUnresolvedLinks', (_e, input: unknown) => brainRequest('knowledge.listUnresolvedLinks', input))
 ipcMain.handle('brain:getOpportunityEvidence', (_e, input: unknown) => brainRequest('getOpportunityEvidence', input))
 ipcMain.handle('brain:reviewOpportunity', (_e, input: unknown) => brainRequest('reviewOpportunity', input))
 ipcMain.handle('brain:buildDecisionBrief', (_e, input: unknown) => brainRequest('buildDecisionBrief', input))
@@ -1302,6 +1304,17 @@ ipcMain.handle('brain:chooseVaultFolder', async () => {
   })
   if (result.canceled || !result.filePaths[0]) return null
   const vaultRoot = result.filePaths[0]
+  // The old memory-vault directory (electron/brain/vault.ts's VaultManager
+  // root, <userData>/brain/vault) is a different, unrelated thing that also
+  // used to be called "vault" -- picking it here would re-import the entire
+  // legacy memory ledger as knowledge_documents. Nothing checked this before;
+  // it's cheap insurance now that the two systems are named the same.
+  const legacyVaultRoot = join(app.getPath('userData'), 'brain', 'vault')
+  const normalizedChoice = resolve(vaultRoot)
+  const normalizedLegacy = resolve(legacyVaultRoot)
+  if (normalizedChoice === normalizedLegacy || normalizedChoice.startsWith(`${normalizedLegacy}${sep}`)) {
+    throw new Error('That folder is FlowDesk\'s internal memory vault, not a folder to import from. Choose your own notes folder instead.')
+  }
   store.set('brainVaultRoot' as never, vaultRoot as never)
   return vaultRoot
 })

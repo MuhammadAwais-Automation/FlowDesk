@@ -61,6 +61,35 @@ describe('Brain agent tools', () => {
     expect(request).not.toHaveBeenCalledWith('search', expect.anything())
   })
 
+  it('brain_remember proposes an explicit-user knowledge candidate, not a legacy memory write', async () => {
+    const request = vi.fn(async () => ({ kind: 'written' }))
+    configureBrainTools({ request, getScopeId: () => 'client-a', allowWrites: () => true })
+
+    await getTool('brain_remember').tool.handler({
+      kind: 'fact', text: 'Yasir bhai prefers WhatsApp updates.', subject: 'Yasir Bhai', predicate: 'prefers_channel',
+    })
+
+    expect(request).toHaveBeenCalledWith('knowledge.proposeCandidate', {
+      scopeId: 'client-a',
+      type: 'note',
+      title: 'Yasir bhai prefers WhatsApp updates.',
+      summary: '',
+      body: 'Subject: Yasir Bhai\nPredicate: prefers_channel\n\nYasir bhai prefers WhatsApp updates.',
+      origin: 'explicit-user',
+      sessionRef: expect.stringMatching(/^agent-tool:\/\/brain_remember\/\d+$/),
+    })
+    expect(request).not.toHaveBeenCalledWith('remember', expect.anything())
+  })
+
+  it('brain_remember refuses when Brain learning is disabled for the turn', async () => {
+    const request = vi.fn()
+    configureBrainTools({ request, getScopeId: () => 'client-a', allowWrites: () => false })
+
+    await expect(getTool('brain_remember').tool.handler({ kind: 'fact', text: 'Should not be saved.' }))
+      .rejects.toThrow('Brain learning is disabled for this Agent turn')
+    expect(request).not.toHaveBeenCalled()
+  })
+
   it('requires real approval before reviewing an opportunity', async () => {
     const request = vi.fn(async () => ({ status: 'qualified' }))
     configureBrainTools({ request, getScopeId: () => 'client-a', allowWrites: () => true })

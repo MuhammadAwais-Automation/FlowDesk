@@ -120,6 +120,24 @@ describe('brain utility protocol', () => {
     })).toThrow()
   })
 
+  it('accepts the memories migration method with or without dryRun', () => {
+    expect(brainRequestSchema.parse({
+      id: '1', method: 'knowledge.migrateMemories', payload: {},
+    })).toMatchObject({ method: 'knowledge.migrateMemories' })
+    expect(brainRequestSchema.parse({
+      id: '2', method: 'knowledge.migrateMemories', payload: { dryRun: true },
+    })).toMatchObject({ payload: { dryRun: true } })
+  })
+
+  it('accepts the unresolved-links method', () => {
+    expect(brainRequestSchema.parse({
+      id: '1', method: 'knowledge.listUnresolvedLinks', payload: { scopeId: 'scope' },
+    })).toMatchObject({ method: 'knowledge.listUnresolvedLinks' })
+    expect(() => brainRequestSchema.parse({
+      id: '2', method: 'knowledge.listUnresolvedLinks', payload: {},
+    })).toThrow()
+  })
+
   it('refuses a traversal path at the knowledge boundary, before any store sees it', () => {
     // The path can arrive from an agent tool call, so it is rejected here as
     // well as inside the store — a single check is one mistake away from a

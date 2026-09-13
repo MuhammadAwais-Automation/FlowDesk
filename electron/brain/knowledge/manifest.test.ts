@@ -59,6 +59,10 @@ class FakeDocumentStore implements DocumentStorePort {
   search(_input: SearchDocumentsInput): DocumentSearchHit[] {
     throw new Error('Not used by manifest tests')
   }
+
+  listUnresolvedLinks(_scopeIds: string[]): never {
+    throw new Error('Not used by manifest tests')
+  }
 }
 
 describe('ManifestBuilder', () => {

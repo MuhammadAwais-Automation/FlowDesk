@@ -10,6 +10,7 @@ import type {
   DocumentSearchHit,
   KnowledgeDocType,
   KnowledgeDocument,
+  UnresolvedLink,
 } from '../../../src/types/brainKnowledge'
 
 export interface UpsertDocumentInput {
@@ -76,4 +77,7 @@ export interface DocumentStorePort {
   /** Tries `scopeIds` in order, nearest first; returns the first match. */
   read(scopeIds: string[], path: string): { document: KnowledgeDocument; body: string } | null
   search(input: SearchDocumentsInput): DocumentSearchHit[]
+  /** Wiki-links whose target didn't exist at write time — candidate
+   *  connections a human can see and act on, at no cost if ignored. */
+  listUnresolvedLinks(scopeIds: string[]): UnresolvedLink[]
 }

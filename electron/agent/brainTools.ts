@@ -1,9 +1,10 @@
 import { z } from 'zod'
 import { tool } from '@anthropic-ai/claude-agent-sdk'
+import { toDocType } from '../brain/knowledge/memoriesMigration'
 import type { RequestApproval } from './approval'
 import { BRAIN_UNAVAILABLE_MESSAGE, readBrainDocument, searchBrainDocuments } from './brainNavigation'
 
-type BrainMethod = 'search' | 'remember' | 'getMemory' | 'forget' | 'listCandidates' | 'decideCandidate' | 'enqueueJob' | 'listJobs' | 'buildDecisionBrief' | 'reviewOpportunity' | 'knowledge.read' | 'knowledge.search'
+type BrainMethod = 'search' | 'remember' | 'getMemory' | 'forget' | 'listCandidates' | 'decideCandidate' | 'enqueueJob' | 'listJobs' | 'buildDecisionBrief' | 'reviewOpportunity' | 'knowledge.read' | 'knowledge.search' | 'knowledge.proposeCandidate'
 
 interface BrainToolRuntime {
   request(method: BrainMethod, payload: unknown): Promise<unknown>
@@ -30,6 +31,24 @@ function result(value: unknown) {
 
 function requireWrites(runtime: BrainToolRuntime) {
   if (!runtime.allowWrites()) throw new Error('Brain learning is disabled for this Agent turn')
+}
+
+/**
+ * Local copy of the same word-boundary title truncation used by
+ * sessionCapture.ts and vaultImporter.ts -- each of those files is owned by
+ * a different Brain v2 package and explains in its own comment why it keeps
+ * its own copy rather than importing another package's private helper. This
+ * one is no different: a few stateless lines, cheaper to duplicate than to
+ * couple across ownership boundaries.
+ */
+function rememberTitle(text: string): string {
+  const firstLine = text.split(/\r?\n/, 1)[0]?.trim() ?? ''
+  const source = firstLine.length > 0 ? firstLine : text.trim()
+  const maximumLength = 60
+  if (source.length <= maximumLength) return source
+  const prefix = source.slice(0, maximumLength + 1)
+  const boundary = prefix.search(/\s+\S*$/)
+  return (boundary > 0 ? prefix.slice(0, boundary) : source.slice(0, maximumLength)).trimEnd()
 }
 
 export const BRAIN_TOOL_NAMES = [
@@ -84,7 +103,22 @@ export function createBrainTools(requestApproval: RequestApproval) {
     }, async input => {
       const { runtime, scopeId } = activeRuntime()
       requireWrites(runtime)
-      return result(await runtime.request('remember', { ...input, scopeId }))
+      // Part 1: memories are folded into the one knowledge store rather than
+      // a second, separately-synced one. 'explicit-user' origin writes
+      // straight through -- the user said it themselves via this tool call.
+      const metadata = [
+        input.subject ? `Subject: ${input.subject}` : null,
+        input.predicate ? `Predicate: ${input.predicate}` : null,
+      ].filter((line): line is string => line !== null)
+      return result(await runtime.request('knowledge.proposeCandidate', {
+        scopeId,
+        type: toDocType(input.kind),
+        title: rememberTitle(input.text),
+        summary: '',
+        body: [...metadata, '', input.text].join('\n'),
+        origin: 'explicit-user',
+        sessionRef: `agent-tool://brain_remember/${Date.now()}`,
+      }))
     }),
     tool('brain_forget', 'Soft-delete a Brain memory after user approval.', { id: z.string().min(1) }, async ({ id }) => {
       const approved = await requestApproval({ tool: 'brain_forget', title: 'Forget Brain memory?', detail: id })

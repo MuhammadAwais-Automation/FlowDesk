@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
-import type { DocumentSearchHit, KnowledgeDocument, KnowledgeDocType } from '../../../src/types/brainKnowledge'
+import type { DocumentSearchHit, KnowledgeDocument, KnowledgeDocType, UnresolvedLink } from '../../../src/types/brainKnowledge'
 import type {
   DocumentStorePort,
   ListDocumentsInput,
@@ -254,5 +254,22 @@ export class DocumentStore implements DocumentStorePort {
         score: Number(row.score),
         updatedAt: String(row.updated_at),
       }))
+  }
+
+  listUnresolvedLinks(scopeIds: string[]): UnresolvedLink[] {
+    if (scopeIds.length === 0) return []
+    const scopePlaceholders = scopeIds.map(() => '?').join(', ')
+    const rows = this.db.prepare(`
+      SELECT d.path AS document_path, d.title AS document_title, l.target_path
+      FROM knowledge_links l
+      JOIN knowledge_documents d ON d.id = l.document_id
+      WHERE l.resolved = 0 AND d.scope_id IN (${scopePlaceholders}) AND d.valid_to IS NULL
+      ORDER BY d.updated_at DESC, d.path, l.target_path
+    `).all(...scopeIds) as SqlRow[]
+    return rows.map(row => ({
+      documentPath: String(row.document_path),
+      documentTitle: String(row.document_title),
+      targetPath: String(row.target_path),
+    }))
   }
 }

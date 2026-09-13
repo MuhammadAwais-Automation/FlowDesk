@@ -142,6 +142,11 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
   // gate leaves behind. Timer-driven in service.ts; exposed here too so it
   // can be triggered and verified on demand.
   z.object({ ...requestBase, method: z.literal('knowledge.compact'), payload: z.object({ scopeId: id }).strict() }),
+  // Part 1: one-time fold of the old `memories` store into knowledge_documents.
+  // Idempotent -- safe to call again -- and dry-run first so the count is
+  // visible before anything is written.
+  z.object({ ...requestBase, method: z.literal('knowledge.migrateMemories'), payload: z.object({ dryRun: z.boolean().optional() }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.listUnresolvedLinks'), payload: z.object({ scopeId: id }).strict() }),
   z.object({ ...requestBase, method: z.literal('shutdown'), payload: z.object({}).strict() }),
 ])
 
