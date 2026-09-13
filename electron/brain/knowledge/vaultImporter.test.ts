@@ -146,11 +146,31 @@ describe('VaultImporter', () => {
     expect(store.get('misc/heading-only.md')?.document.summary).toBe('')
   })
 
-  it('strips frontmatter from the stored body', () => {
+  it.each([
+    { label: 'LF', newline: '\n' },
+    { label: 'CRLF', newline: '\r\n' },
+  ])('strips frontmatter and preserves $label body newlines', ({ newline }) => {
+    const source = [
+      '---',
+      'type: client',
+      'title: Frontmatter Loses To Heading',
+      '---',
+      '# Atlas Project',
+      '',
+      'Coordinates the [[wiki/clients/acme|Acme account]].',
+      '',
+    ].join(newline)
+    writeFileSync(join(vaultRoot, 'wiki', 'projects', 'atlas.md'), source)
+
     importer.import({ scopeId: 'scope-1', vaultRoot })
 
     const stored = store.get('wiki/projects/atlas.md')
-    expect(stored?.body).toBe('# Atlas Project\n\nCoordinates the [[wiki/clients/acme|Acme account]].\n')
+    expect(stored?.body).toBe([
+      '# Atlas Project',
+      '',
+      'Coordinates the [[wiki/clients/acme|Acme account]].',
+      '',
+    ].join(newline))
   })
 
   it('uses file mtime as updatedAt', () => {
@@ -222,10 +242,12 @@ describe('VaultImporter', () => {
   })
 
   it('hashes the exact raw file bytes', () => {
+    writeFileSync(join(vaultRoot, 'heading.md'), Buffer.from([0x61, 0x62, 0x63]))
+
     importer.import({ scopeId: 'scope-1', vaultRoot })
 
     expect(store.get('heading.md')?.document.contentHash).toBe(
-      '230de172d7bb137c06f2f322c5f89df660c9d87cc9ca870cc87f4dc5874f7311',
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
     )
   })
 
