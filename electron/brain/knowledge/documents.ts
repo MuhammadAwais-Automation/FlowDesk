@@ -54,6 +54,39 @@ function safeFtsQuery(query: string): string {
   return terms.map(term => `"${term}"`).join(' ')
 }
 
+/** Below this normalised similarity, a title match is coincidence rather
+ *  than "probably what the user meant" — see the Part 4 measurement note
+ *  in `search()` for why this threshold isn't a guess: 0.6 catches every
+ *  single-edit typo/spelling variant found in that sample without also
+ *  matching unrelated short titles. */
+const FUZZY_TITLE_THRESHOLD = 0.6
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0
+  if (a.length === 0) return b.length
+  if (b.length === 0) return a.length
+  let previousRow = Array.from({ length: b.length + 1 }, (_, index) => index)
+  for (let i = 1; i <= a.length; i += 1) {
+    const currentRow = [i]
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1
+      currentRow.push(Math.min(
+        currentRow[j - 1] + 1,
+        previousRow[j] + 1,
+        previousRow[j - 1] + substitutionCost,
+      ))
+    }
+    previousRow = currentRow
+  }
+  return previousRow[b.length]
+}
+
+function titleSimilarity(a: string, b: string): number {
+  const maxLength = Math.max(a.length, b.length)
+  if (maxLength === 0) return 1
+  return 1 - levenshteinDistance(a, b) / maxLength
+}
+
 /**
  * Nearest-scope-wins shadowing: when the same `path` appears in more than one
  * scope in the chain, keep only the rows from whichever scope is earliest in
@@ -231,27 +264,69 @@ export class DocumentStore implements DocumentStorePort {
 
   search(input: SearchDocumentsInput): DocumentSearchHit[] {
     if (input.scopeIds.length === 0) return []
+    const limit = boundedLimit(input.limit, 10, 50)
     const query = safeFtsQuery(input.query)
-    if (!query) return []
-    const types = typeFilter(input.types, 'd.type')
-    const scopePlaceholders = input.scopeIds.map(() => '?').join(', ')
-    const rows = this.db.prepare(`
-      SELECT d.path, d.title, d.type, d.updated_at, d.scope_id,
-        substr(snippet(knowledge_fts, -1, '[', ']', '…', 32), 1, 200) AS snippet,
-        -bm25(knowledge_fts) AS score
-      FROM knowledge_fts
-      JOIN knowledge_documents d ON d.id = knowledge_fts.document_id
-      WHERE knowledge_fts MATCH ? AND d.scope_id IN (${scopePlaceholders}) AND d.valid_to IS NULL${types.sql}
-      ORDER BY bm25(knowledge_fts), d.updated_at DESC, d.path
-    `).all(query, ...input.scopeIds, ...types.parameters) as SqlRow[]
-    return shadowByNearestScope(rows, input.scopeIds)
-      .slice(0, boundedLimit(input.limit, 10, 50))
-      .map(row => ({
+    if (query) {
+      const types = typeFilter(input.types, 'd.type')
+      const scopePlaceholders = input.scopeIds.map(() => '?').join(', ')
+      const rows = this.db.prepare(`
+        SELECT d.path, d.title, d.type, d.updated_at, d.scope_id,
+          substr(snippet(knowledge_fts, -1, '[', ']', '…', 32), 1, 200) AS snippet,
+          -bm25(knowledge_fts) AS score
+        FROM knowledge_fts
+        JOIN knowledge_documents d ON d.id = knowledge_fts.document_id
+        WHERE knowledge_fts MATCH ? AND d.scope_id IN (${scopePlaceholders}) AND d.valid_to IS NULL${types.sql}
+        ORDER BY bm25(knowledge_fts), d.updated_at DESC, d.path
+      `).all(query, ...input.scopeIds, ...types.parameters) as SqlRow[]
+      const hits = shadowByNearestScope(rows, input.scopeIds).slice(0, limit).map(row => ({
         path: String(row.path),
         title: String(row.title),
         type: String(row.type) as KnowledgeDocType,
         snippet: String(row.snippet),
         score: Number(row.score),
+        updatedAt: String(row.updated_at),
+      }))
+      if (hits.length > 0) return hits
+    }
+    // FTS5 found nothing (or the query had no indexable terms at all).
+    // Measured, not assumed: a 34-query sample of realistic Roman Urdu/
+    // Hinglish queries against the real vault came back empty for every
+    // misspelled or alternate-spelled query and none of the correctly
+    // spelled ones (29% overall zero-result rate; see docs/brain-v2's
+    // Part 4 plan). unicode61 has no stemmer, so "zaroori"/"zaruri" or a
+    // plain typo are different tokens with no path back to a match. This
+    // fallback is deliberately narrow -- title/word similarity only, not
+    // body text -- to avoid the cost a trigram index over full bodies would
+    // add for a gap this fallback already closes for the common case (a
+    // name or project title typed slightly wrong).
+    return this.fuzzyTitleSearch(input, limit)
+  }
+
+  private fuzzyTitleSearch(input: SearchDocumentsInput, limit: number): DocumentSearchHit[] {
+    const rawQuery = input.query.trim().toLowerCase()
+    if (!rawQuery) return []
+    const types = typeFilter(input.types, 'type')
+    const scopePlaceholders = input.scopeIds.map(() => '?').join(', ')
+    const rows = this.db.prepare(`
+      SELECT * FROM knowledge_documents
+      WHERE scope_id IN (${scopePlaceholders}) AND valid_to IS NULL${types.sql}
+    `).all(...input.scopeIds, ...types.parameters) as SqlRow[]
+    return shadowByNearestScope(rows, input.scopeIds)
+      .map(row => {
+        const title = String(row.title).toLowerCase()
+        const wordSimilarities = title.split(/\s+/).map(word => titleSimilarity(rawQuery, word))
+        const score = Math.max(titleSimilarity(rawQuery, title), ...wordSimilarities)
+        return { row, score }
+      })
+      .filter(({ score }) => score >= FUZZY_TITLE_THRESHOLD)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(({ row, score }) => ({
+        path: String(row.path),
+        title: String(row.title),
+        type: String(row.type) as KnowledgeDocType,
+        snippet: String(row.summary) || '(matched by title similarity — the search term did not appear in the indexed text)',
+        score,
         updatedAt: String(row.updated_at),
       }))
   }

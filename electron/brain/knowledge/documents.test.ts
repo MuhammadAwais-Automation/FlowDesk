@@ -331,6 +331,31 @@ describe('DocumentStore', () => {
     expect(store.listUnresolvedLinks([])).toEqual([])
   })
 
+  it('falls back to a fuzzy title match when FTS5 finds nothing for a misspelled query', () => {
+    const { scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { path: 'wiki/clients/yasir-bhai.md', title: 'Yasir Bhai', contentHash: 'yasir' }))
+
+    // "yaseer" shares no FTS5 token with "yasir" — the exact-token search
+    // returns nothing, so this only passes if the fuzzy fallback ran.
+    expect(store.search({ scopeIds: [scope.id], query: 'yaseer' })).toMatchObject([{ path: 'wiki/clients/yasir-bhai.md', title: 'Yasir Bhai' }])
+  })
+
+  it('does not fuzzy-match a query that is not actually similar to any title', () => {
+    const { scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { path: 'wiki/clients/yasir-bhai.md', title: 'Yasir Bhai', contentHash: 'yasir' }))
+
+    expect(store.search({ scopeIds: [scope.id], query: 'zebra unicorn spaceship' })).toEqual([])
+  })
+
+  it('prefers an exact FTS5 match over the fuzzy fallback when one exists', () => {
+    const { scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { path: 'wiki/clients/yasir-bhai.md', title: 'Yasir Bhai', body: 'Yasir coordinates the cobalt launch.', contentHash: 'yasir' }))
+
+    const hits = store.search({ scopeIds: [scope.id], query: 'cobalt' })
+    expect(hits).toHaveLength(1)
+    expect(hits[0].snippet).toContain('cobalt')
+  })
+
   it('rolls back all three tables when an upsert violates the scope foreign key', () => {
     const { brain, store } = createStore()
 
