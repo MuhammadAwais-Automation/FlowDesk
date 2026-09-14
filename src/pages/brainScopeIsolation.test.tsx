@@ -3,18 +3,17 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { BrainCandidate, BrainContextPack, BrainJob, BrainMemory, BrainScope } from '@/types/brain'
-import type { CompactionReport, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocument, VaultImportReport } from '@/types/brainKnowledge'
+import type { BrainCandidate, BrainJob, BrainScope } from '@/types/brain'
+import type { CompactionReport, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocument, UnresolvedLink, VaultImportReport } from '@/types/brainKnowledge'
 import Intelligence from './Intelligence'
 
 const scopes: BrainScope[] = ['global', 'a', 'b'].map(id => ({
   id, type: id === 'global' ? 'global' : 'client', externalRef: id,
   name: id.toUpperCase(), parentId: null, createdAt: '2026-09-05T00:00:00.000Z',
 }))
-const memory: BrainMemory = {
-  id: 'memory-a', scopeId: 'a', kind: 'fact', text: 'Private memory A', status: 'accepted',
-  shareable: false, importance: 50, subject: null, predicate: null, sourceRef: 'user://a',
-  createdAt: scopes[0].createdAt, updatedAt: scopes[0].createdAt,
+const job: BrainJob = {
+  id: 'job-a', scopeId: 'a', recipeId: 'Private job A', recipeVersion: 1, accountId: null,
+  status: 'running', parameters: {}, result: null, createdAt: scopes[0].createdAt, updatedAt: scopes[0].createdAt,
 }
 const candidate: BrainCandidate = {
   id: 'candidate-a', scopeId: 'a', kind: 'fact', text: 'Private candidate A',
@@ -41,15 +40,7 @@ const compactionReport: CompactionReport = {
   scanned: 2, merged: 1, leftStandalone: 1,
   decisions: [{ capturePath: 'captures/x.md', outcome: 'merged', targetPath: 'wiki/clients/private-a.md', topScore: 0.5, secondScore: null }],
 }
-const job: BrainJob = {
-  id: 'job-a', scopeId: 'a', recipeId: 'Private job A', recipeVersion: 1, accountId: null,
-  status: 'running', parameters: {}, result: null, createdAt: scopes[0].createdAt, updatedAt: scopes[0].createdAt,
-}
-const pack: BrainContextPack = {
-  summary: 'Answer A', citations: [{ id: 'citation-a', memoryId: memory.id, text: 'Private answer A', kind: 'fact', scopeId: 'a', sourceRef: 'user://a', score: 1 }],
-  conflicts: [], scopePath: ['a'], estimatedTokens: 20,
-}
-const conflict = { id: 'conflict-a', memory_id: memory.id, file_path: 'a.md', base_revision: 1, database_text: 'Private vault A', file_text: 'File A', status: 'pending', created_at: scopes[0].createdAt, resolved_at: null }
+const unresolvedLink: UnresolvedLink = { documentPath: 'wiki/clients/private-a.md', documentTitle: 'Private client A', targetPath: 'wiki/people/ghost-a.md' }
 const consent = { requiresConsent: true, provider: 'whatsapp', fields: ['body'], retentionDays: 30, destinationScopeId: 'a' }
 
 function deferred<T>() {
@@ -61,17 +52,17 @@ function deferred<T>() {
 
 const api = {
   brainEnsureScope: vi.fn(), brainListScopes: vi.fn(), projectList: vi.fn(), storeGet: vi.fn(), storeSet: vi.fn(),
-  brainGetStatus: vi.fn(), brainGetOverview: vi.fn(), brainListMemories: vi.fn(), brainListCandidates: vi.fn(),
-  brainListJobs: vi.fn(), onBrainEvent: vi.fn(), brainSearch: vi.fn(), brainGetArtifactManifest: vi.fn(),
-  brainGetVaultStatus: vi.fn(), brainListVaultConflicts: vi.fn(), brainResolveVaultConflict: vi.fn(),
+  brainGetStatus: vi.fn(), brainListCandidates: vi.fn(), brainDecideCandidate: vi.fn(),
+  brainListJobs: vi.fn(), onBrainEvent: vi.fn(),
   brainRunSocialRecipe: vi.fn(), brainGrantConsent: vi.fn(),
   brainListOpportunities: vi.fn(), brainCountOpportunities: vi.fn(), brainGetOpportunityEvidence: vi.fn(), brainReviewOpportunity: vi.fn(),
   brainBuildDecisionBrief: vi.fn(), brainListSourceMetrics: vi.fn(), brainGetConsent: vi.fn(),
   brainListMonitors: vi.fn(), brainCreateMonitor: vi.fn(), brainSetMonitorStatus: vi.fn(), brainDeleteMonitor: vi.fn(),
-  brainKnowledgeListCandidates: vi.fn(), brainKnowledgeDecideCandidate: vi.fn(),
+  brainKnowledgeListCandidates: vi.fn(), brainKnowledgeDecideCandidate: vi.fn(), brainKnowledgeListUnresolvedLinks: vi.fn(),
   brainGetVaultRoot: vi.fn(), brainChooseVaultFolder: vi.fn(), brainKnowledgeList: vi.fn(),
   brainKnowledgeSearch: vi.fn(), brainKnowledgeRead: vi.fn(), brainKnowledgeManifest: vi.fn(),
-  brainKnowledgeImportVault: vi.fn(), brainKnowledgeCompact: vi.fn(),
+  brainKnowledgeImportVault: vi.fn(), brainKnowledgeCompact: vi.fn(), brainKnowledgeMigrateMemories: vi.fn(),
+  brainExportBackup: vi.fn(), brainImportBackup: vi.fn(),
 }
 let Brain: ComponentType
 
@@ -88,18 +79,14 @@ beforeEach(() => {
   api.storeGet.mockResolvedValue('a')
   api.storeSet.mockResolvedValue(undefined)
   api.brainGetStatus.mockResolvedValue({ ready: true, degraded: false, fts5: true, schemaVersion: 1 })
-  api.brainGetOverview.mockResolvedValue({ memories: 1, candidates: 1, jobs: 1, activeJobs: 1 })
-  api.brainListMemories.mockImplementation(async (id: string) => id === 'a' ? [memory] : [])
   api.brainListCandidates.mockImplementation(async (id: string) => id === 'a' ? [candidate] : [])
   api.brainKnowledgeListCandidates.mockImplementation(async ({ scopeId }: { scopeId: string }) => scopeId === 'a' ? [knowledgeCandidate] : [])
   api.brainKnowledgeDecideCandidate.mockResolvedValue({ candidate: { ...knowledgeCandidate, status: 'accepted' }, document: null })
+  api.brainKnowledgeListUnresolvedLinks.mockImplementation(async ({ scopeId }: { scopeId: string }) => scopeId === 'a' ? [unresolvedLink] : [])
   api.brainGetVaultRoot.mockResolvedValue(null)
   api.brainKnowledgeList.mockResolvedValue([])
   api.brainListJobs.mockResolvedValue([job])
   api.onBrainEvent.mockReturnValue(() => undefined)
-  api.brainGetVaultStatus.mockResolvedValue({ root: 'vault', watching: true, conflicts: 1 })
-  api.brainListVaultConflicts.mockImplementation(async (scopeId: string) => scopeId === 'b' ? [] : [conflict])
-  api.brainResolveVaultConflict.mockResolvedValue(memory)
   api.brainListOpportunities.mockResolvedValue([])
   api.brainCountOpportunities.mockResolvedValue(0)
   api.brainListMonitors.mockResolvedValue([])
@@ -120,37 +107,22 @@ function switchScope(id = 'b') {
 }
 
 describe('Brain scope transitions', () => {
-  it('shows opportunities only from the selected Brain scope', async () => {
-    api.brainListOpportunities.mockImplementation(async ({ scopeId }: { scopeId: string }) => scopeId === 'a' ? [{
-      id: 'brain-opportunity-a', scopeId: 'a', category: 'direct_lead', title: 'Private lead A',
-      summary: 'Scoped lead', score: 81, confidence: 0.8, freshness: scopes[0].createdAt,
-      status: 'new', evidenceCount: 1, createdAt: scopes[0].createdAt, updatedAt: scopes[0].createdAt,
-    }] : [])
+  it('removes old Review actions while the new refresh is pending and after it fails', async () => {
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Opportunities' }))
-    await waitFor(() => expect(screen.getByText('Private lead A')).toBeTruthy())
-    switchScope()
-    expect(screen.queryByText('Private lead A')).toBeNull()
-  })
-
-  it.each([
-    ['Memories', 'Private memory A'], ['Review Inbox', 'Private candidate A'], ['Jobs', 'Private job A'],
-  ])('removes old %s actions while the new refresh is pending and after it fails', async (tab, text) => {
-    await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: tab }))
-    await waitFor(() => expect(screen.getByText(text)).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Review/ }))
+    await waitFor(() => expect(screen.getByText('Private candidate A')).toBeTruthy())
     const refresh = deferred<never>()
-    api.brainGetOverview.mockReturnValue(refresh.promise)
+    api.brainListCandidates.mockReturnValue(refresh.promise)
     switchScope()
-    expect(screen.queryByText(text)).toBeNull()
+    expect(screen.queryByText('Private candidate A')).toBeNull()
     await act(async () => refresh.reject(new Error('Refresh unavailable')))
-    expect(screen.queryByText(text)).toBeNull()
+    expect(screen.queryByText('Private candidate A')).toBeNull()
     expect(screen.getByText('Refresh unavailable')).toBeTruthy()
   })
 
-  it('shows knowledge candidates alongside memory candidates in Review Inbox, tagged by system, and accepts via the knowledge decide call', async () => {
+  it('shows knowledge candidates alongside memory candidates and unresolved links in Review, tagged by system, and accepts via the knowledge decide call', async () => {
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Review Inbox' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Review/ }))
     await waitFor(() => expect(screen.getByText('Private knowledge candidate A')).toBeTruthy())
     expect(screen.getByText('Private candidate A')).toBeTruthy()
     expect(screen.getByText('Memory')).toBeTruthy()
@@ -159,118 +131,62 @@ describe('Brain scope transitions', () => {
     const [acceptButton] = within(knowledgeCard).getAllByRole('button')
     fireEvent.click(acceptButton)
     await waitFor(() => expect(api.brainKnowledgeDecideCandidate).toHaveBeenCalledWith({ id: 'knowledge-candidate-a', decision: 'accept' }))
+    expect(screen.getByText(/Private client A/)).toBeTruthy()
+    expect(screen.getByText(/wiki\/people\/ghost-a\.md/)).toBeTruthy()
   })
 
-  it('does not restore an answer from the previous scope', async () => {
-    const response = deferred<BrainContextPack>()
-    api.brainSearch.mockReturnValueOnce(response.promise).mockResolvedValueOnce({ ...pack, citations: [{ ...pack.citations[0], scopeId: 'b', text: 'Current answer B' }] })
-    await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Brain' }))
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'private' } })
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
-    switchScope()
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'current' } })
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
-    await waitFor(() => expect(screen.getByText('Current answer B')).toBeTruthy())
-    await act(async () => response.resolve(pack))
-    expect(screen.queryByText('Private answer A')).toBeNull()
-    expect(screen.getByText('Current answer B')).toBeTruthy()
-  })
-
-  it('keeps the newest search when responses arrive out of order', async () => {
-    const first = deferred<BrainContextPack>()
-    api.brainSearch.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ ...pack, citations: [{ ...pack.citations[0], text: 'New answer A' }] })
-    await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Ask Brain' }))
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'first' } })
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'second' } })
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
-    await waitFor(() => expect(screen.getByText('New answer A')).toBeTruthy())
-    await act(async () => first.resolve(pack))
-    expect(screen.getByText('New answer A')).toBeTruthy()
-    expect(screen.queryByText('Private answer A')).toBeNull()
-  })
-
-  it('does not restore an artifact from the previous scope', async () => {
-    const response = deferred<Record<string, unknown>>()
-    api.brainGetArtifactManifest.mockReturnValue(response.promise)
-    await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Jobs' }))
-    await waitFor(() => expect(screen.getByText('Private job A')).toBeTruthy())
-    fireEvent.click(screen.getByTitle('Artifact manifest'))
-    switchScope()
-    await act(async () => response.resolve({ privateArtifact: 'Artifact A' }))
-    expect(screen.queryByText(/Artifact A/)).toBeNull()
-  })
-
-  it('loads and resolves vault conflicts only in the selected scope and clears on switch', async () => {
-    await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Vault' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Check status' }))
-    await waitFor(() => expect(screen.getByText('Private vault A')).toBeTruthy())
-    expect(api.brainListVaultConflicts).toHaveBeenCalledWith('a')
-    fireEvent.click(screen.getByRole('button', { name: 'Keep Brain' }))
-    await waitFor(() => expect(api.brainResolveVaultConflict).toHaveBeenCalledWith({ id: 'conflict-a', scopeId: 'a', resolution: 'database' }))
-    switchScope()
-    expect(screen.queryByText('Private vault A')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Check status' }))
-    await waitFor(() => expect(api.brainListVaultConflicts).toHaveBeenLastCalledWith('b'))
-    expect(screen.queryByText('Private vault A')).toBeNull()
-  })
-
-  it('ignores a vault response that completes after a scope switch', async () => {
-    const response = deferred<Array<Record<string, unknown>>>()
-    api.brainListVaultConflicts.mockReturnValue(response.promise)
-    await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Vault' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Check status' }))
-    switchScope()
-    await act(async () => response.resolve([conflict]))
-    expect(screen.queryByText('Private vault A')).toBeNull()
-  })
-
-  it('loads the knowledge document list only for the selected scope and discards a stale response after switching', async () => {
+  it('loads the knowledge document list and unresolved links only for the selected scope, discarding a stale response after switching', async () => {
     const response = deferred<KnowledgeDocument[]>()
     api.brainKnowledgeList.mockReturnValueOnce(response.promise).mockResolvedValue([])
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
     expect(api.brainKnowledgeList).toHaveBeenCalledWith({ scopeId: 'a', limit: 200 })
     switchScope()
     await act(async () => response.resolve([knowledgeDocument]))
+    fireEvent.click(screen.getByRole('button', { name: 'Library' }))
     expect(screen.queryByText('Private client A')).toBeNull()
   })
 
-  it('searches knowledge documents and shows matching hits with their snippet', async () => {
-    api.brainKnowledgeSearch.mockResolvedValue([searchHit])
-    await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
-    fireEvent.change(screen.getByPlaceholderText('Search knowledge documents…'), { target: { value: 'private' } })
-    fireEvent.keyDown(screen.getByPlaceholderText('Search knowledge documents…'), { key: 'Enter' })
-    await waitFor(() => expect(screen.getByText('Private client A')).toBeTruthy())
-    expect(api.brainKnowledgeSearch).toHaveBeenCalledWith({ scopeId: 'a', query: 'private', types: undefined, limit: 20 })
-    expect(screen.getByText('Private [match] A')).toBeTruthy()
-  })
-
-  it('reads a document on click and shows its full text', async () => {
+  it('shows recently updated documents on Today and opens the reader from there', async () => {
     api.brainKnowledgeList.mockResolvedValue([knowledgeDocument])
     api.brainKnowledgeRead.mockResolvedValue({
       path: knowledgeDocument.path, title: knowledgeDocument.title, type: 'client',
       text: 'Full private body A', updatedAt: knowledgeDocument.updatedAt, estimatedTokens: 5, truncated: false,
     })
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
     await waitFor(() => expect(screen.getByText('Private client A')).toBeTruthy())
     fireEvent.click(screen.getByText('Private client A'))
     await waitFor(() => expect(screen.getByText('Full private body A')).toBeTruthy())
     expect(api.brainKnowledgeRead).toHaveBeenCalledWith({ scopeId: 'a', path: knowledgeDocument.path })
   })
 
+  it('searches the Library and shows matching hits with their snippet', async () => {
+    api.brainKnowledgeSearch.mockResolvedValue([searchHit])
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Library' }))
+    fireEvent.change(screen.getByPlaceholderText('Search documents…'), { target: { value: 'private' } })
+    fireEvent.keyDown(screen.getByPlaceholderText('Search documents…'), { key: 'Enter' })
+    await waitFor(() => expect(screen.getByText('Private client A')).toBeTruthy())
+    expect(api.brainKnowledgeSearch).toHaveBeenCalledWith({ scopeId: 'a', query: 'private', types: undefined, limit: 30 })
+    expect(screen.getByText('Private [match] A')).toBeTruthy()
+  })
+
+  it('asks a question on Ask and shows a cited passage, independent of the Library search state', async () => {
+    api.brainKnowledgeSearch.mockResolvedValue([searchHit])
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    fireEvent.change(screen.getByPlaceholderText(/poochein/), { target: { value: 'Yasir Bhai?' } })
+    fireEvent.keyDown(screen.getByPlaceholderText(/poochein/), { key: 'Enter' })
+    await waitFor(() => expect(screen.getByText('Private client A')).toBeTruthy())
+    expect(api.brainKnowledgeSearch).toHaveBeenCalledWith({ scopeId: 'a', query: 'Yasir Bhai?', limit: 12 })
+    fireEvent.click(screen.getByRole('button', { name: 'Library' }))
+    expect(screen.queryByPlaceholderText('Search documents…')).toBeTruthy()
+  })
+
   it('shows a vault import report after Import now, scoped to the selected scope', async () => {
     api.brainChooseVaultFolder.mockResolvedValue('E:/vault')
     api.brainKnowledgeImportVault.mockResolvedValue(importReport)
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Health' }))
     fireEvent.click(screen.getByRole('button', { name: 'Choose folder…' }))
     await waitFor(() => expect(screen.getByText('E:/vault')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Import now' }))
@@ -278,15 +194,37 @@ describe('Brain scope transitions', () => {
     await waitFor(() => expect(screen.getByText(/Scanned 5/)).toBeTruthy())
   })
 
+  it('refuses picking the legacy memory-vault folder and surfaces the error', async () => {
+    api.brainChooseVaultFolder.mockRejectedValue(new Error("That folder is FlowDesk's internal memory vault, not a folder to import from. Choose your own notes folder instead."))
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Health' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose folder…' }))
+    await waitFor(() => expect(screen.getByText(/internal memory vault/)).toBeTruthy())
+  })
+
   it('shows a compaction report with its per-capture decisions after Run cleanup now', async () => {
     api.brainKnowledgeCompact.mockResolvedValue(compactionReport)
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Health' }))
     fireEvent.click(screen.getByRole('button', { name: 'Run cleanup now' }))
     await waitFor(() => expect(api.brainKnowledgeCompact).toHaveBeenCalledWith({ scopeId: 'a' }))
     await waitFor(() => expect(screen.getByText(/Merged 1/)).toBeTruthy())
     expect(screen.getByText('captures/x.md')).toBeTruthy()
     expect(screen.getByText(/merged into wiki\/clients\/private-a\.md/)).toBeTruthy()
+  })
+
+  it('runs a dry-run and a real memories migration and shows the report', async () => {
+    api.brainKnowledgeMigrateMemories.mockResolvedValueOnce({ scanned: 3, migrated: 3, unchanged: 0, dryRun: true })
+    await mount(Brain)
+    fireEvent.click(screen.getByRole('button', { name: 'Health' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Check (dry run)' }))
+    await waitFor(() => expect(api.brainKnowledgeMigrateMemories).toHaveBeenCalledWith({ dryRun: true }))
+    await waitFor(() => expect(screen.getByText(/Migrated 3/)).toBeTruthy())
+    expect(screen.getByText(/kuch likha nahi gaya/)).toBeTruthy()
+
+    api.brainKnowledgeMigrateMemories.mockResolvedValueOnce({ scanned: 3, migrated: 3, unchanged: 0, dryRun: false })
+    fireEvent.click(screen.getByRole('button', { name: 'Migrate now' }))
+    await waitFor(() => expect(api.brainKnowledgeMigrateMemories).toHaveBeenCalledWith({ dryRun: false }))
   })
 })
 

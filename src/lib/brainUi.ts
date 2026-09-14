@@ -1,4 +1,27 @@
-export const BRAIN_TABS = ['Overview', 'Ask Brain', 'Memories', 'Review Inbox', 'Knowledge', 'People & Organizations', 'Decisions & Goals', 'Opportunities', 'Timeline', 'Graph', 'Jobs', 'Vault', 'Settings'] as const
+/**
+ * Five surfaces, each backed by data that's actually populated — not twelve,
+ * several of them permanently empty. Independent research (PKM products,
+ * local-first feasibility, this codebase's own data inventory) found no
+ * evidence more dedicated knowledge surfaces improve outcomes, and the
+ * previous tabs proved it: `entities`/`claims`/`summaries` were declared but
+ * never written to (Graph always said "abhi curated entities nahi hain"),
+ * and memories/knowledge were two stores nothing kept in sync.
+ *
+ * - Today: a dated stream, not a dashboard — every successful PKM tool
+ *   (Logseq, Reflect, Tana) opens on a dated note, none open on a graph.
+ * - Review: the write gate's candidates, plus unresolved links (Obsidian's
+ *   "unlinked mentions" pattern — a zero-maintenance candidate-connection
+ *   queue).
+ * - Library: browse/search/read knowledge_documents. An "entity page" is
+ *   just a filtered document plus its backlinks — no separate People &
+ *   Organizations / Decisions & Goals tables needed.
+ * - Ask: a question against the same documents, answered with citations
+ *   that open the source at the passage — what NotebookLM/Notion AI/Reflect
+ *   actually ship for "what does it know", not a standing inventory browser.
+ * - Health: vault import, manifest preview, compaction, the memories
+ *   migration, backup — the honesty console.
+ */
+export const BRAIN_TABS = ['Today', 'Review', 'Library', 'Ask', 'Health'] as const
 export const INTELLIGENCE_TABS = ['Overview', 'Sources', 'Monitors', 'Pain Points', 'Trends', 'Opportunities', 'Decision Briefs'] as const
 
 /**
