@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Plus, Bot, BrainCircuit, Cpu, Database, Ghost, Workflow, Globe, ShieldOff, Wrench } from 'lucide-react'
+import { Plus, Bot, BrainCircuit, Cpu, Database, FileText, Ghost, Workflow, Globe, ShieldOff, Wrench } from 'lucide-react'
 import {
   createAgentSession,
   appendAgentTurn,
@@ -7,6 +7,7 @@ import {
   type AgentToolCallEntry,
 } from '@/lib/agentSession'
 import { makeContinuityId } from '@/lib/conversationContinuity'
+import { extractReadDocumentPaths } from '@/lib/agentProvenance'
 import type { AgentRunEvent, AgentStreamEvent, AgentSessionMeta } from '@/types/electron'
 import type { AppSettings } from '@/types/database'
 import SessionList from '@/components/agent/SessionList'
@@ -31,6 +32,27 @@ const AGENT_PLACEHOLDERS = [
   'Ask the Agent to research, plan, or coordinate a task...',
   'Give a precise directive - approvals appear before risky work...',
 ]
+
+/**
+ * Part 3: "knowledge where the work happens" instead of a walled-off Brain
+ * section. A plain, scannable list rather than a link into Brain's Library
+ * tab — cross-page navigation with a specific document pre-opened would need
+ * shared state App.tsx doesn't have yet (pages are mounted with no props),
+ * and that's a separate change from surfacing what was actually read.
+ */
+function ReadDocumentsStrip({ toolCalls }: { toolCalls: AgentToolCallEntry[] }) {
+  const paths = extractReadDocumentPaths(toolCalls)
+  if (paths.length === 0) return null
+  return (
+    <p className="mb-2 flex flex-wrap items-baseline gap-x-1 gap-y-1 font-retro-mono text-[10px] text-stone-500">
+      <FileText size={11} className="relative top-[1px] shrink-0 text-stone-400" />
+      <span>Read:</span>
+      {paths.map((path, index) => (
+        <span key={path} className="text-stone-700">{path}{index < paths.length - 1 ? ',' : ''}</span>
+      ))}
+    </p>
+  )
+}
 
 export default function Agent() {
   const api = window.electronAPI
@@ -733,7 +755,7 @@ export default function Agent() {
                   role={entry.role}
                   content={entry.content}
                   label={entry.role === 'assistant' ? 'Agent' : undefined}
-                  toolCalls={entry.toolCalls.length > 0 ? <WorkerToolCardList calls={entry.toolCalls} /> : undefined}
+                  toolCalls={entry.toolCalls.length > 0 ? <><ReadDocumentsStrip toolCalls={entry.toolCalls} /><WorkerToolCardList calls={entry.toolCalls} /></> : undefined}
                 />
               ))}
               {sending && (
@@ -742,7 +764,7 @@ export default function Agent() {
                   content={liveText}
                   label="Agent"
                   pending
-                  toolCalls={liveToolCalls.length > 0 ? <WorkerToolCardList calls={liveToolCalls} /> : undefined}
+                  toolCalls={liveToolCalls.length > 0 ? <><ReadDocumentsStrip toolCalls={liveToolCalls} /><WorkerToolCardList calls={liveToolCalls} /></> : undefined}
                 />
               )}
             </div>
