@@ -1,6 +1,6 @@
 import type { DocumentReadResult, DocumentSearchHit, KnowledgeDocType } from '../../src/types/brainKnowledge'
 
-export type BrainNavigationMethod = 'knowledge.read' | 'knowledge.search' | 'knowledge.answerPack'
+export type BrainNavigationMethod = 'knowledge.read' | 'knowledge.search' | 'knowledge.answerPack' | 'knowledge.neighbors'
 export type BrainNavigationRequest = (method: BrainNavigationMethod, payload: unknown) => Promise<unknown>
 
 export const BRAIN_UNAVAILABLE_MESSAGE = 'Brain is unavailable right now.'
@@ -136,6 +136,45 @@ export async function assembleBrainEvidence(
       ? `\nFollowed a link from ${response.pointerFollowed.from} to ${response.pointerFollowed.to}.`
       : ''
     return `${response.evidence}\n\n[Evidence from: ${cited}. Cite these paths when you use them.${trail}]`
+  } catch {
+    return BRAIN_UNAVAILABLE_MESSAGE
+  }
+}
+
+function isNeighborhood(value: unknown): value is {
+  origin: string
+  nodes: { path: string; title: string; type: string; depth: number }[]
+  edges: { from: string; to: string }[]
+} {
+  return isRecord(value)
+    && typeof value.origin === 'string'
+    && Array.isArray(value.nodes)
+    && value.nodes.every(node => isRecord(node) && typeof node.path === 'string' && typeof node.depth === 'number')
+}
+
+/**
+ * What a document connects to, one or two hops out.
+ *
+ * The evidence for graphs helping is about an agent walking links to retrieve,
+ * not a person looking at a picture of the whole vault — so this is a tool, and
+ * the vault-wide view was deliberately not built.
+ */
+export async function readBrainNeighbors(
+  request: BrainNavigationRequest,
+  scopeId: string,
+  path: string,
+  depth = 1,
+): Promise<string> {
+  if (!isSafeDocumentPath(path)) return 'Refused unsafe document path. Use a vault-relative path without traversal.'
+  try {
+    const response = await request('knowledge.neighbors', { scopeId, path, depth })
+    if (!isNeighborhood(response)) return BRAIN_UNAVAILABLE_MESSAGE
+    const others = response.nodes.filter(node => node.path !== response.origin)
+    if (others.length === 0) return `${path} links to nothing, and nothing links to it.`
+    const lines = others
+      .sort((left, right) => left.depth - right.depth || (left.path < right.path ? -1 : 1))
+      .map(node => `${node.path} | ${node.type} | ${oneLine(node.title)} | ${node.depth} hop${node.depth === 1 ? '' : 's'}`)
+    return [`Documents connected to ${path}:`, ...lines].join('\n')
   } catch {
     return BRAIN_UNAVAILABLE_MESSAGE
   }

@@ -122,6 +122,11 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     tokenBudget: z.number().int().min(1).max(8000).optional(),
     maxSections: z.number().int().min(1).max(20).optional(),
   }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.neighbors'), payload: z.object({
+    scopeId: id,
+    path: knowledgePath,
+    depth: z.number().int().min(1).max(2).optional(),
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('knowledge.dailyNote'), payload: z.object({
     scopeId: id,
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

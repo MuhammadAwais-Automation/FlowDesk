@@ -73,6 +73,10 @@ class FakeDocumentStore implements DocumentStorePort {
     throw new Error('Not used by vault importer tests')
   }
 
+  neighbors(_scopeIds: string[], _path: string, _depth: number): never {
+    throw new Error('not used in this test')
+  }
+
   listUnresolvedLinks(_scopeIds: string[]): never {
     throw new Error('Not used by vault importer tests')
   }

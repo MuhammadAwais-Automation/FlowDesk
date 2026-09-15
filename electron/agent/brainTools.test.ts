@@ -19,6 +19,7 @@ describe('Brain agent tools', () => {
       'mcp__workers__brain_search',
       'mcp__workers__brain_read_document',
       'mcp__workers__brain_search_documents',
+      'mcp__workers__brain_neighbors',
       'mcp__workers__brain_remember',
       'mcp__workers__brain_forget',
       'mcp__workers__brain_explain_source',

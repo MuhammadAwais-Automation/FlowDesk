@@ -117,7 +117,9 @@ path#heading it names. Do not paraphrase a source you were not given.
 Two brain tool calls per turn is the ceiling. brain_search_documents and
 brain_read_document exist for the case where the pack came back thin and you
 know the exact document you want; they are not the first move, and crawling
-through several documents is exactly what the pack replaces. If the pack has no
+through several documents is exactly what the pack replaces. brain_neighbors
+is the second call worth making when a question spans more than one document:
+it says what a document links to, and what links back to it. If the pack has no
 answer, say so plainly — "the Brain has nothing on that" is a useful answer.
 
 The .claude memory folder is an import SOURCE for the Brain, not a place to look

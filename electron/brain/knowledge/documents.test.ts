@@ -245,6 +245,46 @@ describe('DocumentStore', () => {
       .toEqual([{ target_path: 'wiki/clients/yasir-bhai.md', resolved: 1 }])
   })
 
+  it('walks links in both directions out to the requested depth', () => {
+    const { scope, store } = createStore()
+    // a -> b -> c, and d -> a. From b: a and c are one hop, d is two.
+    store.upsert(documentInput(scope.id, { path: 'c.md', title: 'C', contentHash: 'c' }))
+    store.upsert(documentInput(scope.id, { path: 'b.md', title: 'B', contentHash: 'b', body: 'links [[c.md]]' }))
+    store.upsert(documentInput(scope.id, { path: 'a.md', title: 'A', contentHash: 'a', body: 'links [[b.md]]' }))
+    store.upsert(documentInput(scope.id, { path: 'd.md', title: 'D', contentHash: 'd', body: 'links [[a.md]]' }))
+
+    const oneHop = store.neighbors([scope.id], 'b.md', 1)
+    expect(oneHop.nodes.map(node => node.path).sort()).toEqual(['a.md', 'b.md', 'c.md'])
+    expect(oneHop.nodes.find(node => node.path === 'b.md')?.depth).toBe(0)
+
+    const twoHops = store.neighbors([scope.id], 'b.md', 2)
+    expect(twoHops.nodes.map(node => node.path).sort()).toEqual(['a.md', 'b.md', 'c.md', 'd.md'])
+    expect(twoHops.nodes.find(node => node.path === 'd.md')?.depth).toBe(2)
+  })
+
+  it('caps depth so a neighbourhood cannot become the whole vault', () => {
+    const { scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { path: 'c.md', title: 'C', contentHash: 'c' }))
+    store.upsert(documentInput(scope.id, { path: 'b.md', title: 'B', contentHash: 'b', body: 'links [[c.md]]' }))
+    store.upsert(documentInput(scope.id, { path: 'a.md', title: 'A', contentHash: 'a', body: 'links [[b.md]]' }))
+
+    // Asking for 99 hops is still two.
+    expect(store.neighbors([scope.id], 'a.md', 99).nodes.map(node => node.path).sort()).toEqual(['a.md', 'b.md', 'c.md'])
+  })
+
+  it('returns an empty neighbourhood for a path that does not exist', () => {
+    const { scope, store } = createStore()
+    expect(store.neighbors([scope.id], 'missing.md', 2)).toEqual({ origin: 'missing.md', nodes: [], edges: [] })
+  })
+
+  it('reports each edge once even though both ends are walked', () => {
+    const { scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { path: 'b.md', title: 'B', contentHash: 'b' }))
+    store.upsert(documentInput(scope.id, { path: 'a.md', title: 'A', contentHash: 'a', body: 'links [[b.md]]' }))
+
+    expect(store.neighbors([scope.id], 'a.md', 2).edges).toEqual([{ from: 'a.md', to: 'b.md' }])
+  })
+
   it('supersede creates a brand-new active row when nothing exists at the path yet', () => {
     const { scope, store } = createStore()
 

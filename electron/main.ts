@@ -423,6 +423,7 @@ ipcMain.handle('brain:knowledgeManifest', (_e, input: unknown) => brainRequest('
 ipcMain.handle('brain:knowledgeRead', (_e, input: unknown) => brainRequest('knowledge.read', input))
 ipcMain.handle('brain:knowledgeSearch', (_e, input: unknown) => brainRequest('knowledge.search', input))
 ipcMain.handle('brain:knowledgeDailyNote', (_e, input: unknown) => brainRequest('knowledge.dailyNote', input))
+ipcMain.handle('brain:knowledgeNeighbors', (_e, input: unknown) => brainRequest('knowledge.neighbors', input))
 ipcMain.handle('brain:listEvents', (_e, input: unknown) => brainRequest('listEvents', input))
 ipcMain.handle('brain:knowledgeList', (_e, input: unknown) => brainRequest('knowledge.list', input))
 ipcMain.handle('brain:knowledgeImportVault', (_e, input: unknown) => brainRequest('knowledge.importVault', input))

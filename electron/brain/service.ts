@@ -285,6 +285,12 @@ export class BrainService {
           tokenBudget: request.payload.tokenBudget,
           maxSections: request.payload.maxSections,
         })
+      case 'knowledge.neighbors':
+        return this.documents.neighbors(
+          this.knowledgeScopeChain(request.payload.scopeId),
+          request.payload.path,
+          request.payload.depth ?? 1,
+        )
       case 'knowledge.dailyNote':
         return this.materialiseDailyNote(request.payload.scopeId, request.payload.date)
       case 'recordEvent':

@@ -10,7 +10,7 @@ import { isAbsolute } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { splitSections } from './sectioning'
 import { buildPathIndex, extractWikiLinkTargets, resolveWikiLink } from './wikilinks'
-import type { DocumentSearchHit, KnowledgeDocument, KnowledgeDocType, UnresolvedLink } from '../../../src/types/brainKnowledge'
+import type { DocumentNeighborhood, DocumentNeighborhoodNode, DocumentSearchHit, KnowledgeDocument, KnowledgeDocType, UnresolvedLink } from '../../../src/types/brainKnowledge'
 import type {
   DocumentStorePort,
   ListDocumentsInput,
@@ -62,6 +62,9 @@ function safeFtsQuery(query: string): string {
  *  single-edit typo/spelling variant found in that sample without also
  *  matching unrelated short titles. */
 const FUZZY_TITLE_THRESHOLD = 0.6
+
+/** Two hops is where a neighbourhood stops being readable and starts being a hairball. */
+export const MAX_NEIGHBOR_DEPTH = 2
 
 function levenshteinDistance(a: string, b: string): number {
   if (a === b) return 0
@@ -387,6 +390,71 @@ export class DocumentStore implements DocumentStorePort {
         score,
         updatedAt: String(row.updated_at),
       }))
+  }
+
+  /**
+   * The link neighbourhood around one document, out to `depth` hops, following
+   * links in both directions.
+   *
+   * Local, never global: every source says a whole-vault graph turns into a
+   * hairball past a couple of hundred notes, and nobody reports using one to
+   * find anything. What does have evidence behind it is an agent walking links
+   * to retrieve, which is what `brain_neighbors` uses this for.
+   */
+  neighbors(scopeIds: string[], path: string, depth: number): DocumentNeighborhood {
+    if (scopeIds.length === 0) return { origin: path, nodes: [], edges: [] }
+    const scopePlaceholders = scopeIds.map(() => '?').join(', ')
+    const activeDocument = this.db.prepare(`
+      SELECT id, path, title, type, scope_id FROM knowledge_documents
+      WHERE path = ? AND scope_id IN (${scopePlaceholders}) AND valid_to IS NULL
+    `)
+    const originRow = activeDocument.get(path, ...scopeIds) as SqlRow | undefined
+    const origin = originRow === undefined ? undefined : shadowByNearestScope([originRow], scopeIds)[0]
+    if (!origin) return { origin: path, nodes: [], edges: [] }
+
+    // Both directions in one statement: an outgoing link and a backlink are the
+    // same edge seen from opposite ends, and a neighbourhood that showed only
+    // one of them would hide half of what connects to the document.
+    const step = this.db.prepare(`
+      SELECT target.id AS id, target.path AS path, target.title AS title, target.type AS type,
+             target.scope_id AS scope_id, ? AS from_path, target.path AS to_path
+      FROM knowledge_links link
+      JOIN knowledge_documents source ON source.id = link.document_id AND source.path = ? AND source.valid_to IS NULL
+      JOIN knowledge_documents target ON target.path = link.target_path AND target.valid_to IS NULL
+      WHERE source.scope_id IN (${scopePlaceholders}) AND target.scope_id IN (${scopePlaceholders})
+      UNION
+      SELECT source.id, source.path, source.title, source.type, source.scope_id, source.path, ?
+      FROM knowledge_links link
+      JOIN knowledge_documents source ON source.id = link.document_id AND source.valid_to IS NULL
+      JOIN knowledge_documents target ON target.path = link.target_path AND target.path = ? AND target.valid_to IS NULL
+      WHERE source.scope_id IN (${scopePlaceholders}) AND target.scope_id IN (${scopePlaceholders})
+    `)
+
+    const nodes = new Map<string, DocumentNeighborhoodNode>()
+    const edges = new Map<string, { from: string; to: string }>()
+    nodes.set(String(origin.path), {
+      path: String(origin.path), title: String(origin.title), type: String(origin.type) as KnowledgeDocType, depth: 0,
+    })
+
+    let frontier = [String(origin.path)]
+    for (let hop = 1; hop <= Math.max(1, Math.min(depth, MAX_NEIGHBOR_DEPTH)); hop += 1) {
+      const next: string[] = []
+      for (const from of frontier) {
+        const rows = step.all(from, from, ...scopeIds, ...scopeIds, from, from, ...scopeIds, ...scopeIds) as SqlRow[]
+        for (const row of shadowByNearestScope(rows, scopeIds)) {
+          const to = String(row.path)
+          const edgeKey = `${String(row.from_path)} ${String(row.to_path)}`
+          if (!edges.has(edgeKey)) edges.set(edgeKey, { from: String(row.from_path), to: String(row.to_path) })
+          if (nodes.has(to)) continue
+          nodes.set(to, { path: to, title: String(row.title), type: String(row.type) as KnowledgeDocType, depth: hop })
+          next.push(to)
+        }
+      }
+      frontier = next
+      if (frontier.length === 0) break
+    }
+
+    return { origin: String(origin.path), nodes: [...nodes.values()], edges: [...edges.values()] }
   }
 
   listUnresolvedLinks(scopeIds: string[]): UnresolvedLink[] {

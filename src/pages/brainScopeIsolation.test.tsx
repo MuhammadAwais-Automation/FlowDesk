@@ -63,7 +63,7 @@ const api = {
   brainKnowledgeSearch: vi.fn(), brainKnowledgeRead: vi.fn(), brainKnowledgeManifest: vi.fn(),
   brainKnowledgeImportVault: vi.fn(), brainKnowledgeCompact: vi.fn(), brainKnowledgeMigrateMemories: vi.fn(),
   brainExportBackup: vi.fn(), brainImportBackup: vi.fn(),
-  brainKnowledgeDailyNote: vi.fn(), brainListEvents: vi.fn(),
+  brainKnowledgeDailyNote: vi.fn(), brainListEvents: vi.fn(), brainKnowledgeNeighbors: vi.fn(),
 }
 let Brain: ComponentType
 
@@ -88,6 +88,7 @@ beforeEach(() => {
   api.brainKnowledgeList.mockResolvedValue([])
   api.brainKnowledgeDailyNote.mockResolvedValue({ date: '2026-09-15', path: 'daily/2026-09-15.md', written: false, eventCount: 0, body: '' })
   api.brainListEvents.mockResolvedValue([])
+  api.brainKnowledgeNeighbors.mockResolvedValue({ origin: '', nodes: [], edges: [] })
   api.brainListJobs.mockResolvedValue([job])
   api.onBrainEvent.mockReturnValue(() => undefined)
   api.brainListOpportunities.mockResolvedValue([])

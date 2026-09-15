@@ -2,9 +2,9 @@ import { z } from 'zod'
 import { tool } from '@anthropic-ai/claude-agent-sdk'
 import { toDocType } from '../brain/knowledge/memoriesMigration'
 import type { RequestApproval } from './approval'
-import { assembleBrainEvidence, BRAIN_UNAVAILABLE_MESSAGE, readBrainDocument, searchBrainDocuments } from './brainNavigation'
+import { assembleBrainEvidence, BRAIN_UNAVAILABLE_MESSAGE, readBrainDocument, readBrainNeighbors, searchBrainDocuments } from './brainNavigation'
 
-type BrainMethod = 'search' | 'remember' | 'getMemory' | 'forget' | 'listCandidates' | 'decideCandidate' | 'enqueueJob' | 'listJobs' | 'buildDecisionBrief' | 'reviewOpportunity' | 'knowledge.read' | 'knowledge.search' | 'knowledge.answerPack' | 'knowledge.proposeCandidate'
+type BrainMethod = 'search' | 'remember' | 'getMemory' | 'forget' | 'listCandidates' | 'decideCandidate' | 'enqueueJob' | 'listJobs' | 'buildDecisionBrief' | 'reviewOpportunity' | 'knowledge.read' | 'knowledge.search' | 'knowledge.answerPack' | 'knowledge.neighbors' | 'knowledge.proposeCandidate'
 
 interface BrainToolRuntime {
   request(method: BrainMethod, payload: unknown): Promise<unknown>
@@ -61,6 +61,7 @@ export const BRAIN_TOOL_NAMES = [
   'mcp__workers__brain_search',
   'mcp__workers__brain_read_document',
   'mcp__workers__brain_search_documents',
+  'mcp__workers__brain_neighbors',
   'mcp__workers__brain_remember',
   'mcp__workers__brain_forget',
   'mcp__workers__brain_explain_source',
@@ -117,6 +118,20 @@ export function createBrainTools(requestApproval: RequestApproval) {
         return result(BRAIN_UNAVAILABLE_MESSAGE)
       }
     }, { annotations: { readOnlyHint: true } }),
+    tool(
+      'brain_neighbors',
+      'What a knowledge document connects to, one or two hops out. Use when a question spans more than one document and the answer pack only covered part of it.',
+      { path: z.string().min(1), depth: z.number().int().min(1).max(2).optional() },
+      async ({ path, depth }) => {
+        try {
+          const { runtime, scopeId } = activeRuntime()
+          return textResult(await readBrainNeighbors(runtime.request.bind(runtime), scopeId, path, depth))
+        } catch {
+          return textResult(BRAIN_UNAVAILABLE_MESSAGE)
+        }
+      },
+      { annotations: { readOnlyHint: true } },
+    ),
     tool('brain_remember', 'Save an explicit user fact, preference, decision, goal or note in the active scope.', {
       kind: z.enum(memoryKinds), text: z.string().min(1), shareable: z.boolean().optional(),
       subject: z.string().min(1).optional(), predicate: z.string().min(1).optional(),

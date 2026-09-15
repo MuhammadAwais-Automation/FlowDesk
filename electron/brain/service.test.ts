@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { strToU8, zipSync } from 'fflate'
 import { afterEach, describe, expect, it } from 'vitest'
-import { assembleBrainEvidence, type BrainNavigationMethod, readBrainDocument } from '../agent/brainNavigation'
+import { assembleBrainEvidence, type BrainNavigationMethod, readBrainDocument, readBrainNeighbors } from '../agent/brainNavigation'
 import { BrainService } from './service'
 
 const roots: string[] = []
@@ -445,6 +445,32 @@ describe('BrainService', () => {
 
         const note = service.handle({ id: '2', method: 'knowledge.dailyNote', payload: { scopeId: scope.id } }) as { body: string }
         expect(note.body).toContain('Imported 1 documents from the vault')
+      } finally { service.close() }
+    })
+  })
+
+  describe('link neighbourhood', () => {
+    it('walks links through the scope chain and refuses a traversal path', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-neighbors-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const globalScope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        const projectScope = service.database.ensureScope({ type: 'project', externalRef: 'p1', name: 'P', parentId: globalScope.id })
+        const put = (path: string, body: string) => service.documents.upsert({
+          scopeId: globalScope.id, path, type: 'note', title: path, summary: '', body,
+          origin: 'curated', contentHash: `${path}-1`, updatedAt: '2026-09-01T00:00:00.000Z',
+        })
+        put('wiki/clients/yasir-bhai.md', 'Retainer PKR 40,000.')
+        put('wiki/index/clients.md', 'See [[yasir-bhai]].')
+
+        // Asked from the project scope: the chain must reach global.
+        const request = async (method: BrainNavigationMethod, payload: unknown) => service.handle({ id: 'n', method, payload })
+        const output = await readBrainNeighbors(request, projectScope.id, 'wiki/clients/yasir-bhai.md', 2)
+        expect(output).toContain('wiki/index/clients.md')
+        expect(output).toContain('1 hop')
+
+        expect(await readBrainNeighbors(request, projectScope.id, '../secrets.md', 1)).toMatch(/refused/i)
       } finally { service.close() }
     })
   })

@@ -207,3 +207,21 @@ export interface AgentTurnUsage {
   numTurns: number
   durationMs: number
 }
+
+/**
+ * The link neighbourhood around one document — a *local* graph, never a global
+ * one. `depth` is hops from the origin, so a renderer can lay it out in rings
+ * without running a physics simulation.
+ */
+export interface DocumentNeighborhoodNode {
+  path: string
+  title: string
+  type: KnowledgeDocType
+  depth: number
+}
+
+export interface DocumentNeighborhood {
+  origin: string
+  nodes: DocumentNeighborhoodNode[]
+  edges: { from: string; to: string }[]
+}

@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { BrainCircuit, Check, Clock, FolderOpen, Link2, RotateCcw, Search, Sparkles, Upload, X } from 'lucide-react'
 import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
 import { BRAIN_TABS } from '@/lib/brainUi'
+import { layoutNeighborhood } from '@/lib/neighborhoodLayout'
 import type { BrainCandidate, BrainScope, BrainStatus } from '@/types/brain'
 import { KNOWLEDGE_DOC_TYPES } from '@/types/brainKnowledge'
 import type {
   BrainEvent,
   CompactionReport,
+  DocumentNeighborhood,
   DocumentReadResult,
   DocumentSearchHit,
   KnowledgeCandidate,
@@ -47,6 +49,42 @@ function describeEvent(event: BrainEvent): string {
     case 'job.completed': return `${text('recipeId') || 'Job'} — ${text('status') || 'completed'}`
     case 'tool.action': return `${text('label') || 'Action'}${meta.failed === true ? ' — failed' : ''}`
   }
+}
+
+const NODE_FILL: Record<number, string> = { 0: '#f59e0b', 1: '#a8a29e', 2: '#d6d3d1' }
+
+/**
+ * A document's link neighbourhood, two hops at most.
+ *
+ * Deliberately local. A whole-vault graph is the thing every source warns about
+ * — legible under ~50 notes, a hairball past 200 — and nobody reports using one
+ * to find anything. Two hops around the document you are already reading is the
+ * variant practitioners actually defend.
+ */
+function NeighborhoodGraph({ neighborhood, onOpen }: {
+  neighborhood: DocumentNeighborhood
+  onOpen: (path: string) => void
+}) {
+  const layout = layoutNeighborhood(neighborhood, 360)
+  if (layout.nodes.length <= 1) {
+    return <p className="text-sm text-stone-500">Is document ka koi link nahi — na andar, na bahar.</p>
+  }
+  return (
+    <svg viewBox={`0 0 ${layout.width} ${layout.height}`} className="mx-auto block h-auto w-full max-w-sm">
+      {layout.edges.map(edge => (
+        <line key={`${edge.from}-${edge.to}`} x1={edge.x1} y1={edge.y1} x2={edge.x2} y2={edge.y2} stroke="#d6d3d1" strokeWidth={1} />
+      ))}
+      {layout.nodes.map(node => (
+        <g key={node.path} onClick={() => onOpen(node.path)} className="cursor-pointer">
+          <title>{`${node.path} — ${node.depth} hop${node.depth === 1 ? '' : 's'}`}</title>
+          <circle cx={node.x} cy={node.y} r={node.depth === 0 ? 9 : 6} fill={NODE_FILL[node.depth] ?? '#d6d3d1'} />
+          <text x={node.x} y={node.y - 12} textAnchor="middle" className="fill-stone-600 text-[9px]">
+            {node.title.length > 18 ? `${node.title.slice(0, 17)}…` : node.title}
+          </text>
+        </g>
+      ))}
+    </svg>
+  )
 }
 
 function Card({ children }: { children: React.ReactNode }) {
@@ -95,6 +133,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
 
   // Shared document reader — whichever tab opened it last owns it.
   const [selectedDocument, setSelectedDocument] = useState<DocumentReadResult | null>(null)
+  const [neighborhood, setNeighborhood] = useState<DocumentNeighborhood | null>(null)
 
   // Health
   const [knowledgeVaultRoot, setKnowledgeVaultRoot] = useState<string | null>(null)
@@ -176,8 +215,14 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   async function readDocument(path: string) {
     if (!scope) return
     const request = ++readRequest.current
-    const document = await api.brainKnowledgeRead({ scopeId: scope.id, path })
-    if (selectedScopeId.current === scope.id && request === readRequest.current) setSelectedDocument(document)
+    const isCurrent = () => selectedScopeId.current === scope.id && request === readRequest.current
+    const [document, links] = await Promise.all([
+      api.brainKnowledgeRead({ scopeId: scope.id, path }),
+      api.brainKnowledgeNeighbors({ scopeId: scope.id, path, depth: 2 }).catch(() => null),
+    ])
+    if (!isCurrent()) return
+    setSelectedDocument(document)
+    setNeighborhood(links)
   }
 
   async function searchLibrary() {
@@ -371,6 +416,11 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
             <div className="flex items-center justify-between"><h2 className="font-semibold">{selectedDocument.title}</h2><button onClick={() => setSelectedDocument(null)}><X size={16} /></button></div>
             <p className="mt-1 text-xs text-stone-500">{selectedDocument.type} · {selectedDocument.path} · updated {selectedDocument.updatedAt}</p>
             <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-xs text-stone-700">{selectedDocument.text}</pre>
+          </Card>}
+          {selectedDocument && neighborhood && <Card>
+            <h2 className="flex items-center gap-2 font-semibold"><Link2 size={17} /> Connected documents</h2>
+            <p className="mt-1 text-xs text-stone-500">Do hop tak. Kisi bhi circle par click karke wo document kholein.</p>
+            <div className="mt-3"><NeighborhoodGraph neighborhood={neighborhood} onOpen={path => void readDocument(path)} /></div>
           </Card>}
         </div>}
 

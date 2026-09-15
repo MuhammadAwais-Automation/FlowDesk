@@ -7,6 +7,7 @@
  */
 
 import type {
+  DocumentNeighborhood,
   DocumentSearchHit,
   KnowledgeDocType,
   KnowledgeDocument,
@@ -80,4 +81,7 @@ export interface DocumentStorePort {
   /** Wiki-links whose target didn't exist at write time — candidate
    *  connections a human can see and act on, at no cost if ignored. */
   listUnresolvedLinks(scopeIds: string[]): UnresolvedLink[]
+
+  /** Local link neighbourhood around one document, both directions, `depth` hops. */
+  neighbors(scopeIds: string[], path: string, depth: number): DocumentNeighborhood
 }
