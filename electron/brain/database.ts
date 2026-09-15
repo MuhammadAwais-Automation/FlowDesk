@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { splitSections } from './knowledge/sectioning'
 import {
   MONITOR_DEFAULT_MINIMUM_SCORE,
   MONITOR_MINIMUM_INTERVAL_MINUTES,
@@ -28,7 +29,7 @@ import type {
 } from '../../src/types/brain'
 
 /** SQLite schema version (`PRAGMA user_version`), not the backup archive's. */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 const TABLES = [
   'scopes', 'scope_links', 'memories', 'memory_revisions', 'memory_candidates',
@@ -39,6 +40,7 @@ const TABLES = [
   'vault_conflicts', 'processing_cache', 'schema_migrations',
   'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
   'knowledge_documents', 'knowledge_fts', 'knowledge_links', 'knowledge_candidates',
+  'knowledge_sections',
 ] as const
 
 type SqlRow = Record<string, unknown>
@@ -364,13 +366,70 @@ export class BrainDatabase {
           decided_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_knowledge_candidates_scope_status ON knowledge_candidates(scope_id, status, created_at DESC);
+
+        -- v5: heading-bounded slices of each document, so retrieval can return
+        -- the paragraph that answers instead of the whole file. Section text is
+        -- materialised here on purpose: document bodies otherwise live only in
+        -- knowledge_fts.body, which cannot be sliced by line.
+        CREATE TABLE IF NOT EXISTS knowledge_sections (
+          id TEXT PRIMARY KEY,
+          document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+          ordinal INTEGER NOT NULL,
+          level INTEGER NOT NULL,
+          heading TEXT NOT NULL,
+          heading_path TEXT NOT NULL,
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          text TEXT NOT NULL,
+          UNIQUE(document_id, ordinal)
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_sections_document ON knowledge_sections(document_id, ordinal);
       `)
+      this.backfillKnowledgeSections()
       this.db.prepare('INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, now())
       this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
+    }
+  }
+
+  /**
+   * Fills `knowledge_sections` for documents that predate it.
+   *
+   * Runs inside `migrate()`'s transaction, after the CREATE block (the table
+   * must exist) and before the version stamp (so a failure rolls the whole
+   * migration back rather than leaving a half-sectioned store). The first
+   * post-CREATE backfill in this file — later ones should follow this shape.
+   *
+   * Idempotent through the NOT EXISTS guard, which also makes it correct for a
+   * store jumping several versions at once. Bodies come from `knowledge_fts`
+   * because that is the only place they are stored. Superseded rows are
+   * sectioned too, so `document_id` stays a total key.
+   */
+  private backfillKnowledgeSections() {
+    const pending = this.db.prepare(`
+      SELECT d.id AS document_id, f.body AS body
+      FROM knowledge_documents d
+      JOIN knowledge_fts f ON f.document_id = d.id
+      WHERE NOT EXISTS (SELECT 1 FROM knowledge_sections s WHERE s.document_id = d.id)
+    `).all() as SqlRow[]
+    if (pending.length === 0) return
+
+    const insert = this.db.prepare(`
+      INSERT INTO knowledge_sections(
+        id, document_id, ordinal, level, heading, heading_path, start_line, end_line, text
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const row of pending) {
+      const documentId = String(row.document_id)
+      for (const section of splitSections(String(row.body ?? ''))) {
+        insert.run(
+          randomUUID(), documentId, section.ordinal, section.level,
+          section.heading, section.headingPath, section.startLine, section.endLine, section.text,
+        )
+      }
     }
   }
 

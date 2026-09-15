@@ -15,6 +15,7 @@ function getTool(name: string, approval = vi.fn(async () => true)) {
 describe('Brain agent tools', () => {
   it('publishes the complete narrow tool contract', () => {
     expect(BRAIN_TOOL_NAMES).toEqual([
+      'mcp__workers__brain_answer_pack',
       'mcp__workers__brain_search',
       'mcp__workers__brain_read_document',
       'mcp__workers__brain_search_documents',
@@ -29,6 +30,35 @@ describe('Brain agent tools', () => {
       'mcp__workers__brain_build_decision_brief',
       'mcp__workers__brain_review_opportunity',
     ])
+  })
+
+  it('returns answer-pack evidence as plain prose with the paths to cite', async () => {
+    const request = vi.fn(async () => ({
+      question: 'yasir ka rate',
+      evidence: ['wiki/clients/yasir.md#Yasir > Rates', 'PKR 40,000 monthly.'].join('\n'),
+      sections: [{ path: 'wiki/clients/yasir.md', headingPath: 'Yasir > Rates' }],
+      pointerFollowed: null,
+      strategy: 'strong-signal',
+      estimatedTokens: 18,
+      candidatesConsidered: 3,
+    }))
+    configureBrainTools({ request, getScopeId: () => 'client-a', allowWrites: () => true })
+
+    const output = (await getTool('brain_answer_pack').tool.handler({ question: 'yasir ka rate' })).content[0].text
+
+    expect(request).toHaveBeenCalledWith('knowledge.answerPack', { scopeId: 'client-a', question: 'yasir ka rate' })
+    // Prose, not JSON: the model reads this directly.
+    expect(output).toContain('PKR 40,000 monthly.')
+    expect(output).toContain('Cite these paths')
+    expect(() => JSON.parse(output)).toThrow()
+  })
+
+  it('reports the brain as unavailable rather than throwing when there is no scope', async () => {
+    configureBrainTools({ request: vi.fn(async () => null), getScopeId: () => null, allowWrites: () => true })
+
+    const output = (await getTool('brain_answer_pack').tool.handler({ question: 'anything' })).content[0].text
+
+    expect(output).toMatch(/unavailable/i)
   })
 
   it('binds document navigation to the active scope', async () => {

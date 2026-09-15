@@ -8,6 +8,8 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
+import { splitSections } from './sectioning'
+import { buildPathIndex, extractWikiLinkTargets, resolveWikiLink } from './wikilinks'
 import type { DocumentSearchHit, KnowledgeDocument, KnowledgeDocType, UnresolvedLink } from '../../../src/types/brainKnowledge'
 import type {
   DocumentStorePort,
@@ -93,7 +95,7 @@ function titleSimilarity(a: string, b: string): number {
  * `scopeIds` (nearest). A project's own version of a document must not be
  * shadowed by an ancestor's, so this runs before any limit/truncation.
  */
-function shadowByNearestScope(rows: SqlRow[], scopeIds: string[]): SqlRow[] {
+export function shadowByNearestScope(rows: SqlRow[], scopeIds: string[]): SqlRow[] {
   const rank = new Map(scopeIds.map((id, index) => [id, index]))
   const winningScopeForPath = new Map<string, string>()
   for (const row of rows) {
@@ -113,9 +115,17 @@ export class DocumentStore implements DocumentStorePort {
   upsert(input: UpsertDocumentInput): KnowledgeDocument {
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      const existing = this.db.prepare('SELECT * FROM knowledge_documents WHERE scope_id = ? AND path = ?')
-        .get(input.scopeId, input.path) as SqlRow | undefined
+      // `valid_to IS NULL` matters: once a path has both a superseded row and
+      // an active one, an unfiltered lookup returns whichever the planner
+      // picks, so the update could land on the dead row.
+      const existing = this.db.prepare(
+        'SELECT * FROM knowledge_documents WHERE scope_id = ? AND path = ? AND valid_to IS NULL',
+      ).get(input.scopeId, input.path) as SqlRow | undefined
       if (existing && String(existing.content_hash) === input.contentHash) {
+        // Unchanged content still needs sections if it has none — a document
+        // written before the v5 backfill, or one whose backfill was skipped,
+        // would otherwise stay invisible to section-level retrieval forever.
+        this.writeSections(String(existing.id), input.body, { onlyIfMissing: true })
         this.db.exec('COMMIT')
         return mapDocument(existing)
       }
@@ -144,19 +154,10 @@ export class DocumentStore implements DocumentStorePort {
       this.db.prepare('INSERT INTO knowledge_fts(document_id, title, summary, body) VALUES (?, ?, ?, ?)')
         .run(documentId, input.title, input.summary, input.body)
 
+      this.writeSections(documentId, input.body)
+
       this.db.prepare('DELETE FROM knowledge_links WHERE document_id = ?').run(documentId)
-      const targetExists = this.db.prepare(`
-        SELECT 1 FROM knowledge_documents
-        WHERE scope_id = ? AND path = ? AND valid_to IS NULL
-      `)
-      const insertLink = this.db.prepare(`
-        INSERT INTO knowledge_links(id, document_id, target_path, resolved)
-        VALUES (?, ?, ?, ?)
-      `)
-      for (const targetPath of new Set(input.links ?? [])) {
-        const resolved = targetExists.get(input.scopeId, targetPath) ? 1 : 0
-        insertLink.run(randomUUID(), documentId, targetPath, resolved)
-      }
+      this.writeLinks(documentId, input)
 
       const row = this.db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(documentId) as SqlRow
       this.db.exec('COMMIT')
@@ -165,6 +166,72 @@ export class DocumentStore implements DocumentStorePort {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /**
+   * Replaces this document's heading-bounded sections.
+   *
+   * Mirrors the delete-then-insert the FTS row already gets: there are no
+   * triggers anywhere in this schema, so every derived table is maintained by
+   * hand, in the caller's transaction.
+   */
+  private writeSections(documentId: string, body: string, options: { onlyIfMissing?: boolean } = {}): void {
+    if (options.onlyIfMissing) {
+      const existing = this.db.prepare('SELECT 1 FROM knowledge_sections WHERE document_id = ? LIMIT 1').get(documentId)
+      if (existing) return
+    } else {
+      this.db.prepare('DELETE FROM knowledge_sections WHERE document_id = ?').run(documentId)
+    }
+    const insert = this.db.prepare(`
+      INSERT INTO knowledge_sections(
+        id, document_id, ordinal, level, heading, heading_path, start_line, end_line, text
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const section of splitSections(body)) {
+      insert.run(
+        randomUUID(), documentId, section.ordinal, section.level,
+        section.heading, section.headingPath, section.startLine, section.endLine, section.text,
+      )
+    }
+  }
+
+  /**
+   * Writes this document's outgoing links, deriving them from the body when the
+   * caller supplied none. Only the vault importer knows the real filesystem
+   * layout, so it passes an already-resolved list; every other writer (the
+   * candidate gate, the compactor, the memories migration) used to produce no
+   * links at all, which left the retrieval ladder with nothing to follow.
+   *
+   * `links: []` still means "explicitly none" — only `undefined` derives.
+   */
+  private writeLinks(documentId: string, input: UpsertDocumentInput): void {
+    const targets = input.links ?? this.deriveLinks(input.scopeId, input.body)
+    const targetExists = this.db.prepare(
+      'SELECT 1 FROM knowledge_documents WHERE scope_id = ? AND path = ? AND valid_to IS NULL',
+    )
+    const insertLink = this.db.prepare(
+      'INSERT INTO knowledge_links(id, document_id, target_path, resolved) VALUES (?, ?, ?, ?)',
+    )
+    for (const targetPath of new Set(targets)) {
+      const resolved = targetExists.get(input.scopeId, targetPath) ? 1 : 0
+      insertLink.run(randomUUID(), documentId, targetPath, resolved)
+    }
+  }
+
+  /**
+   * Resolves `[[targets]]` against the paths already active in this scope, so a
+   * link written as `yasir-bhai` finds `wiki/clients/yasir-bhai.md`. Unresolved
+   * targets are still stored — `listUnresolvedLinks` surfaces them in Review as
+   * candidate connections, which is the same treatment imported links get.
+   */
+  private deriveLinks(scopeId: string, body: string): string[] {
+    const targets = extractWikiLinkTargets(body)
+    if (targets.length === 0) return []
+    const activePaths = (this.db.prepare(
+      'SELECT path FROM knowledge_documents WHERE scope_id = ? AND valid_to IS NULL',
+    ).all(scopeId) as SqlRow[]).map(row => String(row.path))
+    const pathIndex = buildPathIndex(activePaths)
+    return targets.map(target => resolveWikiLink(target, '', pathIndex))
   }
 
   supersede(input: UpsertDocumentInput): { previous: KnowledgeDocument | null; next: KnowledgeDocument } {
@@ -191,18 +258,9 @@ export class DocumentStore implements DocumentStorePort {
       )
       this.db.prepare('INSERT INTO knowledge_fts(document_id, title, summary, body) VALUES (?, ?, ?, ?)')
         .run(documentId, input.title, input.summary, input.body)
+      this.writeSections(documentId, input.body)
 
-      const targetExists = this.db.prepare(`
-        SELECT 1 FROM knowledge_documents WHERE scope_id = ? AND path = ? AND valid_to IS NULL
-      `)
-      const insertLink = this.db.prepare(`
-        INSERT INTO knowledge_links(id, document_id, target_path, resolved)
-        VALUES (?, ?, ?, ?)
-      `)
-      for (const targetPath of new Set(input.links ?? [])) {
-        const resolved = targetExists.get(input.scopeId, targetPath) ? 1 : 0
-        insertLink.run(randomUUID(), documentId, targetPath, resolved)
-      }
+      this.writeLinks(documentId, input)
 
       const nextRow = this.db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(documentId) as SqlRow
       this.db.exec('COMMIT')

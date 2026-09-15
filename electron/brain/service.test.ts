@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { strToU8, zipSync } from 'fflate'
 import { afterEach, describe, expect, it } from 'vitest'
-import { readBrainDocument } from '../agent/brainNavigation'
+import { assembleBrainEvidence, type BrainNavigationMethod, readBrainDocument } from '../agent/brainNavigation'
 import { BrainService } from './service'
 
 const roots: string[] = []
@@ -208,7 +208,7 @@ describe('BrainService', () => {
         updatedAt,
       })
 
-      const request = async (method: 'knowledge.read' | 'knowledge.search', payload: unknown) => service.handle({
+      const request = async (method: BrainNavigationMethod, payload: unknown) => service.handle({
         id: 'knowledge-read',
         method,
         payload,
@@ -268,7 +268,7 @@ describe('BrainService', () => {
         expect(manifest.text).toContain('wiki/clients/yasir-bhai.md')
 
         // Both navigation tools must actually reach the document.
-        const request = async (method: 'knowledge.read' | 'knowledge.search', payload: unknown) => service.handle({ id: '2', method, payload })
+        const request = async (method: BrainNavigationMethod, payload: unknown) => service.handle({ id: '2', method, payload })
         const read = await readBrainDocument(request, projectScope.id, 'wiki/clients/yasir-bhai.md')
         expect(read).toContain('Yasir bhai runs Together We Go trade finance.')
         const searchHits = service.handle({
@@ -321,6 +321,48 @@ describe('BrainService', () => {
 
         const read = service.handle({ id: '2', method: 'knowledge.read', payload: { scopeId: projectScope.id, path: 'wiki/projects/flowdesk.md' } }) as { text: string }
         expect(read.text).toBe('Current project-owned version.')
+      } finally { service.close() }
+    })
+  })
+
+  describe('answer pack (the retrieval ladder)', () => {
+    it('hands the agent the answering passage instead of the whole document', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-answer-pack-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const globalScope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        const projectScope = service.database.ensureScope({ type: 'project', externalRef: 'proj-1', name: 'FlowDesk', parentId: globalScope.id })
+
+        const body = [
+          '# Yasir Bhai',
+          'We met through Iftikhar in 2024 and talked for months before any work started.',
+          '',
+          '## Retainer',
+          'PKR 40,000 monthly, invoiced on the first.',
+          '',
+          '## History',
+          'Earlier engagements were one-off dashboards billed hourly.',
+        ].join('\n')
+        service.documents.upsert({
+          scopeId: globalScope.id, path: 'wiki/clients/yasir-bhai.md', type: 'client',
+          title: 'Yasir Bhai', summary: 'Client contact', body,
+          origin: 'curated', contentHash: 'vault-1', updatedAt: '2026-09-01T00:00:00.000Z',
+        })
+
+        // Asked from the project scope, the way an Agent turn actually asks.
+        const request = async (method: BrainNavigationMethod, payload: unknown) => service.handle({ id: '9', method, payload })
+        const evidence = await assembleBrainEvidence(request, projectScope.id, 'Yasir ka retainer kitna hai?')
+
+        expect(evidence).toContain('PKR 40,000 monthly')
+        expect(evidence).toContain('wiki/clients/yasir-bhai.md#Yasir Bhai > Retainer')
+        // The parts that do not answer stay out -- that is the whole saving.
+        expect(evidence).not.toContain('met through Iftikhar')
+        expect(evidence).not.toContain('billed hourly')
+
+        // And it is cheaper than reading the document, which is the point.
+        const whole = await readBrainDocument(request, projectScope.id, 'wiki/clients/yasir-bhai.md')
+        expect(evidence.length).toBeLessThan(whole.length)
       } finally { service.close() }
     })
   })

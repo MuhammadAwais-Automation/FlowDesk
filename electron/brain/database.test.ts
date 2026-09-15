@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
+import { DocumentStore } from './knowledge/documents'
 import { BrainDatabase } from './database'
 
 const roots: string[] = []
@@ -18,9 +19,9 @@ afterEach(() => {
 })
 
 describe('BrainDatabase', () => {
-  it('creates the complete v4 schema from an empty database', () => {
+  it('creates the complete v5 schema from an empty database', () => {
     const brain = createBrain()
-    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 4 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 5 })
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
       'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
       'knowledge_documents', 'knowledge_fts', 'knowledge_links', 'knowledge_candidates',
@@ -69,7 +70,7 @@ describe('BrainDatabase', () => {
     legacy.close()
 
     const migrated = new BrainDatabase(path)
-    expect(migrated.getStatus().schemaVersion).toBe(4)
+    expect(migrated.getStatus().schemaVersion).toBe(5)
     expect(migrated.listSchemaTables()).toEqual(expect.arrayContaining(['knowledge_candidates']))
 
     // The v3 row survived the rebuild with its id, and its link too.
@@ -104,8 +105,56 @@ describe('BrainDatabase', () => {
 
     // Idempotent: reopening an already-v4 database changes nothing.
     const reopened = new BrainDatabase(path)
-    expect(reopened.getStatus().schemaVersion).toBe(4)
+    expect(reopened.getStatus().schemaVersion).toBe(5)
     expect(reopened.handle.prepare('SELECT count(*) AS total FROM knowledge_documents').get()).toMatchObject({ total: 2 })
+    reopened.close()
+  })
+
+  it('migrates a v4 database to v5 by sectioning the documents it already holds', () => {
+    // v5 is the first migration with a post-CREATE backfill. A profile that
+    // already imported a vault must come out fully sectioned without being
+    // re-imported, because section text is the only thing the retrieval ladder
+    // can slice -- knowledge_fts.body cannot be addressed by line.
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-v5-'))
+    roots.push(root)
+    const path = join(root, 'brain.sqlite')
+    const brain = new BrainDatabase(path)
+    const scope = brain.ensureScope({ type: 'client', externalRef: 'client-v5', name: 'Client V5' })
+    const store = new DocumentStore(brain.handle)
+    store.upsert({
+      scopeId: scope.id,
+      path: 'wiki/clients/yasir-bhai.md',
+      type: 'person',
+      title: 'Yasir Bhai',
+      summary: 'Client',
+      body: ['# Yasir Bhai', 'Owner of the cobalt account.', '', '## Rates', 'PKR 40k per month.'].join('\n'),
+      origin: 'curated',
+      contentHash: 'v5-hash',
+      updatedAt: '2026-09-01T10:00:00.000Z',
+    })
+    brain.close()
+
+    // Drop back to v4 with the sections gone, the state a real pre-v5 profile
+    // is in: documents and their FTS rows present, nothing sectioned.
+    const downgrade = new DatabaseSync(path)
+    downgrade.exec('PRAGMA user_version=4')
+    downgrade.exec('DROP TABLE IF EXISTS knowledge_sections')
+    downgrade.close()
+
+    const migrated = new BrainDatabase(path)
+    expect(migrated.getStatus().schemaVersion).toBe(5)
+    const sections = migrated.handle
+      .prepare('SELECT heading, heading_path, start_line, end_line FROM knowledge_sections ORDER BY ordinal')
+      .all()
+    expect(sections).toEqual([
+      { heading: 'Yasir Bhai', heading_path: 'Yasir Bhai', start_line: 1, end_line: 3 },
+      { heading: 'Rates', heading_path: 'Yasir Bhai > Rates', start_line: 4, end_line: 5 },
+    ])
+    migrated.close()
+
+    // Idempotent: reopening must not duplicate the backfilled rows.
+    const reopened = new BrainDatabase(path)
+    expect((reopened.handle.prepare('SELECT COUNT(*) AS n FROM knowledge_sections').get() as { n: number }).n).toBe(2)
     reopened.close()
   })
 
@@ -134,7 +183,7 @@ describe('BrainDatabase', () => {
     downgrade.close()
 
     const migrated = new BrainDatabase(path)
-    expect(migrated.getStatus().schemaVersion).toBe(4)
+    expect(migrated.getStatus().schemaVersion).toBe(5)
     expect(migrated.listSchemaTables()).toEqual(expect.arrayContaining([
       'knowledge_documents', 'knowledge_fts', 'knowledge_links',
     ]))
@@ -143,7 +192,7 @@ describe('BrainDatabase', () => {
 
     // Idempotent: reopening an already-v3 database changes nothing.
     const reopened = new BrainDatabase(path)
-    expect(reopened.getStatus().schemaVersion).toBe(4)
+    expect(reopened.getStatus().schemaVersion).toBe(5)
     expect(reopened.listOpportunities({ scopeId: scope.id })).toHaveLength(1)
     reopened.close()
   })
@@ -166,7 +215,7 @@ describe('BrainDatabase', () => {
     legacy.close()
 
     const brain = new BrainDatabase(path)
-    expect(brain.getStatus().schemaVersion).toBe(4)
+    expect(brain.getStatus().schemaVersion).toBe(5)
     expect(brain.listScopes(['client'])).toMatchObject([{ id: 'client-a', name: 'Legacy A' }])
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
       'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
@@ -197,14 +246,14 @@ describe('BrainDatabase', () => {
     partial.close()
 
     const first = new BrainDatabase(path)
-    expect(first.getStatus().schemaVersion).toBe(4)
+    expect(first.getStatus().schemaVersion).toBe(5)
     expect(first.listSchemaTables()).toEqual(expect.arrayContaining(['opportunity_evidence', 'monitors', 'source_metrics']))
     first.close()
     const versionCheck = new DatabaseSync(path)
-    expect((versionCheck.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4)
+    expect((versionCheck.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5)
     versionCheck.close()
     const reopened = new BrainDatabase(path)
-    expect(reopened.getStatus().schemaVersion).toBe(4)
+    expect(reopened.getStatus().schemaVersion).toBe(5)
     reopened.close()
   })
 
@@ -425,7 +474,7 @@ describe('BrainDatabase', () => {
 
   it('creates the complete v2 schema with WAL, foreign keys and FTS5', () => {
     const brain = createBrain()
-    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 4 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 5 })
     expect(brain.getJournalMode()).toBe('wal')
     expect(brain.getForeignKeysEnabled()).toBe(true)
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
@@ -447,7 +496,7 @@ describe('BrainDatabase', () => {
     partial.exec('CREATE TABLE scopes (id TEXT PRIMARY KEY, type TEXT NOT NULL, external_ref TEXT NOT NULL, name TEXT NOT NULL, parent_id TEXT REFERENCES scopes(id), created_at TEXT NOT NULL, UNIQUE(type, external_ref))')
     partial.close()
     const brain = new BrainDatabase(path)
-    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 4 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 5 })
     expect(brain.listSchemaTables()).toContain('jobs')
     brain.close()
   })

@@ -1,0 +1,85 @@
+{
+  "comment": "Questions for the retrieval benchmark, in the mix they actually arrive in: Roman Urdu, Hinglish and English. `expect` is a substring that must survive into the delivered context for the answer to be reachable. Edit this file to tune the benchmark; never edit thresholds in code to make it pass.",
+  "documents": [
+    {
+      "path": "wiki/clients/yasir-bhai.md",
+      "type": "client",
+      "title": "Yasir Bhai",
+      "summary": "Trade finance client, Together We Go",
+      "body": "# Yasir Bhai\nMet through [[iftikhar]] in 2024. Runs Together We Go, a trade finance outfit in Lahore, and talks in long voice notes.\n\n## Retainer\nPKR 40,000 monthly, invoiced on the first. Raised from 30,000 in March 2026.\n\n## Channel\nWhatsApp voice notes only. He does not read email and will not use Slack.\n\n## History\nStarted with one-off dashboards billed hourly through 2024 before the retainer."
+    },
+    {
+      "path": "wiki/projects/powernet.md",
+      "type": "project",
+      "title": "PowerNet Manager",
+      "summary": "ISP dashboard, 4,491 customers",
+      "body": "# PowerNet Manager\nProduction ISP billing and customer dashboard.\n\n## Scale\nServes 4,491 active customers across three franchises.\n\n## Stack\nNext.js front end on Supabase, deployed to the Oracle ARM64 box behind Coolify.\n\n## Open problems\nInvoice PDF generation times out past 800 rows and needs batching."
+    },
+    {
+      "path": "wiki/projects/flowdesk.md",
+      "type": "project",
+      "title": "FlowDesk",
+      "summary": "Local-first Electron AI workstation",
+      "body": "# FlowDesk\nThe flagship: a local-first Electron AI workstation.\n\n## Capture engine\nReverse-engineers AI provider APIs from real network traffic rather than guessed wire formats, so no API keys are needed.\n\n## Brain\nSQLite knowledge store with FTS5, scope inheritance and a deterministic retrieval ladder.\n\n## Agent\nClaude Agent SDK drives worker tools for ChatGPT, Gemini, Grok and Perplexity through logged-in browser sessions."
+    },
+    {
+      "path": "wiki/partners/iftikhar.md",
+      "type": "person",
+      "title": "Iftikhar",
+      "summary": "Codveon co-founder",
+      "body": "# Iftikhar\nCo-founded [[codveon]] with me. Handles client hunting and the student internship pipeline while I build."
+    },
+    {
+      "path": "wiki/org/codveon.md",
+      "type": "client",
+      "title": "Codveon",
+      "summary": "The agency",
+      "body": "# Codveon\nSmall agency, two founders.\n\n## Model\nStudent interns are trained on real client work, then the good ones convert to paid contractors.\n\n## Rate floor\nWe do not take fixed-price work below 150,000 PKR after the 2025 scope-creep losses."
+    },
+    {
+      "path": "wiki/me/skills.md",
+      "type": "me",
+      "title": "Skills",
+      "summary": "What I actually know",
+      "body": "# Skills\n\n## Intermediate\nFlutter, Supabase, Next.js, Node, Electron, Claude Agent SDK, web API reverse engineering.\n\n## Learning\nFastAPI, Python, RAG and vector databases.\n\n## Weak\nManual coding syntax is not the primary approach; I direct agents in Roman Urdu instead."
+    },
+    {
+      "path": "wiki/infra/oracle.md",
+      "type": "source",
+      "title": "Oracle VPS",
+      "summary": "Self-hosted ARM64 box",
+      "body": "# Oracle VPS\nARM64, 4 cores, 24GB, always-free tier.\n\n## Running\nDocker under Coolify, Nginx, WireGuard, iptables. Ollama and Open WebUI for local models.\n\n## Gotcha\nThe ARM64 build of Chromium is not available in the default Playwright image, so browser jobs run elsewhere."
+    },
+    {
+      "path": "wiki/decisions/no-api-keys.md",
+      "type": "decision",
+      "title": "No API keys for provider capture",
+      "summary": "Capture from the browser session instead",
+      "body": "# No API keys for provider capture\nDecided in 2025.\n\n## Reason\nPaying per token for five providers while already subscribing to them is waste. Capture the logged-in browser session instead.\n\n## Cost\nEvery provider UI change can break capture, so wire formats must be verified against real traffic, never guessed."
+    },
+    {
+      "path": "wiki/index/clients.md",
+      "type": "note",
+      "title": "Clients index",
+      "summary": "Who we work with",
+      "body": "# Clients index\nSee [[yasir-bhai]] and [[codveon]]."
+    }
+  ],
+  "questions": [
+    { "ask": "Yasir ka retainer kitna hai?", "expect": "PKR 40,000 monthly" },
+    { "ask": "yaseer se baat kaise karte hain", "expect": "WhatsApp voice notes only" },
+    { "ask": "powernet kitne customers serve karta hai", "expect": "4,491 active customers" },
+    { "ask": "what stack does powernet use", "expect": "Next.js front end on Supabase" },
+    { "ask": "powernet mein kya problem hai abhi", "expect": "Invoice PDF generation times out" },
+    { "ask": "flowdesk capture engine kaise kaam karta hai", "expect": "real network traffic" },
+    { "ask": "flowdesk ka brain kya hai", "expect": "deterministic retrieval ladder" },
+    { "ask": "iftikhar kaun hai", "expect": "client hunting" },
+    { "ask": "codveon ka business model kya hai", "expect": "Student interns are trained" },
+    { "ask": "hamara minimum fixed price kitna hai", "expect": "150,000 PKR" },
+    { "ask": "mujhe kaunsi cheezein aati hain", "expect": "Flutter, Supabase, Next.js" },
+    { "ask": "kya main python jaanta hoon", "expect": "FastAPI, Python" },
+    { "ask": "oracle box par kya chal raha hai", "expect": "Docker under Coolify" },
+    { "ask": "oracle par playwright ka masla kya tha", "expect": "ARM64 build of Chromium" },
+    { "ask": "api keys kyun nahi use karte", "expect": "already subscribing to them is waste" }
+  ]
+}

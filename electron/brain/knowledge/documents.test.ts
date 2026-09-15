@@ -201,6 +201,50 @@ describe('DocumentStore', () => {
       .toEqual([{ target_path: 'people/existing.md', resolved: 1 }])
   })
 
+  it('derives links from the body when the caller supplies none', () => {
+    const { brain, scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { path: 'wiki/clients/yasir-bhai.md', title: 'Yasir Bhai', contentHash: 'target' }))
+    // A bare name, the way a note actually writes it -- not the full path.
+    const source = store.upsert(documentInput(scope.id, {
+      path: 'projects/source.md',
+      type: 'project',
+      contentHash: 'source-1',
+      body: 'Owner is [[yasir-bhai]]. See also [[nothing-here]] and ![[embedded.png]].',
+    }))
+
+    expect(brain.handle.prepare('SELECT target_path, resolved FROM knowledge_links WHERE document_id = ? ORDER BY target_path').all(source.id))
+      .toEqual([
+        { target_path: 'nothing-here', resolved: 0 },
+        { target_path: 'wiki/clients/yasir-bhai.md', resolved: 1 },
+      ])
+  })
+
+  it('treats an explicit empty link list as "no links", not as "derive them"', () => {
+    const { brain, scope, store } = createStore()
+    const source = store.upsert(documentInput(scope.id, {
+      path: 'projects/source.md',
+      type: 'project',
+      body: 'Mentions [[yasir-bhai]] but the caller says there are no links.',
+      links: [],
+    }))
+
+    expect(brain.handle.prepare('SELECT target_path FROM knowledge_links WHERE document_id = ?').all(source.id)).toEqual([])
+  })
+
+  it('derives links on supersede too, so gated and compacted writes are connected', () => {
+    const { brain, scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { path: 'wiki/clients/yasir-bhai.md', title: 'Yasir Bhai', contentHash: 'target' }))
+    const { next } = store.supersede(documentInput(scope.id, {
+      path: 'captures/note.md',
+      type: 'note',
+      contentHash: 'capture-1',
+      body: 'Discussed pricing with [[yasir-bhai]].',
+    }))
+
+    expect(brain.handle.prepare('SELECT target_path, resolved FROM knowledge_links WHERE document_id = ?').all(next.id))
+      .toEqual([{ target_path: 'wiki/clients/yasir-bhai.md', resolved: 1 }])
+  })
+
   it('supersede creates a brand-new active row when nothing exists at the path yet', () => {
     const { scope, store } = createStore()
 

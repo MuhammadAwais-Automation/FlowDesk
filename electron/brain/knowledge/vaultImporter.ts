@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { basename, dirname, extname, join, relative } from 'node:path'
+import { basename, extname, join, relative } from 'node:path'
 import {
   KNOWLEDGE_DOC_TYPES,
   type KnowledgeDocType,
   type VaultImportReport,
 } from '../../../src/types/brainKnowledge'
 import type { DocumentStorePort } from './ports'
+import { buildPathIndex, extractWikiLinks } from './wikilinks'
 
 export const VAULT_IMPORT_DEFAULT_MAX_FILE_BYTES = 1_000_000
 
@@ -133,57 +134,6 @@ function deriveSummary(body: string): string {
 
   const cleaned = line.replace(/[\[\]*_`]/g, '').replace(/\s+/g, ' ').trim()
   return truncateAtWordBoundary(cleaned, 110)
-}
-
-function addToIndex(index: Map<string, string[]>, key: string, path: string): void {
-  const existing = index.get(key) ?? []
-  if (!existing.includes(path)) index.set(key, [...existing, path])
-}
-
-function buildPathIndex(paths: string[]): Map<string, string[]> {
-  const index = new Map<string, string[]>()
-  for (const path of paths) {
-    const extension = extname(path)
-    const filename = basename(path).toLowerCase()
-    for (const key of [
-      path.toLowerCase(),
-      path.slice(0, -extension.length).toLowerCase(),
-      filename,
-      filename.slice(0, -extname(filename).length),
-    ]) {
-      addToIndex(index, key, path)
-    }
-  }
-  return index
-}
-
-function resolveWikiLink(
-  rawTarget: string,
-  sourcePath: string,
-  pathIndex: Map<string, string[]>,
-): string {
-  const target = rawTarget.trim()
-  const pathTarget = target.split('#', 1)[0].replaceAll('\\', '/').replace(/^\.\//, '')
-  const sourceRelative = `${dirname(sourcePath).replaceAll('\\', '/')}/${pathTarget}`
-    .replace(/^\.\//, '')
-  for (const key of [pathTarget, sourceRelative]) {
-    const matches = pathIndex.get(key.toLowerCase())
-    if (matches?.length === 1) return matches[0]
-  }
-  return target
-}
-
-function extractWikiLinks(
-  body: string,
-  sourcePath: string,
-  pathIndex: Map<string, string[]>,
-): string[] {
-  const links: string[] = []
-  for (const match of body.matchAll(/(?<!!)\[\[([^\]]+)\]\]/g)) {
-    const rawTarget = match[1].split('|', 1)[0].trim()
-    if (rawTarget) links.push(resolveWikiLink(rawTarget, sourcePath, pathIndex))
-  }
-  return links
 }
 
 function failureReason(error: unknown): string {

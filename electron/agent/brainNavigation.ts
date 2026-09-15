@@ -1,6 +1,6 @@
 import type { DocumentReadResult, DocumentSearchHit, KnowledgeDocType } from '../../src/types/brainKnowledge'
 
-export type BrainNavigationMethod = 'knowledge.read' | 'knowledge.search'
+export type BrainNavigationMethod = 'knowledge.read' | 'knowledge.search' | 'knowledge.answerPack'
 export type BrainNavigationRequest = (method: BrainNavigationMethod, payload: unknown) => Promise<unknown>
 
 export const BRAIN_UNAVAILABLE_MESSAGE = 'Brain is unavailable right now.'
@@ -91,6 +91,51 @@ export async function searchBrainDocuments(
     if (!Array.isArray(response) || !response.every(isSearchHit)) return BRAIN_UNAVAILABLE_MESSAGE
     if (response.length === 0) return `No matches found for "${query}".`
     return response.map(hit => `${hit.path} | ${hit.type} | ${oneLine(hit.title)}\n  ${oneLine(hit.snippet)}`).join('\n')
+  } catch {
+    return BRAIN_UNAVAILABLE_MESSAGE
+  }
+}
+
+function isAnswerPack(value: unknown): value is {
+  evidence: string
+  sections: { path: string; headingPath: string }[]
+  pointerFollowed: { from: string; to: string } | null
+  strategy: string
+} {
+  return isRecord(value)
+    && typeof value.evidence === 'string'
+    && Array.isArray(value.sections)
+    && value.sections.every(section => isRecord(section) && typeof section.path === 'string' && typeof section.headingPath === 'string')
+}
+
+/**
+ * One call, one answer's worth of evidence.
+ *
+ * The search-then-read-then-read pattern the other two functions support costs
+ * a model turn per step and usually delivers whole documents. This hands back
+ * the passages themselves, already chosen and budgeted by code, so the model
+ * can answer immediately — with the source paths it must cite.
+ */
+export async function assembleBrainEvidence(
+  request: BrainNavigationRequest,
+  scopeId: string,
+  question: string,
+  tokenBudget?: number,
+): Promise<string> {
+  try {
+    const response = await request('knowledge.answerPack', {
+      scopeId,
+      question,
+      ...(tokenBudget === undefined ? {} : { tokenBudget }),
+    })
+    if (!isAnswerPack(response)) return BRAIN_UNAVAILABLE_MESSAGE
+    if (response.sections.length === 0) return response.evidence
+
+    const cited = response.sections.map(section => `${section.path}#${section.headingPath}`).join(', ')
+    const trail = response.pointerFollowed
+      ? `\nFollowed a link from ${response.pointerFollowed.from} to ${response.pointerFollowed.to}.`
+      : ''
+    return `${response.evidence}\n\n[Evidence from: ${cited}. Cite these paths when you use them.${trail}]`
   } catch {
     return BRAIN_UNAVAILABLE_MESSAGE
   }

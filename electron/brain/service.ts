@@ -12,6 +12,7 @@ import { CandidateStore } from './knowledge/candidates'
 import { Compactor } from './knowledge/compactor'
 import { DocumentStore } from './knowledge/documents'
 import { ManifestBuilder } from './knowledge/manifest'
+import { EvidenceRetriever } from './knowledge/evidence'
 import { migrateMemories } from './knowledge/memoriesMigration'
 import { VaultImporter } from './knowledge/vaultImporter'
 
@@ -25,6 +26,7 @@ export class BrainService {
    * parallel without any of them editing this file or database.ts.
    */
   readonly documents: DocumentStore
+  readonly evidence: EvidenceRetriever
   readonly manifest: ManifestBuilder
   readonly vaultImporter: VaultImporter
   readonly candidates: CandidateStore
@@ -38,6 +40,7 @@ export class BrainService {
     this.vault = new VaultManager(this.database, join(dirname(databasePath), 'vault'))
     this.artifacts = new ArtifactStore(this.database, join(dirname(databasePath), 'artifacts'))
     this.documents = new DocumentStore(this.database.handle)
+    this.evidence = new EvidenceRetriever(this.database.handle, this.documents)
     this.manifest = new ManifestBuilder(this.documents)
     this.vaultImporter = new VaultImporter(this.documents)
     this.candidates = new CandidateStore(this.database.handle, this.documents)
@@ -238,6 +241,13 @@ export class BrainService {
         }
       }
       case 'knowledge.search': return this.documents.search({ ...request.payload, scopeIds: this.knowledgeScopeChain(request.payload.scopeId) })
+      case 'knowledge.answerPack':
+        return this.evidence.answerPack({
+          scopeIds: this.knowledgeScopeChain(request.payload.scopeId),
+          question: request.payload.question,
+          tokenBudget: request.payload.tokenBudget,
+          maxSections: request.payload.maxSections,
+        })
       case 'knowledge.list': return this.documents.list({ ...request.payload, scopeIds: this.knowledgeScopeChain(request.payload.scopeId) })
       case 'knowledge.importVault': return this.vaultImporter.import(request.payload)
       case 'knowledge.proposeCandidate': return this.candidates.propose(request.payload)

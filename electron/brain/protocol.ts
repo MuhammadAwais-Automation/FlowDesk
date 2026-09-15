@@ -116,6 +116,12 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     types: z.array(knowledgeDocType).max(9).optional(),
     limit: z.number().int().min(1).max(50).optional(),
   }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.answerPack'), payload: z.object({
+    scopeId: id,
+    question: z.string().trim().min(1).max(2000),
+    tokenBudget: z.number().int().min(1).max(8000).optional(),
+    maxSections: z.number().int().min(1).max(20).optional(),
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('knowledge.list'), payload: z.object({
     scopeId: id, types: z.array(knowledgeDocType).max(9).optional(),
     limit: z.number().int().min(1).max(5000).optional(),

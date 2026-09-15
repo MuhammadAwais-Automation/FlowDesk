@@ -74,7 +74,7 @@ describe('Brain portable backup', () => {
     roots.push(fresh)
     const freshBrainRoot = join(fresh, 'brain')
     const { manifest } = BrainBackupManager.restoreAtomic(archive, freshBrainRoot)
-    expect(manifest).toMatchObject({ format: 'flowdesk-brain-backup', archiveFormatVersion: ARCHIVE_FORMAT_VERSION, databaseSchemaVersion: 4 })
+    expect(manifest).toMatchObject({ format: 'flowdesk-brain-backup', archiveFormatVersion: ARCHIVE_FORMAT_VERSION, databaseSchemaVersion: 5 })
 
     const restored = new BrainDatabase(join(freshBrainRoot, 'brain.sqlite'))
     expect(restored.listScopes().map(scope => scope.externalRef).sort()).toEqual(['acme', 'acme-site'])
@@ -141,7 +141,7 @@ describe('Brain portable backup', () => {
     roots.push(root)
     const archive = join(root, 'unsafe.zip')
     writeFileSync(archive, zipSync({
-      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 1, databaseSchemaVersion: 4, createdAt: new Date().toISOString() })),
+      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 1, databaseSchemaVersion: 5, createdAt: new Date().toISOString() })),
       'brain.sqlite': strToU8('not-a-database'),
       ...extra,
     }))
@@ -178,7 +178,7 @@ describe('Brain portable backup', () => {
     roots.push(root)
     const archive = join(root, 'future.zip')
     writeFileSync(archive, zipSync({
-      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 99, databaseSchemaVersion: 4, createdAt: new Date().toISOString() })),
+      'manifest.json': strToU8(JSON.stringify({ format: 'flowdesk-brain-backup', archiveFormatVersion: 99, databaseSchemaVersion: 5, createdAt: new Date().toISOString() })),
       'brain.sqlite': strToU8('not-a-database'),
     }))
     expect(() => BrainBackupManager.inspectArchive(archive)).toThrow(/archive format version 99/i)
