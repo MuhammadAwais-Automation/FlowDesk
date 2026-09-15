@@ -47,9 +47,16 @@ export const DEFAULT_MAX_SECTIONS = 6
 /** Sections shorter than this are scored as if this long, so a link stub
  *  cannot out-rank a real passage on density alone. */
 export const SECTION_LENGTH_FLOOR = 25
-/** Score for a document that matched the question but whose sections did not,
- *  so it ranks below any real section match without disappearing. */
-const UNMATCHED_DOCUMENT_SCORE = 0.01
+/**
+ * Section score for a document whose sections match no question term.
+ *
+ * Not near-zero: when rung 2 chose a document by meaning, the question shares no
+ * words with it *by definition*, so scoring its sections at ~0 let a weak
+ * keyword match in a lower-ranked document win. Set just under the density of a
+ * single real term hit (1/sqrt(25) = 0.2) so a genuine match still wins at equal
+ * rank, while the document meaning picked is not thrown away.
+ */
+const UNMATCHED_DOCUMENT_SCORE = 0.15
 
 /**
  * Words that carry no topic, in the two languages questions actually arrive in.
@@ -141,7 +148,7 @@ interface CandidateDocument {
 export class EvidenceRetriever {
   constructor(private readonly db: DatabaseSync, private readonly documents: DocumentStore) {}
 
-  answerPack(input: AnswerPackInput): AnswerPack {
+  async answerPack(input: AnswerPackInput): Promise<AnswerPack> {
     const tokenBudget = input.tokenBudget ?? DEFAULT_EVIDENCE_TOKEN_BUDGET
     const maxSections = input.maxSections ?? DEFAULT_MAX_SECTIONS
     const terms = questionTerms(input.question)
@@ -152,7 +159,7 @@ export class EvidenceRetriever {
 
     // Rung 2 — score every candidate from the index, opening nothing.
     let strategy: AnswerPack['strategy'] = 'ranked'
-    let candidates = this.scoreCandidates(terms, input.scopeIds)
+    let candidates = await this.rankCandidates(input, terms)
     if (candidates.length === 0) {
       // Nothing matched a whole token, which is usually a spelling variant --
       // "yaseer" for "yasir". `search()` already owns the edit-distance
@@ -210,6 +217,37 @@ export class EvidenceRetriever {
       estimatedTokens: estimateTokens(evidence),
       candidatesConsidered: candidates.length,
     }
+  }
+
+  /**
+   * Candidate documents, ranked by meaning when an embedding index exists and
+   * by BM25 otherwise.
+   *
+   * Vectors rank; lexical only adds. Fusing the two rankings was the obvious
+   * design and was measured before being built: reciprocal-rank fusion scored
+   * 33% at top-1 against 50% for vectors alone, because RRF assumes both inputs
+   * are decent and this corpus's lexical ranking is not. So lexical candidates
+   * are appended below the vector ones rather than interleaved — they still
+   * reach section ranking (a handful of questions are found only that way)
+   * without dragging the good ordering down.
+   */
+  private async rankCandidates(input: AnswerPackInput, terms: string[]): Promise<CandidateDocument[]> {
+    const lexical = this.scoreCandidates(terms, input.scopeIds)
+    const vector = await this.documents.searchByVector(input.scopeIds, input.question, CANDIDATE_DOCS)
+    if (vector.length === 0) return lexical
+
+    const ordered: CandidateDocument[] = vector.map(hit => ({
+      id: hit.id, path: hit.path, title: hit.title, score: hit.score,
+    }))
+    const seen = new Set(ordered.map(candidate => candidate.path))
+    // Below the weakest vector hit, so section scoring still sees them but they
+    // never outrank a document the model actually judged relevant.
+    const floor = Math.min(...ordered.map(candidate => candidate.score))
+    for (const candidate of lexical) {
+      if (seen.has(candidate.path)) continue
+      ordered.push({ ...candidate, score: floor * 0.5 })
+    }
+    return ordered
   }
 
   private empty(question: string, strategy: AnswerPack['strategy']): AnswerPack {
@@ -289,10 +327,13 @@ export class EvidenceRetriever {
       ORDER BY document_id, ordinal
     `).all(...documents.map(document => document.id)) as SqlRow[]
 
-    // Rung 2's judgement carries into rung 4: without this a three-word "see
-    // [[somewhere]]" stub in a weakly-matching index page outranks the real
-    // answer in the document BM25 actually chose.
-    const bestDocumentScore = Math.max(...documents.map(document => document.score), 0)
+    // Rung 2's judgement carries into rung 4 by RANK, not by raw score.
+    // Scores are not comparable across rungs: BM25 spreads widely, while cosine
+    // similarities bunch into a narrow band (~0.7-0.9), so a score ratio made
+    // every document look equally good and silently threw rung 2's ordering
+    // away -- measured as pack top-1 dropping from 30% to 27% even though the
+    // vector arm alone picks the right document 50% of the time.
+    const rankOf = new Map(documents.map((document, index) => [document.id, index]))
 
     const scored: AnswerPackSection[] = []
     const matched = new Set<string>()
@@ -307,7 +348,7 @@ export class EvidenceRetriever {
       const hits = countTermHits(String(row.heading), termsHere) * 5 + countTermHits(text, termsHere)
       // The length floor stops a stub winning purely for being short.
       const density = hits / Math.sqrt(Math.max(wordCount(text), SECTION_LENGTH_FLOOR))
-      const documentWeight = bestDocumentScore > 0 ? Math.max(document.score / bestDocumentScore, 0.1) : 1
+      const documentWeight = 1 / (1 + (rankOf.get(document.id) ?? documents.length))
       const score = density * documentWeight
       if (hits <= 0) continue
       matched.add(document.id)
@@ -321,7 +362,7 @@ export class EvidenceRetriever {
     // reading it from the top, ranked below anything that matched outright.
     for (const document of documents) {
       if (matched.has(document.id)) continue
-      const weight = bestDocumentScore > 0 ? Math.max(document.score / bestDocumentScore, 0.1) : 1
+      const weight = 1 / (1 + (rankOf.get(document.id) ?? documents.length))
       for (const section of this.leadingSections(document, limit)) {
         scored.push({ ...section, score: weight * UNMATCHED_DOCUMENT_SCORE })
       }

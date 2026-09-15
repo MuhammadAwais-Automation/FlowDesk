@@ -122,6 +122,12 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     tokenBudget: z.number().int().min(1).max(8000).optional(),
     maxSections: z.number().int().min(1).max(20).optional(),
   }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.buildVectors'), payload: z.object({
+    scopeId: id,
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.vectorStatus'), payload: z.object({
+    scopeId: id,
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('knowledge.neighbors'), payload: z.object({
     scopeId: id,
     path: knowledgePath,

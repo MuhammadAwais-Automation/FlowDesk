@@ -8,9 +8,10 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
+import { blobToVector, cosineSimilarity, EMBEDDING_MODEL, embedPassage, embedQuery, vectorToBlob } from './embeddings'
 import { splitSections } from './sectioning'
 import { buildPathIndex, extractWikiLinkTargets, resolveWikiLink } from './wikilinks'
-import type { DocumentNeighborhood, DocumentNeighborhoodNode, DocumentSearchHit, KnowledgeDocument, KnowledgeDocType, UnresolvedLink } from '../../../src/types/brainKnowledge'
+import type { DocumentNeighborhood, DocumentNeighborhoodNode, DocumentSearchHit, KnowledgeDocument, KnowledgeDocType, UnresolvedLink, VectorIndexReport, VectorSearchHit } from '../../../src/types/brainKnowledge'
 import type {
   DocumentStorePort,
   ListDocumentsInput,
@@ -158,6 +159,9 @@ export class DocumentStore implements DocumentStorePort {
         .run(documentId, input.title, input.summary, input.body)
 
       this.writeSections(documentId, input.body)
+      // The body changed, so the vector no longer describes it. Deleting rather
+      // than re-embedding here keeps upsert synchronous; buildVectors refills it.
+      this.db.prepare('DELETE FROM knowledge_vectors WHERE document_id = ?').run(documentId)
 
       this.db.prepare('DELETE FROM knowledge_links WHERE document_id = ?').run(documentId)
       this.writeLinks(documentId, input)
@@ -390,6 +394,93 @@ export class DocumentStore implements DocumentStorePort {
         score,
         updatedAt: String(row.updated_at),
       }))
+  }
+
+  /**
+   * Embeds every active document that has no current vector, and returns how
+   * many were done.
+   *
+   * Incremental by content: `upsert` deletes a document's vector whenever its
+   * body changes, so a rebuild after an import only touches what actually
+   * changed. Rows for a different model are treated as missing, which is how a
+   * model change re-indexes instead of silently mixing incompatible vectors.
+   */
+  async buildVectors(scopeIds: string[], onProgress?: (done: number, total: number) => void): Promise<VectorIndexReport> {
+    if (scopeIds.length === 0) return { indexed: 0, skipped: 0, total: 0, available: false }
+    const placeholders = scopeIds.map(() => '?').join(', ')
+    const pending = this.db.prepare(`
+      SELECT d.id AS id, d.title AS title, f.body AS body
+      FROM knowledge_documents d
+      JOIN knowledge_fts f ON f.document_id = d.id
+      LEFT JOIN knowledge_vectors v ON v.document_id = d.id AND v.model = ?
+      WHERE d.scope_id IN (${placeholders}) AND d.valid_to IS NULL AND v.document_id IS NULL
+    `).all(EMBEDDING_MODEL, ...scopeIds) as SqlRow[]
+
+    const insert = this.db.prepare(
+      'INSERT OR REPLACE INTO knowledge_vectors(document_id, model, dims, vector, created_at) VALUES (?, ?, ?, ?, ?)',
+    )
+    let indexed = 0
+    for (const [index, row] of pending.entries()) {
+      const vector = await embedPassage(String(row.title), String(row.body ?? ''))
+      // A null vector means the model never loaded. Stopping beats writing a
+      // half-built index that later looks complete.
+      if (!vector) return { indexed, skipped: pending.length - indexed, total: pending.length, available: false }
+      insert.run(String(row.id), EMBEDDING_MODEL, vector.length, vectorToBlob(vector), new Date().toISOString())
+      indexed += 1
+      onProgress?.(index + 1, pending.length)
+    }
+    return { indexed, skipped: 0, total: pending.length, available: true }
+  }
+
+  /** How much of this scope chain is embedded — what the Health tab reports. */
+  vectorCoverage(scopeIds: string[]): { documents: number; vectors: number } {
+    if (scopeIds.length === 0) return { documents: 0, vectors: 0 }
+    const placeholders = scopeIds.map(() => '?').join(', ')
+    const row = this.db.prepare(`
+      SELECT
+        COUNT(*) AS documents,
+        SUM(CASE WHEN v.document_id IS NULL THEN 0 ELSE 1 END) AS vectors
+      FROM knowledge_documents d
+      LEFT JOIN knowledge_vectors v ON v.document_id = d.id AND v.model = ?
+      WHERE d.scope_id IN (${placeholders}) AND d.valid_to IS NULL
+    `).get(EMBEDDING_MODEL, ...scopeIds) as SqlRow
+    return { documents: Number(row.documents ?? 0), vectors: Number(row.vectors ?? 0) }
+  }
+
+  /**
+   * Documents ranked by meaning, nearest first.
+   *
+   * Brute force over every vector in the chain. At a few hundred documents this
+   * is microseconds, and it keeps the store free of a native vector extension
+   * whose Windows builds are reported to load without registering their
+   * functions.
+   */
+  async searchByVector(scopeIds: string[], question: string, limit: number): Promise<VectorSearchHit[]> {
+    if (scopeIds.length === 0) return []
+    const placeholders = scopeIds.map(() => '?').join(', ')
+    const rows = this.db.prepare(`
+      SELECT d.id AS id, d.path AS path, d.title AS title, d.scope_id AS scope_id, v.vector AS vector
+      FROM knowledge_vectors v
+      JOIN knowledge_documents d ON d.id = v.document_id
+      WHERE v.model = ? AND d.scope_id IN (${placeholders}) AND d.valid_to IS NULL
+    `).all(EMBEDDING_MODEL, ...scopeIds) as SqlRow[]
+    // Rows first, deliberately: with no index there is nothing to compare
+    // against, and loading a 118MB model to embed a question we cannot use
+    // would make every lexical-only install pay for a feature it never enabled.
+    if (rows.length === 0) return []
+
+    const queryVector = await embedQuery(question)
+    if (!queryVector) return []
+
+    return shadowByNearestScope(rows, scopeIds)
+      .map(row => ({
+        id: String(row.id),
+        path: String(row.path),
+        title: String(row.title),
+        score: cosineSimilarity(queryVector, blobToVector(row.vector as Uint8Array)),
+      }))
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit)
   }
 
   /**

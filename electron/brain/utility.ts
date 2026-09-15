@@ -20,7 +20,7 @@ const capabilities = new BrainCapabilityBridge(message => parentPort.postMessage
 const runner = new BrainJobRunner(service.database, service.artifacts, dirname(databasePath), request => capabilities.request(request))
 runner.start()
 
-parentPort.on('message', event => {
+parentPort.on('message', async event => {
   if (capabilities.receive(event.data)) return
   const request = event.data as { id?: unknown }
   const id = typeof request?.id === 'string' ? request.id : 'invalid'
@@ -30,7 +30,10 @@ parentPort.on('message', event => {
       runner.stop()
       capabilities.close()
     }
-    response = { id, ok: true, result: service.handle(event.data) }
+    // One arm (knowledge.answerPack) is async because embedding a question is.
+    // Awaiting unconditionally keeps every other arm synchronous in effect and
+    // puts async rejections inside this catch rather than off the loop.
+    response = { id, ok: true, result: await service.handle(event.data) }
   } catch (error) {
     response = {
       id,

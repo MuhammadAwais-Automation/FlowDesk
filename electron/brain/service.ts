@@ -14,6 +14,7 @@ import { Compactor } from './knowledge/compactor'
 import { DocumentStore } from './knowledge/documents'
 import { ManifestBuilder } from './knowledge/manifest'
 import { dailyNotePath, localDayBounds, localDayOf, renderDailyNote } from './knowledge/dailyNote'
+import { EMBEDDING_MODEL, embeddingsFailed } from './knowledge/embeddings'
 import { EvidenceRetriever } from './knowledge/evidence'
 import { migrateMemories } from './knowledge/memoriesMigration'
 import { VaultImporter } from './knowledge/vaultImporter'
@@ -285,6 +286,16 @@ export class BrainService {
           tokenBudget: request.payload.tokenBudget,
           maxSections: request.payload.maxSections,
         })
+      case 'knowledge.buildVectors':
+        // Writes to the exact scope, reads through the chain -- an ancestor's
+        // documents are the ones a project scope will be searching.
+        return this.documents.buildVectors(this.knowledgeScopeChain(request.payload.scopeId))
+      case 'knowledge.vectorStatus':
+        return {
+          ...this.documents.vectorCoverage(this.knowledgeScopeChain(request.payload.scopeId)),
+          model: EMBEDDING_MODEL,
+          failed: embeddingsFailed(),
+        }
       case 'knowledge.neighbors':
         return this.documents.neighbors(
           this.knowledgeScopeChain(request.payload.scopeId),

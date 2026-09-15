@@ -225,3 +225,18 @@ export interface DocumentNeighborhood {
   nodes: DocumentNeighborhoodNode[]
   edges: { from: string; to: string }[]
 }
+
+/** Progress of the embedding index. `available: false` means the model never loaded. */
+export interface VectorIndexReport {
+  indexed: number
+  skipped: number
+  total: number
+  available: boolean
+}
+
+export interface VectorSearchHit {
+  id: string
+  path: string
+  title: string
+  score: number
+}

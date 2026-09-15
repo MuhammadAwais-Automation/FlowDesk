@@ -30,7 +30,7 @@ import type {
 } from '../../src/types/brain'
 
 /** SQLite schema version (`PRAGMA user_version`), not the backup archive's. */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 const TABLES = [
   'scopes', 'scope_links', 'memories', 'memory_revisions', 'memory_candidates',
@@ -41,7 +41,7 @@ const TABLES = [
   'vault_conflicts', 'processing_cache', 'schema_migrations',
   'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
   'knowledge_documents', 'knowledge_fts', 'knowledge_links', 'knowledge_candidates',
-  'knowledge_sections',
+  'knowledge_sections', 'knowledge_vectors',
 ] as const
 
 type SqlRow = Record<string, unknown>
@@ -400,6 +400,20 @@ export class BrainDatabase {
           UNIQUE(document_id, ordinal)
         );
         CREATE INDEX IF NOT EXISTS idx_knowledge_sections_document ON knowledge_sections(document_id, ordinal);
+
+        -- v6: one embedding per document, for meaning-based retrieval. Stored as
+        -- a Float32 blob and compared in JS: at this corpus size a brute-force
+        -- scan is microseconds, and a vector extension would be a native
+        -- dependency and a second index to keep in sync for no measured gain.
+        -- The model name is recorded so a model change invalidates rather than
+        -- silently mixes incompatible vectors.
+        CREATE TABLE IF NOT EXISTS knowledge_vectors (
+          document_id TEXT PRIMARY KEY REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+          model TEXT NOT NULL,
+          dims INTEGER NOT NULL,
+          vector BLOB NOT NULL,
+          created_at TEXT NOT NULL
+        );
       `)
       this.backfillKnowledgeSections()
       this.db.prepare('INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, now())

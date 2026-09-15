@@ -16,6 +16,7 @@ import type {
   KnowledgeDocument,
   ManifestRender,
   UnresolvedLink,
+  VectorIndexReport,
   VaultImportReport,
 } from '@/types/brainKnowledge'
 
@@ -144,6 +145,9 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const [knowledgeCompacting, setKnowledgeCompacting] = useState(false)
   const [migrateReport, setMigrateReport] = useState<{ scanned: number; migrated: number; unchanged: number; dryRun: boolean } | null>(null)
   const [migrating, setMigrating] = useState(false)
+  const [vectorStatus, setVectorStatus] = useState<{ documents: number; vectors: number; model: string; failed: boolean } | null>(null)
+  const [vectorBuilding, setVectorBuilding] = useState(false)
+  const [vectorReport, setVectorReport] = useState<VectorIndexReport | null>(null)
 
   // Today — the activity timeline, and the daily note materialised from it.
   const [events, setEvents] = useState<BrainEvent[]>([])
@@ -165,12 +169,13 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     // shows a note that is one refresh stale.
     const daily = await api.brainKnowledgeDailyNote({ scopeId: activeScope.id })
       .catch(() => ({ written: false, path: '' }))
-    const [nextStatus, nextCandidates, nextKnowledgeCandidates, nextUnresolvedLinks, nextKnowledgeList, nextEvents] = await Promise.all([
+    const [nextStatus, nextCandidates, nextKnowledgeCandidates, nextUnresolvedLinks, nextKnowledgeList, nextEvents, nextVectorStatus] = await Promise.all([
       api.brainGetStatus(), api.brainListCandidates(activeScope.id),
       api.brainKnowledgeListCandidates({ scopeId: activeScope.id }),
       api.brainKnowledgeListUnresolvedLinks({ scopeId: activeScope.id }),
       api.brainKnowledgeList({ scopeId: activeScope.id, limit: 200 }),
       api.brainListEvents({ scopeId: activeScope.id, ...todayBounds() }).catch(() => [] as BrainEvent[]),
+      api.brainKnowledgeVectorStatus({ scopeId: activeScope.id }).catch(() => null),
     ])
     if (selectedScopeId.current !== activeScope.id) return
     setStatus(nextStatus)
@@ -180,6 +185,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     setKnowledgeList(nextKnowledgeList)
     setEvents(nextEvents)
     setDailyNotePath(daily.written ? daily.path : null)
+    setVectorStatus(nextVectorStatus)
   }, [])
 
   useEffect(() => {
@@ -300,6 +306,18 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
       await refresh(scope)
     } finally {
       if (isCurrent()) setKnowledgeCompacting(false)
+    }
+  }
+
+  async function buildVectors() {
+    if (!scope) return
+    setVectorBuilding(true)
+    try {
+      const report = await api.brainKnowledgeBuildVectors({ scopeId: scope.id })
+      if (selectedScopeId.current === scope.id) setVectorReport(report)
+      await refresh(scope)
+    } finally {
+      if (selectedScopeId.current === scope.id) setVectorBuilding(false)
     }
   }
 
@@ -487,6 +505,29 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
             </div>
             <p className="mt-2 text-xs text-stone-500">Purane "Remember something" se saved memories ko is Library mein copy karta hai. Idempotent — dubara chalana safe hai.</p>
             {migrateReport && <p className="mt-3 text-xs text-stone-600">Scanned {migrateReport.scanned} · Migrated {migrateReport.migrated} · Unchanged {migrateReport.unchanged}{migrateReport.dryRun ? ' · (dry run — kuch likha nahi gaya)' : ''}</p>}
+          </Card>
+
+          <Card>
+            <div className="flex items-center justify-between">
+              <h2 className="flex items-center gap-2 font-semibold"><Sparkles size={17} /> Meaning search</h2>
+              <button
+                onClick={() => void buildVectors()}
+                disabled={vectorBuilding}
+                className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+              >{vectorBuilding ? 'Indexing…' : vectorStatus && vectorStatus.vectors > 0 ? 'Update index' : 'Build index'}</button>
+            </div>
+            <p className="mt-2 text-xs text-stone-500">
+              Keyword search sirf wahi dhoondta hai jo lafz aap likhein. Meaning search matlab se dhoondta hai — "mera server kahan chal raha hai" us document tak le jata hai jismein "server" likha hi nahi.
+              Pehli baar ~118MB model download hota hai, phir sab kuch offline chalta hai.
+            </p>
+            {vectorStatus && <p className="mt-3 text-xs text-stone-600">
+              {vectorStatus.vectors} / {vectorStatus.documents} documents indexed
+              {vectorStatus.vectors === 0 && ' — abhi sirf keyword search chal rahi hai'}
+            </p>}
+            {vectorReport && !vectorReport.available && <p className="mt-2 text-xs text-red-600">
+              Model load nahi hua — Brain keyword search par chal raha hai, kuch toota nahi.
+            </p>}
+            {vectorReport?.available && <p className="mt-2 text-xs text-stone-600">Indexed {vectorReport.indexed} naye documents.</p>}
           </Card>
 
           <Card>
