@@ -19,6 +19,13 @@ import { EvidenceRetriever } from './knowledge/evidence'
 import { migrateMemories } from './knowledge/memoriesMigration'
 import { VaultImporter } from './knowledge/vaultImporter'
 
+/**
+ * Most documents a change produces at once before the automatic index refresh
+ * gives up and leaves it to the Health tab's button. Sized so the automatic
+ * path stays around a second at ~100ms per document.
+ */
+export const AUTO_VECTOR_LIMIT = 50
+
 export class BrainService {
   readonly database: BrainDatabase
   readonly vault: VaultManager
@@ -91,6 +98,34 @@ export class BrainService {
    */
   private knowledgeScopeChain(scopeId: string): string[] {
     return this.database.scopePath(scopeId).map(scope => scope.id)
+  }
+
+  /**
+   * Keeps the embedding index current after documents change, without ever
+   * turning it on by itself.
+   *
+   * Two guards, both load-bearing. It runs only when vectors already exist --
+   * meaning the user opted in and accepted the model download -- so a
+   * lexical-only install never silently pulls 118MB. And it runs only when the
+   * backlog is small, because `buildVectors` is incremental: a handful of new
+   * documents is about a second, while re-pointing at a different vault could
+   * be a minute, and a minute hidden inside an import call is a hang as far as
+   * the user is concerned. Past the cap the Health tab's button stays the way
+   * to catch up, and its "X / Y indexed" line is what makes the gap visible.
+   */
+  private async refreshVectorsIfEnabled(scopeId: string): Promise<void> {
+    try {
+      const scopeIds = this.knowledgeScopeChain(scopeId)
+      const { documents, vectors } = this.documents.vectorCoverage(scopeIds)
+      if (vectors === 0) return
+      const missing = documents - vectors
+      if (missing <= 0 || missing > AUTO_VECTOR_LIMIT) return
+      await this.documents.buildVectors(scopeIds)
+    } catch (error) {
+      // Never fail the write that triggered this. A missing vector degrades
+      // retrieval to lexical; a thrown error would lose the import itself.
+      console.log(`[FlowDesk brain] vector refresh skipped: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   /**
@@ -322,7 +357,7 @@ export class BrainService {
           action: 'knowledge.imported',
           metadata: { imported: report.imported, skipped: report.skipped, failures: report.failures.length },
         })
-        return report
+        return this.refreshVectorsIfEnabled(request.payload.scopeId).then(() => report)
       }
       case 'knowledge.proposeCandidate': return this.candidates.propose(request.payload)
       case 'knowledge.listCandidates': return this.candidates.list(request.payload.scopeId)
@@ -336,7 +371,13 @@ export class BrainService {
             metadata: { path: decided.document.path, title: decided.document.title, type: decided.document.type },
           })
         }
-        return decided
+        // The payload carries no scope -- a candidate is addressed by id -- so
+        // the scope comes from the document that was actually written. A reject
+        // writes nothing, so there is nothing to index.
+        const writtenScope = decided?.document?.scopeId
+        return writtenScope === undefined
+          ? decided
+          : this.refreshVectorsIfEnabled(writtenScope).then(() => decided)
       }
       case 'knowledge.compact': {
         const report = this.compactor.compact(request.payload.scopeId)
@@ -347,7 +388,7 @@ export class BrainService {
             metadata: { merged: report.merged, scanned: report.scanned },
           })
         }
-        return report
+        return this.refreshVectorsIfEnabled(request.payload.scopeId).then(() => report)
       }
       case 'knowledge.migrateMemories':
         return migrateMemories(this.documents, { memories: this.database.listMemories(), dryRun: request.payload.dryRun })

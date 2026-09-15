@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { strToU8, zipSync } from 'fflate'
 import { afterEach, describe, expect, it } from 'vitest'
 import { assembleBrainEvidence, type BrainNavigationMethod, readBrainDocument, readBrainNeighbors } from '../agent/brainNavigation'
-import { BrainService } from './service'
+import { __setExtractorForTests } from './knowledge/embeddings'
+import { AUTO_VECTOR_LIMIT, BrainService } from './service'
 
 const roots: string[] = []
 
@@ -471,6 +472,95 @@ describe('BrainService', () => {
         expect(output).toContain('1 hop')
 
         expect(await readBrainNeighbors(request, projectScope.id, '../secrets.md', 1)).toMatch(/refused/i)
+      } finally { service.close() }
+    })
+  })
+
+  /**
+   * The Health tab's button was the only thing that ever called buildVectors,
+   * so a document written after the last click stayed invisible to meaning
+   * search until someone clicked again. These cover the refresh that now runs
+   * on the write paths, and both guards that keep it from being a surprise.
+   */
+  describe('automatic vector refresh', () => {
+    const NL = String.fromCharCode(10)
+
+    /** Counts calls, so a test can prove the model was never reached. */
+    function countingExtractor() {
+      const state = { calls: 0 }
+      __setExtractorForTests(text => {
+        state.calls += 1
+        const raw = ['note', 'second', 'third'].map(word => (String(text).toLocaleLowerCase().includes(word) ? 1 : 0))
+        const length = Math.hypot(...raw) || 1
+        return Promise.resolve({ data: raw.map(value => value / length) })
+      })
+      return state
+    }
+
+    afterEach(() => { __setExtractorForTests(null) })
+
+    it('indexes a newly imported document when an index already exists', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-auto-vectors-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const scope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        const vault = join(root, 'vault')
+        mkdirSync(vault, { recursive: true })
+        writeFileSync(join(vault, 'note.md'), ['# A note', 'Something.'].join(NL))
+        countingExtractor()
+
+        await service.handle({ id: '1', method: 'knowledge.importVault', payload: { scopeId: scope.id, vaultRoot: vault } })
+        // The owner opts in once, the way the Health tab button does.
+        await service.documents.buildVectors([scope.id])
+        expect(service.documents.vectorCoverage([scope.id])).toEqual({ documents: 1, vectors: 1 })
+
+        writeFileSync(join(vault, 'second.md'), ['# Second', 'More.'].join(NL))
+        await service.handle({ id: '2', method: 'knowledge.importVault', payload: { scopeId: scope.id, vaultRoot: vault } })
+
+        expect(service.documents.vectorCoverage([scope.id])).toEqual({ documents: 2, vectors: 2 })
+      } finally { service.close() }
+    })
+
+    it('never loads the model for an install that has no index', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-auto-vectors-off-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const scope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        const vault = join(root, 'vault')
+        mkdirSync(vault, { recursive: true })
+        writeFileSync(join(vault, 'note.md'), ['# A note', 'Something.'].join(NL))
+        const extractor = countingExtractor()
+
+        await service.handle({ id: '1', method: 'knowledge.importVault', payload: { scopeId: scope.id, vaultRoot: vault } })
+
+        expect(extractor.calls).toBe(0)
+        expect(service.documents.vectorCoverage([scope.id])).toEqual({ documents: 1, vectors: 0 })
+      } finally { service.close() }
+    })
+
+    it('leaves a backlog past the cap to the Health tab rather than stalling the import', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-auto-vectors-cap-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const scope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        const vault = join(root, 'vault')
+        mkdirSync(vault, { recursive: true })
+        writeFileSync(join(vault, 'note.md'), ['# A note', 'Something.'].join(NL))
+        countingExtractor()
+
+        await service.handle({ id: '1', method: 'knowledge.importVault', payload: { scopeId: scope.id, vaultRoot: vault } })
+        await service.documents.buildVectors([scope.id])
+
+        const added = AUTO_VECTOR_LIMIT + 1
+        for (let index = 0; index < added; index += 1) {
+          writeFileSync(join(vault, `bulk-${index}.md`), [`# Bulk ${index}`, 'Body.'].join(NL))
+        }
+        await service.handle({ id: '2', method: 'knowledge.importVault', payload: { scopeId: scope.id, vaultRoot: vault } })
+
+        expect(service.documents.vectorCoverage([scope.id])).toEqual({ documents: added + 1, vectors: 1 })
       } finally { service.close() }
     })
   })
