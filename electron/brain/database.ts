@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { splitSections } from './knowledge/sectioning'
+import type { BrainEvent, BrainEventAction } from '../../src/types/brainKnowledge'
 import {
   MONITOR_DEFAULT_MINIMUM_SCORE,
   MONITOR_MINIMUM_INTERVAL_MINUTES,
@@ -44,6 +45,17 @@ const TABLES = [
 ] as const
 
 type SqlRow = Record<string, unknown>
+
+function parseMetadata(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string') return {}
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
 
 const MONITOR_OBSERVATION_PREFIX = 'monitor.observation:'
 
@@ -289,7 +301,11 @@ export class BrainDatabase {
         CREATE TABLE IF NOT EXISTS agent_continuations (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), session_id TEXT NOT NULL, provider_session_id TEXT, mode TEXT NOT NULL, context_budget INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(job_id, session_id));
         CREATE TABLE IF NOT EXISTS outbox_events (id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, consumed_at TEXT, UNIQUE(aggregate_id, type));
         CREATE TABLE IF NOT EXISTS consents (id TEXT PRIMARY KEY, scope_id TEXT NOT NULL REFERENCES scopes(id), recipe_id TEXT NOT NULL, provider TEXT NOT NULL, fields_json TEXT NOT NULL, granted_at TEXT NOT NULL, revoked_at TEXT, UNIQUE(scope_id, recipe_id, provider));
+        -- Also the activity timeline the daily note is built from (S2). The
+        -- shape was already right and the table had one writer and no reader,
+        -- so a second near-identical events table would have been waste.
         CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, scope_id TEXT, action TEXT NOT NULL, target_id TEXT, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS idx_audit_events_scope_created ON audit_events(scope_id, created_at DESC);
         CREATE TABLE IF NOT EXISTS vault_conflicts (id TEXT PRIMARY KEY, memory_id TEXT REFERENCES memories(id), file_path TEXT NOT NULL, base_revision INTEGER NOT NULL, database_text TEXT NOT NULL, file_text TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT);
         CREATE TABLE IF NOT EXISTS processing_cache (cache_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT);
         CREATE TABLE IF NOT EXISTS opportunities (
@@ -1315,6 +1331,53 @@ export class BrainDatabase {
     const result = this.db.prepare("INSERT OR IGNORE INTO outbox_events(id, aggregate_id, type, payload_json, created_at) VALUES (?, ?, 'conversation.turn_recorded', ?, ?)")
       .run(randomUUID(), input.turnId, payload, input.createdAt)
     return Number(result.changes) > 0
+  }
+
+  /**
+   * Appends one activity-timeline row. Never throws into the caller's path --
+   * losing a timeline row must not fail an agent turn or an import.
+   */
+  recordEvent(input: {
+    scopeId: string | null
+    action: BrainEventAction
+    targetId?: string | null
+    metadata?: Record<string, unknown>
+    createdAt?: string
+  }): void {
+    try {
+      this.db.prepare('INSERT INTO audit_events(id, scope_id, action, target_id, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(
+          randomUUID(), input.scopeId, input.action, input.targetId ?? null,
+          JSON.stringify(input.metadata ?? {}), input.createdAt ?? now(),
+        )
+    } catch (error) {
+      console.log(`[FlowDesk brain] event not recorded: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /**
+   * Timeline rows for a scope chain within a half-open range [from, to).
+   * `memory.accepted` rows predate this table's second use and carry no
+   * metadata, so they are excluded rather than rendered as empty lines.
+   */
+  listEvents(input: { scopeIds: string[]; from: string; to: string; limit?: number }): BrainEvent[] {
+    if (input.scopeIds.length === 0) return []
+    const placeholders = input.scopeIds.map(() => '?').join(', ')
+    const rows = this.db.prepare(`
+      SELECT * FROM audit_events
+      WHERE scope_id IN (${placeholders}) AND created_at >= ? AND created_at < ?
+        AND action IN ('agent.turn', 'knowledge.accepted', 'knowledge.imported', 'knowledge.compacted', 'job.completed')
+      ORDER BY created_at ASC
+      LIMIT ?
+    `).all(...input.scopeIds, input.from, input.to, Math.min(input.limit ?? 500, 2000)) as SqlRow[]
+    return rows.map(row => ({
+      id: String(row.id),
+      scopeId: row.scope_id === null ? null : String(row.scope_id),
+      action: String(row.action) as BrainEventAction,
+      targetId: row.target_id === null ? null : String(row.target_id),
+      metadata: parseMetadata(row.metadata_json),
+      createdAt: String(row.created_at),
+    }))
   }
 
   storeCaptureEnvelope(envelope: CaptureEnvelope, retentionDays = 30) {

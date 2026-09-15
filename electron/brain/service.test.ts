@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { strToU8, zipSync } from 'fflate'
@@ -363,6 +363,88 @@ describe('BrainService', () => {
         // And it is cheaper than reading the document, which is the point.
         const whole = await readBrainDocument(request, projectScope.id, 'wiki/clients/yasir-bhai.md')
         expect(evidence.length).toBeLessThan(whole.length)
+      } finally { service.close() }
+    })
+  })
+
+  describe('activity timeline and the daily note', () => {
+    it('materialises the day into a Library document, idempotently, and keeps it out of the index', () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-daily-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const scope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        service.documents.upsert({
+          scopeId: scope.id, path: 'wiki/clients/yasir-bhai.md', type: 'client',
+          title: 'Yasir Bhai', summary: 'Client', body: ['# Yasir Bhai', 'Retainer PKR 40,000.'].join(String.fromCharCode(10)),
+          origin: 'curated', contentHash: 'v1', updatedAt: '2026-09-01T00:00:00.000Z',
+        })
+
+        service.handle({ id: '1', method: 'recordEvent', payload: {
+          scopeId: scope.id, action: 'agent.turn', targetId: 'turn-1',
+          metadata: {
+            prompt: 'Yasir ka retainer kitna hai?',
+            documentsRead: ['wiki/clients/yasir-bhai.md'],
+            inputTokens: 1200, outputTokens: 300, totalCostUsd: 0.01,
+          },
+        } })
+
+        const first = service.handle({ id: '2', method: 'knowledge.dailyNote', payload: { scopeId: scope.id } }) as
+          { path: string; written: boolean; eventCount: number }
+        expect(first.written).toBe(true)
+        expect(first.eventCount).toBe(1)
+
+        // Readable and searchable like any other document...
+        const read = service.handle({ id: '3', method: 'knowledge.read', payload: { scopeId: scope.id, path: first.path } }) as { text: string }
+        expect(read.text).toContain('Yasir ka retainer kitna hai?')
+        expect(read.text).toContain('1,500 tokens')
+
+        // ...but deliberately absent from the index every agent turn carries.
+        const manifest = service.handle({ id: '4', method: 'knowledge.manifest', payload: { scopeId: scope.id } }) as { text: string }
+        expect(manifest.text).toContain('wiki/clients/yasir-bhai.md')
+        expect(manifest.text).not.toContain(first.path)
+
+        // The wiki link the renderer wrote resolves, so the note joins the graph.
+        const links = service.database.handle
+          .prepare('SELECT target_path, resolved FROM knowledge_links WHERE target_path = ?')
+          .all('wiki/clients/yasir-bhai.md')
+        expect(links).toContainEqual({ target_path: 'wiki/clients/yasir-bhai.md', resolved: 1 })
+
+        // Re-running the same day must not create a second version.
+        service.handle({ id: '5', method: 'knowledge.dailyNote', payload: { scopeId: scope.id } })
+        const versions = service.database.handle
+          .prepare('SELECT COUNT(*) AS n FROM knowledge_documents WHERE path = ?')
+          .get(first.path) as { n: number }
+        expect(versions.n).toBe(1)
+      } finally { service.close() }
+    })
+
+    it('writes nothing for a day with no activity', () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-daily-empty-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const scope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        const result = service.handle({ id: '1', method: 'knowledge.dailyNote', payload: { scopeId: scope.id } }) as { written: boolean }
+
+        expect(result.written).toBe(false)
+        expect(service.handle({ id: '2', method: 'knowledge.list', payload: { scopeId: scope.id } })).toEqual([])
+      } finally { service.close() }
+    })
+
+    it('records an event when a vault import runs', () => {
+      const root = mkdtempSync(join(tmpdir(), 'flowdesk-daily-import-'))
+      roots.push(root)
+      const service = new BrainService(join(root, 'brain.sqlite'))
+      try {
+        const scope = service.database.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
+        const vault = join(root, 'vault')
+        mkdirSync(vault, { recursive: true })
+        writeFileSync(join(vault, 'note.md'), ['# A note', 'Something.'].join(String.fromCharCode(10)))
+        service.handle({ id: '1', method: 'knowledge.importVault', payload: { scopeId: scope.id, vaultRoot: vault } })
+
+        const note = service.handle({ id: '2', method: 'knowledge.dailyNote', payload: { scopeId: scope.id } }) as { body: string }
+        expect(note.body).toContain('Imported 1 documents from the vault')
       } finally { service.close() }
     })
   })

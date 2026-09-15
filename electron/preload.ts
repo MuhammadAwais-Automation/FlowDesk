@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   brainKnowledgeManifest: (input: unknown) => ipcRenderer.invoke('brain:knowledgeManifest', input),
   brainKnowledgeRead: (input: unknown) => ipcRenderer.invoke('brain:knowledgeRead', input),
   brainKnowledgeSearch: (input: unknown) => ipcRenderer.invoke('brain:knowledgeSearch', input),
+  brainKnowledgeDailyNote: (input: unknown) => ipcRenderer.invoke('brain:knowledgeDailyNote', input),
+  brainListEvents: (input: unknown) => ipcRenderer.invoke('brain:listEvents', input),
   brainKnowledgeList: (input: unknown) => ipcRenderer.invoke('brain:knowledgeList', input),
   brainKnowledgeImportVault: (input: unknown) => ipcRenderer.invoke('brain:knowledgeImportVault', input),
   brainKnowledgeProposeCandidate: (input: unknown) => ipcRenderer.invoke('brain:knowledgeProposeCandidate', input),

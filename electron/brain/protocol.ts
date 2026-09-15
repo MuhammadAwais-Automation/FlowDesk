@@ -122,6 +122,23 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     tokenBudget: z.number().int().min(1).max(8000).optional(),
     maxSections: z.number().int().min(1).max(20).optional(),
   }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.dailyNote'), payload: z.object({
+    scopeId: id,
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('recordEvent'), payload: z.object({
+    scopeId: id.nullable(),
+    action: z.enum(['agent.turn', 'knowledge.accepted', 'knowledge.imported', 'knowledge.compacted', 'job.completed']),
+    targetId: z.string().max(200).nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    createdAt: z.string().optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('listEvents'), payload: z.object({
+    scopeId: id,
+    from: z.string(),
+    to: z.string(),
+    limit: z.number().int().min(1).max(2000).optional(),
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('knowledge.list'), payload: z.object({
     scopeId: id, types: z.array(knowledgeDocType).max(9).optional(),
     limit: z.number().int().min(1).max(5000).optional(),

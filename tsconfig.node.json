@@ -5,6 +5,7 @@
     "electron/**/*",
     "src/types/**/*",
     "src/lib/agentCatchUp.ts",
+    "src/lib/agentProvenance.ts",
     "src/lib/brainUi.ts",
     "src/lib/shellLinkDecision.ts",
     "src/lib/sourceTrends.ts",

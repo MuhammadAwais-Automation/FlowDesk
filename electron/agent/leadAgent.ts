@@ -1,4 +1,5 @@
 import type { query as queryFn, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { AgentTurnUsage } from '../../src/types/brainKnowledge'
 import { createAgentToolSet, type ProjectToolRuntime } from './tools'
 import { getClaudeExecutablePath } from '../claudeExecutable'
 import { alwaysApprove, type RequestApproval } from './approval'
@@ -178,7 +179,7 @@ export type AgentStreamEvent =
   | { type: 'tool_result'; toolUseId: string; tool: string; text: string; isError: boolean }
   | { type: 'approval_request'; requestId: string; tool: string; title: string; detail?: string; input?: Record<string, unknown> }
   | { type: 'provider_session'; provider: 'claude' | 'codex'; id: string }
-  | { type: 'done'; text: string }
+  | { type: 'done'; text: string; usage?: AgentTurnUsage }
   | { type: 'error'; message: string }
 
 /**
@@ -340,7 +341,17 @@ export async function* runClaudeAgentTurn(
             }
           } else if (message.type === 'result') {
             if (message.subtype === 'success') {
-              yield { type: 'done', text: message.result }
+              // The SDK already reports what the turn cost; it was being
+              // discarded. This is the only true token bill available -- every
+              // other number in this codebase is a chars/4 estimate.
+              yield { type: 'done', text: message.result, usage: {
+                inputTokens: message.usage.input_tokens ?? 0,
+                outputTokens: message.usage.output_tokens ?? 0,
+                cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
+                totalCostUsd: message.total_cost_usd ?? 0,
+                numTurns: message.num_turns ?? 0,
+                durationMs: message.duration_ms ?? 0,
+              } }
             } else {
               yield { type: 'error', message: agentFailureMessage(message.errors?.join('; ') || `Agent turn failed: ${message.subtype}`) }
             }

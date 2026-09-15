@@ -172,3 +172,37 @@ export interface UnresolvedLink {
   documentTitle: string
   targetPath: string
 }
+
+/**
+ * One thing that happened, for the activity timeline and the daily note.
+ *
+ * Stored verbatim rather than summarised: a raw row is reproducible and
+ * auditable, and measured better than LLM-extracted artifacts in the memory
+ * literature. `metadata` shape depends on `action` and is deliberately loose —
+ * the daily-note renderer decides what is worth showing.
+ */
+export type BrainEventAction =
+  | 'agent.turn'
+  | 'knowledge.accepted'
+  | 'knowledge.imported'
+  | 'knowledge.compacted'
+  | 'job.completed'
+
+export interface BrainEvent {
+  id: string
+  scopeId: string | null
+  action: BrainEventAction
+  targetId: string | null
+  metadata: Record<string, unknown>
+  createdAt: string
+}
+
+/** What a finished agent turn actually cost, straight from the SDK result message. */
+export interface AgentTurnUsage {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  totalCostUsd: number
+  numTurns: number
+  durationMs: number
+}

@@ -6,6 +6,8 @@ import { pathToFileURL } from 'url'
 import { createElectronBrainClient } from './brain/electronClient'
 import type { BrainClient } from './brain/client'
 import { composePromptWithManifest } from './agent/brainContext'
+import { extractReadDocumentPaths } from '../src/lib/agentProvenance'
+import type { AgentTurnUsage } from '../src/types/brainKnowledge'
 import type { BrainScope } from '../src/types/brain'
 import type { ManifestRender } from '../src/types/brainKnowledge'
 import { configureBrainTools } from './agent/brainTools'
@@ -419,6 +421,8 @@ ipcMain.handle('brain:countOpportunities', (_e, input: unknown) => brainRequest(
 ipcMain.handle('brain:knowledgeManifest', (_e, input: unknown) => brainRequest('knowledge.manifest', input))
 ipcMain.handle('brain:knowledgeRead', (_e, input: unknown) => brainRequest('knowledge.read', input))
 ipcMain.handle('brain:knowledgeSearch', (_e, input: unknown) => brainRequest('knowledge.search', input))
+ipcMain.handle('brain:knowledgeDailyNote', (_e, input: unknown) => brainRequest('knowledge.dailyNote', input))
+ipcMain.handle('brain:listEvents', (_e, input: unknown) => brainRequest('listEvents', input))
 ipcMain.handle('brain:knowledgeList', (_e, input: unknown) => brainRequest('knowledge.list', input))
 ipcMain.handle('brain:knowledgeImportVault', (_e, input: unknown) => brainRequest('knowledge.importVault', input))
 ipcMain.handle('brain:knowledgeProposeCandidate', (_e, input: unknown) => brainRequest('knowledge.proposeCandidate', input))
@@ -1771,13 +1775,17 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
 
   let providerSessionId: string | null = null
   let finalText = ''
+  let turnUsage: AgentTurnUsage | null = null
   const pendingToolCalls = new Map<string, agentSessions.AgentToolCallEntry>()
   for await (const event of runAgentTurn(
     promptToSend, abortController, projectRuntime, leadAgentProvider,
     requestApproval, bypassPermissions, { resumeSessionId },
   )) {
     if (event.type === 'provider_session') providerSessionId = event.id
-    if (event.type === 'done') finalText = event.text
+    if (event.type === 'done') {
+      finalText = event.text
+      if (event.usage) turnUsage = event.usage
+    }
     if (event.type === 'tool_call') {
       pendingToolCalls.set(event.toolUseId, { tool: event.tool, prompt: event.prompt, result: '', isError: false })
     }
@@ -1798,6 +1806,27 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
     toolCalls: [...pendingToolCalls.values()],
     ...(providerKey ? { provider: providerKey } : {}),
   })
+  if (activeBrainScopeId) {
+    // Activity timeline (S2). In Temporary mode the turn is still counted but
+    // never quoted: "temporary" promises that what was said is not kept, and a
+    // prompt stored in an event would break that as surely as a document would.
+    // What it cost is accounting, not conversation content, so it stays.
+    brainRequest('recordEvent', {
+      scopeId: activeBrainScopeId,
+      action: 'agent.turn',
+      targetId: assistantTurn.id,
+      metadata: {
+        sessionId,
+        ...(activeBrainWritesAllowed ? {
+          prompt,
+          documentsRead: extractReadDocumentPaths([...pendingToolCalls.values()]),
+          tools: [...new Set([...pendingToolCalls.values()].map(call => call.tool))],
+        } : {}),
+        ...(turnUsage ?? {}),
+      },
+      createdAt: assistantTurn.createdAt,
+    }).catch(() => {})
+  }
   if (knowledgeScope) {
     await brainRequest('recordConversationTurn', {
       turnId: assistantTurn.id,

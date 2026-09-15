@@ -11,6 +11,7 @@ import type {
   ManifestEntry,
   ManifestRender,
 } from '../../../src/types/brainKnowledge'
+import { DAILY_NOTE_PREFIX } from './dailyNote'
 import type { DocumentStorePort } from './ports'
 
 export const MANIFEST_DEFAULT_TOKEN_BUDGET = 4000
@@ -89,7 +90,14 @@ export class ManifestBuilder {
       types: input.types,
       includeSuperseded: false,
     })
-    const entries = [...documents].sort(compareDocuments).map(toEntry)
+    // Daily notes are excluded from the index, not from the store. They are
+    // searchable and readable like anything else, but one per day would take a
+    // growing share of a token-budgeted index that sorts by recency -- within a
+    // year they would crowd out the knowledge the index exists to advertise.
+    const entries = documents
+      .filter(document => !document.path.startsWith(DAILY_NOTE_PREFIX))
+      .sort(compareDocuments)
+      .map(toEntry)
     const oldestFirst = [...entries].sort((left, right) => {
       if (left.updatedAt !== right.updatedAt) return left.updatedAt < right.updatedAt ? -1 : 1
       if (left.path !== right.path) return left.path > right.path ? -1 : 1

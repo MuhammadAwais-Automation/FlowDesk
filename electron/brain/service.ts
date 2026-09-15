@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { BrainDatabase } from './database'
 import { brainRequestSchema } from './protocol'
 import { VaultManager } from './vault'
@@ -12,6 +13,7 @@ import { CandidateStore } from './knowledge/candidates'
 import { Compactor } from './knowledge/compactor'
 import { DocumentStore } from './knowledge/documents'
 import { ManifestBuilder } from './knowledge/manifest'
+import { dailyNotePath, localDayBounds, localDayOf, renderDailyNote } from './knowledge/dailyNote'
 import { EvidenceRetriever } from './knowledge/evidence'
 import { migrateMemories } from './knowledge/memoriesMigration'
 import { VaultImporter } from './knowledge/vaultImporter'
@@ -88,6 +90,41 @@ export class BrainService {
    */
   private knowledgeScopeChain(scopeId: string): string[] {
     return this.database.scopePath(scopeId).map(scope => scope.id)
+  }
+
+  /**
+   * Renders one day's timeline into a Library document and returns it.
+   *
+   * Reads events through the scope chain but writes to the exact scope asked
+   * for, the same split every other knowledge write uses. Idempotent twice
+   * over: the renderer is deterministic, so an unchanged day produces the same
+   * content hash and `upsert` no-ops.
+   *
+   * A day with no activity is not written at all -- an empty note is a document
+   * that has to be read to learn it says nothing.
+   */
+  private materialiseDailyNote(scopeId: string, date?: string) {
+    const day = date ?? localDayOf(new Date().toISOString())
+    const { from, to } = localDayBounds(day)
+    const events = this.database.listEvents({ scopeIds: this.knowledgeScopeChain(scopeId), from, to })
+    const note = renderDailyNote(day, events)
+    if (note.isEmpty) return { date: day, path: dailyNotePath(day), written: false, eventCount: 0, body: note.body }
+
+    this.documents.upsert({
+      scopeId,
+      path: note.path,
+      type: 'note',
+      title: note.title,
+      summary: note.summary,
+      body: note.body,
+      origin: 'curated',
+      contentHash: createHash('sha256').update(note.body).digest('hex'),
+      updatedAt: new Date().toISOString(),
+      // Derived from events, not authored -- deriving links from the body would
+      // re-resolve the wiki links the renderer just wrote, which is exactly what
+      // we want, so leave `links` undefined rather than passing [].
+    })
+    return { date: day, path: note.path, written: true, eventCount: events.length, body: note.body }
   }
 
   /**
@@ -248,12 +285,53 @@ export class BrainService {
           tokenBudget: request.payload.tokenBudget,
           maxSections: request.payload.maxSections,
         })
+      case 'knowledge.dailyNote':
+        return this.materialiseDailyNote(request.payload.scopeId, request.payload.date)
+      case 'recordEvent':
+        this.database.recordEvent(request.payload)
+        return true
+      case 'listEvents':
+        return this.database.listEvents({
+          scopeIds: this.knowledgeScopeChain(request.payload.scopeId),
+          from: request.payload.from,
+          to: request.payload.to,
+          limit: request.payload.limit,
+        })
       case 'knowledge.list': return this.documents.list({ ...request.payload, scopeIds: this.knowledgeScopeChain(request.payload.scopeId) })
-      case 'knowledge.importVault': return this.vaultImporter.import(request.payload)
+      case 'knowledge.importVault': {
+        const report = this.vaultImporter.import(request.payload)
+        this.database.recordEvent({
+          scopeId: request.payload.scopeId,
+          action: 'knowledge.imported',
+          metadata: { imported: report.imported, skipped: report.skipped, failures: report.failures.length },
+        })
+        return report
+      }
       case 'knowledge.proposeCandidate': return this.candidates.propose(request.payload)
       case 'knowledge.listCandidates': return this.candidates.list(request.payload.scopeId)
-      case 'knowledge.decideCandidate': return this.candidates.decide(request.payload)
-      case 'knowledge.compact': return this.compactor.compact(request.payload.scopeId)
+      case 'knowledge.decideCandidate': {
+        const decided = this.candidates.decide(request.payload)
+        if (request.payload.decision === 'accept' && decided?.document) {
+          this.database.recordEvent({
+            scopeId: decided.document.scopeId,
+            action: 'knowledge.accepted',
+            targetId: decided.document.id,
+            metadata: { path: decided.document.path, title: decided.document.title, type: decided.document.type },
+          })
+        }
+        return decided
+      }
+      case 'knowledge.compact': {
+        const report = this.compactor.compact(request.payload.scopeId)
+        if (report.merged > 0) {
+          this.database.recordEvent({
+            scopeId: request.payload.scopeId,
+            action: 'knowledge.compacted',
+            metadata: { merged: report.merged, scanned: report.scanned },
+          })
+        }
+        return report
+      }
       case 'knowledge.migrateMemories':
         return migrateMemories(this.documents, { memories: this.database.listMemories(), dryRun: request.payload.dryRun })
       case 'knowledge.listUnresolvedLinks': return this.documents.listUnresolvedLinks(this.knowledgeScopeChain(request.payload.scopeId))

@@ -5,6 +5,7 @@ import { BRAIN_TABS } from '@/lib/brainUi'
 import type { BrainCandidate, BrainScope, BrainStatus } from '@/types/brain'
 import { KNOWLEDGE_DOC_TYPES } from '@/types/brainKnowledge'
 import type {
+  BrainEvent,
   CompactionReport,
   DocumentReadResult,
   DocumentSearchHit,
@@ -17,6 +18,35 @@ import type {
 } from '@/types/brainKnowledge'
 
 const api = window.electronAPI
+
+/** Local-day bounds for the events query — the day the user is having, not UTC. */
+function todayBounds(): { from: string; to: string } {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+  return { from: start.toISOString(), to: end.toISOString() }
+}
+
+function eventTime(iso: string): string {
+  const at = new Date(iso)
+  return `${`${at.getHours()}`.padStart(2, '0')}:${`${at.getMinutes()}`.padStart(2, '0')}`
+}
+
+function describeEvent(event: BrainEvent): string {
+  const meta = event.metadata
+  const text = (key: string) => typeof meta[key] === 'string' ? meta[key] as string : ''
+  const count = (key: string) => typeof meta[key] === 'number' ? meta[key] as number : 0
+  switch (event.action) {
+    case 'agent.turn': {
+      const prompt = text('prompt').replace(/\s+/g, ' ').trim()
+      return prompt.length > 0 ? prompt : 'Agent turn'
+    }
+    case 'knowledge.accepted': return `Saved ${text('title') || text('path')} to the Library`
+    case 'knowledge.imported': return `Imported ${count('imported')} documents from the vault`
+    case 'knowledge.compacted': return `Folded ${count('merged')} captures into existing documents`
+    case 'job.completed': return `${text('recipeId') || 'Job'} — ${text('status') || 'completed'}`
+  }
+}
 
 function Card({ children }: { children: React.ReactNode }) {
   return <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">{children}</section>
@@ -75,6 +105,10 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const [migrateReport, setMigrateReport] = useState<{ scanned: number; migrated: number; unchanged: number; dryRun: boolean } | null>(null)
   const [migrating, setMigrating] = useState(false)
 
+  // Today — the activity timeline, and the daily note materialised from it.
+  const [events, setEvents] = useState<BrainEvent[]>([])
+  const [dailyNotePath, setDailyNotePath] = useState<string | null>(null)
+
   const selectedScopeId = useRef<string | null>(null)
   selectedScopeId.current = scope?.id ?? null
   const libraryRequest = useRef(0)
@@ -86,11 +120,17 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const migrateRequest = useRef(0)
 
   const refresh = useCallback(async (activeScope: BrainScope) => {
-    const [nextStatus, nextCandidates, nextKnowledgeCandidates, nextUnresolvedLinks, nextKnowledgeList] = await Promise.all([
+    // Materialise first, then list: the daily note is written from the same
+    // events this refresh is about to show, so doing it in the other order
+    // shows a note that is one refresh stale.
+    const daily = await api.brainKnowledgeDailyNote({ scopeId: activeScope.id })
+      .catch(() => ({ written: false, path: '' }))
+    const [nextStatus, nextCandidates, nextKnowledgeCandidates, nextUnresolvedLinks, nextKnowledgeList, nextEvents] = await Promise.all([
       api.brainGetStatus(), api.brainListCandidates(activeScope.id),
       api.brainKnowledgeListCandidates({ scopeId: activeScope.id }),
       api.brainKnowledgeListUnresolvedLinks({ scopeId: activeScope.id }),
       api.brainKnowledgeList({ scopeId: activeScope.id, limit: 200 }),
+      api.brainListEvents({ scopeId: activeScope.id, ...todayBounds() }).catch(() => [] as BrainEvent[]),
     ])
     if (selectedScopeId.current !== activeScope.id) return
     setStatus(nextStatus)
@@ -98,6 +138,8 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     setKnowledgeCandidates(nextKnowledgeCandidates)
     setUnresolvedLinks(nextUnresolvedLinks)
     setKnowledgeList(nextKnowledgeList)
+    setEvents(nextEvents)
+    setDailyNotePath(daily.written ? daily.path : null)
   }, [])
 
   useEffect(() => {
@@ -263,6 +305,27 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
               <button onClick={() => setTab('Review')} className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white">Open Review</button>
             </div>
           </Card>}
+          <Card>
+            <div className="flex items-center justify-between">
+              <h2 className="flex items-center gap-2 font-semibold"><Clock size={17} /> Aaj</h2>
+              {dailyNotePath && <button
+                onClick={() => { void readDocument(dailyNotePath); setTab('Library') }}
+                className="rounded-lg bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-600 hover:bg-stone-200"
+              >Open daily note</button>}
+            </div>
+            <div className="mt-3 space-y-2">
+              {events.length === 0 && <p className="text-sm text-stone-500">Aaj abhi kuch nahi hua — Agent se baat karein ya vault import karein.</p>}
+              {events.map(event => <div key={event.id} className="flex gap-3 rounded-lg bg-stone-50 p-3">
+                <span className="shrink-0 font-mono text-xs text-stone-400">{eventTime(event.createdAt)}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm">{describeEvent(event)}</p>
+                  {event.action === 'agent.turn' && Array.isArray(event.metadata.documentsRead) && (event.metadata.documentsRead as string[]).length > 0 && <p className="mt-1 text-xs text-stone-500">
+                    read {(event.metadata.documentsRead as string[]).join(', ')}
+                  </p>}
+                </div>
+              </div>)}
+            </div>
+          </Card>
           <Card>
             <h2 className="flex items-center gap-2 font-semibold"><Clock size={17} /> Recently updated</h2>
             <div className="mt-3 space-y-2">
