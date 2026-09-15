@@ -128,7 +128,7 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
   }).strict() }),
   z.object({ ...requestBase, method: z.literal('recordEvent'), payload: z.object({
     scopeId: id.nullable(),
-    action: z.enum(['agent.turn', 'knowledge.accepted', 'knowledge.imported', 'knowledge.compacted', 'job.completed']),
+    action: z.enum(['agent.turn', 'tool.action', 'knowledge.accepted', 'knowledge.imported', 'knowledge.compacted', 'job.completed']),
     targetId: z.string().max(200).nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
     createdAt: z.string().optional(),

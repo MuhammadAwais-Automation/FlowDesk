@@ -79,6 +79,7 @@ export function renderDailyNote(date: string, events: BrainEvent[]): DailyNote {
   const imports = events.filter(event => event.action === 'knowledge.imported')
   const compactions = events.filter(event => event.action === 'knowledge.compacted')
   const jobs = events.filter(event => event.action === 'job.completed')
+  const actions = events.filter(event => event.action === 'tool.action')
 
   const costUsd = turns.reduce((sum, event) => sum + asNumber(event.metadata.totalCostUsd), 0)
   const tokens = turns.reduce(
@@ -91,6 +92,7 @@ export function renderDailyNote(date: string, events: BrainEvent[]): DailyNote {
 
   const counts = [
     turns.length > 0 ? `${turns.length} agent turn${turns.length === 1 ? '' : 's'}` : null,
+    actions.length > 0 ? `${actions.length} action${actions.length === 1 ? '' : 's'}` : null,
     accepted.length > 0 ? `${accepted.length} saved to Library` : null,
     jobs.length > 0 ? `${jobs.length} job${jobs.length === 1 ? '' : 's'}` : null,
   ].filter((part): part is string => part !== null)
@@ -105,6 +107,15 @@ export function renderDailyNote(date: string, events: BrainEvent[]): DailyNote {
       if (read.length > 0) lines.push(`  - read ${read.map(wikiLink).join(', ')}`)
       const tools = asStrings(event.metadata.tools)
       if (tools.length > 0) lines.push(`  - used ${tools.join(', ')}`)
+    }
+    lines.push('')
+  }
+
+  if (actions.length > 0) {
+    lines.push('## Actions', '')
+    for (const event of actions) {
+      const label = oneLine(event.metadata.label, 'Action')
+      lines.push(`- **${timeOf(event.createdAt)}** ${label}${event.metadata.failed === true ? ' — failed' : ''}`)
     }
     lines.push('')
   }

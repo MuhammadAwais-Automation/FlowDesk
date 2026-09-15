@@ -1366,7 +1366,7 @@ export class BrainDatabase {
     const rows = this.db.prepare(`
       SELECT * FROM audit_events
       WHERE scope_id IN (${placeholders}) AND created_at >= ? AND created_at < ?
-        AND action IN ('agent.turn', 'knowledge.accepted', 'knowledge.imported', 'knowledge.compacted', 'job.completed')
+        AND action IN ('agent.turn', 'tool.action', 'knowledge.accepted', 'knowledge.imported', 'knowledge.compacted', 'job.completed')
       ORDER BY created_at ASC
       LIMIT ?
     `).all(...input.scopeIds, input.from, input.to, Math.min(input.limit ?? 500, 2000)) as SqlRow[]

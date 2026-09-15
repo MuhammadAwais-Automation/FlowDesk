@@ -7,6 +7,7 @@ import { createElectronBrainClient } from './brain/electronClient'
 import type { BrainClient } from './brain/client'
 import { composePromptWithManifest } from './agent/brainContext'
 import { extractReadDocumentPaths } from '../src/lib/agentProvenance'
+import { extractOutboundActions } from './agent/outboundActions'
 import type { AgentTurnUsage } from '../src/types/brainKnowledge'
 import type { BrainScope } from '../src/types/brain'
 import type { ManifestRender } from '../src/types/brainKnowledge'
@@ -1787,7 +1788,7 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
       if (event.usage) turnUsage = event.usage
     }
     if (event.type === 'tool_call') {
-      pendingToolCalls.set(event.toolUseId, { tool: event.tool, prompt: event.prompt, result: '', isError: false })
+      pendingToolCalls.set(event.toolUseId, { tool: event.tool, name: event.name, prompt: event.prompt, result: '', isError: false })
     }
     if (event.type === 'tool_result') {
       const existing = pendingToolCalls.get(event.toolUseId)
@@ -1807,6 +1808,17 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
     ...(providerKey ? { provider: providerKey } : {}),
   })
   if (activeBrainScopeId) {
+    // What the turn actually did in the world, one row each, so the daily note
+    // can answer "did I reply to Yasir?" without re-reading the transcript.
+    for (const action of extractOutboundActions([...pendingToolCalls.values()])) {
+      brainRequest('recordEvent', {
+        scopeId: activeBrainScopeId,
+        action: 'tool.action',
+        targetId: assistantTurn.id,
+        metadata: { tool: action.tool, label: action.label, failed: action.failed },
+        createdAt: assistantTurn.createdAt,
+      }).catch(() => {})
+    }
     // Activity timeline (S2). In Temporary mode the turn is still counted but
     // never quoted: "temporary" promises that what was said is not kept, and a
     // prompt stored in an event would break that as surely as a document would.

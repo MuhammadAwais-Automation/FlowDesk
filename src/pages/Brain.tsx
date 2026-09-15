@@ -45,6 +45,7 @@ function describeEvent(event: BrainEvent): string {
     case 'knowledge.imported': return `Imported ${count('imported')} documents from the vault`
     case 'knowledge.compacted': return `Folded ${count('merged')} captures into existing documents`
     case 'job.completed': return `${text('recipeId') || 'Job'} — ${text('status') || 'completed'}`
+    case 'tool.action': return `${text('label') || 'Action'}${meta.failed === true ? ' — failed' : ''}`
   }
 }
 

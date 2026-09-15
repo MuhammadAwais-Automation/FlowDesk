@@ -183,6 +183,7 @@ export interface UnresolvedLink {
  */
 export type BrainEventAction =
   | 'agent.turn'
+  | 'tool.action'
   | 'knowledge.accepted'
   | 'knowledge.imported'
   | 'knowledge.compacted'

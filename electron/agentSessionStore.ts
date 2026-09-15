@@ -19,7 +19,10 @@ import { app } from 'electron'
  */
 
 export interface AgentToolCallEntry {
+  /** Provider id for grouping in the UI — every whatsapp_* call is 'whatsapp'. */
   tool: string
+  /** Raw MCP tool name. Optional: older stored turns predate it. */
+  name?: string
   prompt: string
   result: string
   isError: boolean

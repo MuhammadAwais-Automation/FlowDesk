@@ -174,7 +174,7 @@ function toProviderId(mcpToolName: string): string {
 
 export type AgentStreamEvent =
   | { type: 'text'; text: string }
-  | { type: 'tool_call'; toolUseId: string; tool: string; prompt: string }
+  | { type: 'tool_call'; toolUseId: string; tool: string; prompt: string; name?: string }
   | { type: 'tool_progress'; toolUseId: string; tool: string; elapsedSeconds: number }
   | { type: 'tool_result'; toolUseId: string; tool: string; text: string; isError: boolean }
   | { type: 'approval_request'; requestId: string; tool: string; title: string; detail?: string; input?: Record<string, unknown> }
@@ -319,7 +319,10 @@ export async function* runClaudeAgentTurn(
                 toolProviderById.set(block.id, provider)
                 const input = block.input as { prompt?: unknown } | undefined
                 const prompt = typeof input?.prompt === 'string' ? input.prompt : ''
-                yield { type: 'tool_call', toolUseId: block.id, tool: provider, prompt }
+                // `tool` is the provider id the UI keys its status map by, which
+                // collapses every whatsapp_* call to 'whatsapp'. The raw name rides
+                // along so the activity timeline can tell a send from a list.
+                yield { type: 'tool_call', toolUseId: block.id, tool: provider, prompt, name: block.name }
               }
             }
           } else if (message.type === 'tool_progress') {

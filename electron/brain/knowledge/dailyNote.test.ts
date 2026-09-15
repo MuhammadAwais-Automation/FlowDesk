@@ -71,6 +71,19 @@ describe('daily note', () => {
     expect(note.body).not.toContain('## Cost')
   })
 
+  it('lists outbound actions, marking the ones that failed', () => {
+    const note = renderDailyNote('2026-09-15', [
+      event({ action: 'tool.action', metadata: { label: 'Sent a WhatsApp message', failed: false } }),
+      event({ action: 'tool.action', metadata: { label: 'Sent a LinkedIn message', failed: true } }),
+    ])
+
+    expect(note.body).toContain('## Actions')
+    expect(note.body).toContain('Sent a WhatsApp message')
+    // A failed attempt is exactly what you go looking for later.
+    expect(note.body).toContain('Sent a LinkedIn message — failed')
+    expect(note.summary).toContain('2 actions')
+  })
+
   it('is byte-identical when re-rendered, so an unchanged day never rewrites the document', () => {
     const events = [event({ action: 'agent.turn', metadata: { prompt: 'same question' } })]
     expect(renderDailyNote('2026-09-15', events).body).toBe(renderDailyNote('2026-09-15', events).body)
