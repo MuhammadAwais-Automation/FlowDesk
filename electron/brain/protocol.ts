@@ -133,6 +133,26 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     path: knowledgePath,
     depth: z.number().int().min(1).max(2).optional(),
   }).strict() }),
+  z.object({ ...requestBase, method: z.literal('entity.list'), payload: z.object({
+    scopeId: id,
+    type: z.enum(['person', 'org', 'project', 'opportunity', 'topic']).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('entity.get'), payload: z.object({
+    scopeId: id,
+    entityId: id,
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('entity.mentions'), payload: z.object({
+    scopeId: id,
+    entityId: id,
+    targetKind: z.enum(['document', 'opportunity', 'episode']).optional(),
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('entity.listProposals'), payload: z.object({
+    scopeId: id,
+  }).strict() }),
+  z.object({ ...requestBase, method: z.literal('entity.decideProposal'), payload: z.object({
+    id,
+    decision: z.enum(['accept', 'reject']),
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('knowledge.dailyNote'), payload: z.object({
     scopeId: id,
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

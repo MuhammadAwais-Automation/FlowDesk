@@ -265,3 +265,40 @@ export interface AnswerPack {
   estimatedTokens: number
   candidatesConsidered: number
 }
+
+/** A person, organisation, project or opportunity the Brain knows about. */
+export interface BrainEntity {
+  id: string
+  scopeId: string
+  type: 'person' | 'org' | 'project' | 'opportunity' | 'topic'
+  name: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** One thing that talks about an entity -- a document, an opportunity, a capture. */
+export interface EntityMention {
+  entityId: string
+  targetKind: 'document' | 'opportunity' | 'episode'
+  targetId: string
+  sourceRef: string
+  createdAt: string
+}
+
+/**
+ * Two entities that might be the same, waiting on a human.
+ *
+ * Only softer-than-identifier matches land here; an exact verified identifier
+ * merges on its own.
+ */
+export interface EntityMergeProposal {
+  id: string
+  scopeId: string
+  keepEntityId: string
+  keepName: string
+  mergeEntityId: string
+  mergeName: string
+  reason: string
+  status: 'pending' | 'accepted' | 'rejected'
+  createdAt: string
+}

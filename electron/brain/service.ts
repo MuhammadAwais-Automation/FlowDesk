@@ -15,6 +15,7 @@ import { DocumentStore } from './knowledge/documents'
 import { ManifestBuilder } from './knowledge/manifest'
 import { dailyNotePath, localDayBounds, localDayOf, renderDailyNote } from './knowledge/dailyNote'
 import { EMBEDDING_MODEL, embeddingsFailed } from './knowledge/embeddings'
+import { EntityStore } from './knowledge/entities'
 import { EvidenceRetriever } from './knowledge/evidence'
 import { migrateMemories } from './knowledge/memoriesMigration'
 import { VaultImporter } from './knowledge/vaultImporter'
@@ -40,6 +41,7 @@ export class BrainService {
   readonly manifest: ManifestBuilder
   readonly vaultImporter: VaultImporter
   readonly candidates: CandidateStore
+  readonly entities: EntityStore
   readonly compactor: Compactor
   private readonly maintenanceTimer: ReturnType<typeof setInterval>
   private readonly compactionTimer: ReturnType<typeof setInterval>
@@ -54,6 +56,7 @@ export class BrainService {
     this.manifest = new ManifestBuilder(this.documents)
     this.vaultImporter = new VaultImporter(this.documents)
     this.candidates = new CandidateStore(this.database.handle, this.documents)
+    this.entities = new EntityStore(this.database.handle)
     this.compactor = new Compactor(this.documents)
     // Part 1: memories are folded into knowledge_documents (see
     // knowledge/memoriesMigration.ts) rather than staying a second store this
@@ -337,6 +340,22 @@ export class BrainService {
           request.payload.path,
           request.payload.depth ?? 1,
         )
+      case 'entity.list':
+        return this.entities.list(this.knowledgeScopeChain(request.payload.scopeId), request.payload.type)
+      case 'entity.get':
+        return this.entities.get(this.knowledgeScopeChain(request.payload.scopeId), request.payload.entityId)
+      case 'entity.mentions': {
+        // Reading through the chain, like every other knowledge read: an
+        // ancestor's entity is one this scope is entitled to see.
+        const scopeIds = this.knowledgeScopeChain(request.payload.scopeId)
+        return this.entities.get(scopeIds, request.payload.entityId) === null
+          ? []
+          : this.entities.mentionsOf(request.payload.entityId, request.payload.targetKind)
+      }
+      case 'entity.listProposals':
+        return this.entities.listProposals(this.knowledgeScopeChain(request.payload.scopeId))
+      case 'entity.decideProposal':
+        return this.entities.decideProposal(request.payload.id, request.payload.decision)
       case 'knowledge.dailyNote':
         return this.materialiseDailyNote(request.payload.scopeId, request.payload.date)
       case 'recordEvent':

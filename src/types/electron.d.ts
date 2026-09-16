@@ -1,7 +1,7 @@
 import type { CustomTool } from './browser'
 import type { ProjectSessionSnapshot } from './project'
 import type { BrainCandidate, BrainContextPack, BrainDecisionBrief, BrainJob, BrainMemory, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainQuery, BrainScope, BrainScopeQuery, BrainSourceMetric, BrainStatus, MemoryKind, OpportunityEvidence } from './brain'
-import type { AnswerPack, BrainEvent, CompactionReport, DocumentNeighborhood, VectorIndexReport, DecideCandidateInput, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, ProposeCandidateInput, UnresolvedLink, VaultImportReport } from './brainKnowledge'
+import type { AnswerPack, BrainEntity, EntityMention, EntityMergeProposal, BrainEvent, CompactionReport, DocumentNeighborhood, VectorIndexReport, DecideCandidateInput, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, ProposeCandidateInput, UnresolvedLink, VaultImportReport } from './brainKnowledge'
 
 export interface GmailSession {
   email: string
@@ -196,6 +196,11 @@ export interface ElectronAPI {
   brainKnowledgeDailyNote: (input: { scopeId: string; date?: string }) => Promise<{ date: string; path: string; written: boolean; eventCount: number; body: string }>
   brainKnowledgeNeighbors: (input: { scopeId: string; path: string; depth?: number }) => Promise<DocumentNeighborhood>
   brainKnowledgeAnswerPack: (input: { scopeId: string; question: string; tokenBudget?: number }) => Promise<AnswerPack>
+  brainEntityList: (input: { scopeId: string; type?: BrainEntity['type'] }) => Promise<BrainEntity[]>
+  brainEntityGet: (input: { scopeId: string; entityId: string }) => Promise<BrainEntity | null>
+  brainEntityMentions: (input: { scopeId: string; entityId: string; targetKind?: EntityMention['targetKind'] }) => Promise<EntityMention[]>
+  brainEntityListProposals: (input: { scopeId: string }) => Promise<EntityMergeProposal[]>
+  brainEntityDecideProposal: (input: { id: string; decision: 'accept' | 'reject' }) => Promise<boolean>
   brainKnowledgeBuildVectors: (input: { scopeId: string }) => Promise<VectorIndexReport>
   brainKnowledgeVectorStatus: (input: { scopeId: string }) => Promise<{ documents: number; vectors: number; model: string; failed: boolean }>
   brainListEvents: (input: { scopeId: string; from: string; to: string; limit?: number }) => Promise<BrainEvent[]>
