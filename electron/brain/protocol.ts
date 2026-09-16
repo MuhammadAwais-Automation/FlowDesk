@@ -146,6 +146,9 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     entityId: id,
     targetKind: z.enum(['document', 'opportunity', 'episode']).optional(),
   }).strict() }),
+  z.object({ ...requestBase, method: z.literal('entity.backfill'), payload: z.object({
+    scopeId: id,
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('entity.listProposals'), payload: z.object({
     scopeId: id,
   }).strict() }),

@@ -352,6 +352,8 @@ export class BrainService {
           ? []
           : this.entities.mentionsOf(request.payload.entityId, request.payload.targetKind)
       }
+      case 'entity.backfill':
+        return this.entities.backfillFromDocuments(this.knowledgeScopeChain(request.payload.scopeId))
       case 'entity.listProposals':
         return this.entities.listProposals(this.knowledgeScopeChain(request.payload.scopeId))
       case 'entity.decideProposal':

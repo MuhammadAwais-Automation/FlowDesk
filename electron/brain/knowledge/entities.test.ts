@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BrainDatabase } from '../database'
+import { DocumentStore } from './documents'
 import { EntityStore } from './entities'
 
 const brains: BrainDatabase[] = []
@@ -20,7 +21,7 @@ function createStore() {
   brains.push(brain)
   const scope = brain.ensureScope({ type: 'global', externalRef: 'global', name: 'Global' })
   const other = brain.ensureScope({ type: 'client', externalRef: 'other', name: 'Other' })
-  return { brain, scope, other, store: new EntityStore(brain.handle) }
+  return { brain, scope, other, store: new EntityStore(brain.handle), documents: new DocumentStore(brain.handle) }
 }
 
 describe('EntityStore.resolve', () => {
@@ -146,5 +147,47 @@ describe('EntityStore.decideProposal', () => {
     const { store, proposal } = twoOfThem()
     expect(store.decideProposal(proposal.id, 'reject')).toBe(true)
     expect(store.decideProposal(proposal.id, 'accept')).toBe(false)
+  })
+})
+
+describe('EntityStore.backfillFromDocuments', () => {
+  function put(documents: DocumentStore, scopeId: string, path: string, type: string, title: string) {
+    return documents.upsert({
+      scopeId, path, type: type as never, title, summary: '', body: 'Body.',
+      origin: 'curated', contentHash: path, updatedAt: '2026-09-01T00:00:00.000Z',
+    })
+  }
+
+  it('gives people, clients and projects an entity, and nothing else one', () => {
+    const { store, documents, scope } = createStore()
+    put(documents, scope.id, 'wiki/clients/twg.md', 'client', 'TWG Trade Finance')
+    put(documents, scope.id, 'wiki/projects/flowdesk.md', 'project', 'FlowDesk')
+    put(documents, scope.id, 'wiki/me/profile.md', 'me', 'Awais')
+    // About something, not a something: naming an entity after it would fill
+    // the graph with nodes called "Zapzone proposal blueprint".
+    put(documents, scope.id, 'wiki/research/zapzone.md', 'research', 'Zapzone proposal blueprint')
+
+    expect(store.backfillFromDocuments([scope.id])).toEqual({ scanned: 4, created: 3, linked: 3 })
+    expect(store.list([scope.id]).map(entity => `${entity.type}:${entity.name}`).sort())
+      .toEqual(['org:TWG Trade Finance', 'person:Awais', 'project:FlowDesk'])
+  })
+
+  it('links the entity to the document it came from', () => {
+    const { store, documents, scope } = createStore()
+    const document = put(documents, scope.id, 'wiki/clients/twg.md', 'client', 'TWG Trade Finance')
+    store.backfillFromDocuments([scope.id])
+
+    const [entity] = store.entitiesFor([scope.id], 'document', document.id)
+    expect(entity.name).toBe('TWG Trade Finance')
+    expect(store.mentionsOf(entity.id, 'document')).toMatchObject([{ sourceRef: 'wiki/clients/twg.md' }])
+  })
+
+  it('creates nothing the second time it runs', () => {
+    const { store, documents, scope } = createStore()
+    put(documents, scope.id, 'wiki/clients/twg.md', 'client', 'TWG Trade Finance')
+    store.backfillFromDocuments([scope.id])
+
+    expect(store.backfillFromDocuments([scope.id])).toEqual({ scanned: 1, created: 0, linked: 0 })
+    expect(store.list([scope.id])).toHaveLength(1)
   })
 })

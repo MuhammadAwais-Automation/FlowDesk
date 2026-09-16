@@ -197,6 +197,7 @@ export interface ElectronAPI {
   brainKnowledgeNeighbors: (input: { scopeId: string; path: string; depth?: number }) => Promise<DocumentNeighborhood>
   brainKnowledgeAnswerPack: (input: { scopeId: string; question: string; tokenBudget?: number }) => Promise<AnswerPack>
   brainEntityList: (input: { scopeId: string; type?: BrainEntity['type'] }) => Promise<BrainEntity[]>
+  brainEntityBackfill: (input: { scopeId: string }) => Promise<{ scanned: number; created: number; linked: number }>
   brainEntityGet: (input: { scopeId: string; entityId: string }) => Promise<BrainEntity | null>
   brainEntityMentions: (input: { scopeId: string; entityId: string; targetKind?: EntityMention['targetKind'] }) => Promise<EntityMention[]>
   brainEntityListProposals: (input: { scopeId: string }) => Promise<EntityMergeProposal[]>

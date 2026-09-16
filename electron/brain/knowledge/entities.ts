@@ -91,6 +91,28 @@ function toEntity(row: SqlRow): BrainEntity {
   }
 }
 
+
+/**
+ * Which document types name a thing rather than describe one.
+ *
+ * A `client` document is a company; a `research` document is *about* something
+ * and naming an entity after it would fill the graph with nodes called
+ * "Zapzone proposal blueprint". `decision`, `note`, `skill`, `source` and
+ * `research` deliberately map to nothing.
+ */
+const DOCUMENT_ENTITY_TYPE: Partial<Record<string, EntityType>> = {
+  client: 'org',
+  person: 'person',
+  project: 'project',
+  me: 'person',
+}
+
+export interface BackfillReport {
+  scanned: number
+  created: number
+  linked: number
+}
+
 export class EntityStore {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -243,6 +265,48 @@ export class EntityStore {
       throw error
     }
     return true
+  }
+
+
+  /**
+   * Gives the Library's people, clients and projects the entities they always
+   * were.
+   *
+   * A vault document carries no phone number or URN, so these resolve by name
+   * alone -- which is exactly the case where resolution must not invent a
+   * merge. Later, when a WhatsApp thread arrives with a real identifier, the
+   * two are proposed rather than joined, and the owner decides.
+   *
+   * Idempotent: resolving finds what it made last time, and `mention` ignores a
+   * duplicate, so re-running costs nothing and changes nothing.
+   */
+  backfillFromDocuments(scopeIds: string[]): BackfillReport {
+    if (scopeIds.length === 0) return { scanned: 0, created: 0, linked: 0 }
+    const placeholders = scopeIds.map(() => '?').join(', ')
+    const rows = this.db.prepare(`
+      SELECT id, scope_id, type, title, path FROM knowledge_documents
+      WHERE scope_id IN (${placeholders}) AND valid_to IS NULL
+      ORDER BY path
+    `).all(...scopeIds) as SqlRow[]
+
+    let created = 0
+    let linked = 0
+    for (const row of rows) {
+      const entityType = DOCUMENT_ENTITY_TYPE[String(row.type)]
+      if (!entityType) continue
+      const before = this.countIn(String(row.scope_id))
+      const entity = this.resolve({ scopeId: String(row.scope_id), type: entityType, name: String(row.title) })
+      if (this.countIn(String(row.scope_id)) > before) created += 1
+      const mentionsBefore = this.mentionsOf(entity.id, 'document').length
+      this.mention(entity.id, 'document', String(row.id), String(row.path))
+      if (this.mentionsOf(entity.id, 'document').length > mentionsBefore) linked += 1
+    }
+    return { scanned: rows.length, created, linked }
+  }
+
+  private countIn(scopeId: string): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS c FROM entities WHERE scope_id = ?').get(scopeId) as SqlRow
+    return Number(row.c ?? 0)
   }
 
   private findByName(scopeId: string, name: string): BrainEntity | null {

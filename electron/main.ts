@@ -426,6 +426,7 @@ ipcMain.handle('brain:knowledgeDailyNote', (_e, input: unknown) => brainRequest(
 ipcMain.handle('brain:knowledgeNeighbors', (_e, input: unknown) => brainRequest('knowledge.neighbors', input))
 ipcMain.handle('brain:knowledgeAnswerPack', (_e, input: unknown) => brainRequest('knowledge.answerPack', input))
 ipcMain.handle('brain:entityList', (_e, input: unknown) => brainRequest('entity.list', input))
+ipcMain.handle('brain:entityBackfill', (_e, input: unknown) => brainRequest('entity.backfill', input))
 ipcMain.handle('brain:entityGet', (_e, input: unknown) => brainRequest('entity.get', input))
 ipcMain.handle('brain:entityMentions', (_e, input: unknown) => brainRequest('entity.mentions', input))
 ipcMain.handle('brain:entityListProposals', (_e, input: unknown) => brainRequest('entity.listProposals', input))
