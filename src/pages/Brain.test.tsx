@@ -23,7 +23,7 @@ const document: KnowledgeDocument = {
 const documentRead: DocumentReadResult = {
   path: document.path, title: document.title, type: document.type,
   text: ['# Rates', '', 'PKR 40,000 monthly.', '', '## Scope', '', 'Two revisions.'].join(NL),
-  truncated: false, updatedAt: document.updatedAt,
+  truncated: false, estimatedTokens: 12, updatedAt: document.updatedAt,
 }
 
 const turnEvent: BrainEvent = {
@@ -126,5 +126,35 @@ describe('Brain three-column layout', () => {
 
     await waitFor(() => expect(within(detail()).queryByText('Yasir Bhai')).toBeNull())
     expect(within(detail()).getByText('Documents')).toBeTruthy()
+  })
+})
+
+describe('Brain document reader', () => {
+  async function openDocument() {
+    await mount()
+    fireEvent.click(nav('Library'))
+    fireEvent.click(await screen.findByRole('button', { name: /Yasir Bhai/ }))
+    await waitFor(() => expect(within(detail()).getByText('Yasir Bhai')).toBeTruthy())
+  }
+
+  it('renders the body as markdown rather than raw text', async () => {
+    await openDocument()
+    const pane = detail()
+    expect(within(pane).getByRole('heading', { name: 'Rates' })).toBeTruthy()
+    expect(pane.querySelector('pre')).toBeNull()
+  })
+
+  it('lists the document headings as an outline', async () => {
+    await openDocument()
+    const outline = within(detail()).getByRole('navigation', { name: 'Outline' })
+    expect(within(outline).getByRole('button', { name: 'Rates' })).toBeTruthy()
+    expect(within(outline).getByRole('button', { name: 'Scope' })).toBeTruthy()
+  })
+
+  it('names the turns that read this document and opens one', async () => {
+    await openDocument()
+    const chip = within(detail()).getByRole('button', { name: /mere clients kaun hain/ })
+    fireEvent.click(chip)
+    await waitFor(() => expect(within(detail()).queryByRole('navigation', { name: 'Outline' })).toBeNull())
   })
 })

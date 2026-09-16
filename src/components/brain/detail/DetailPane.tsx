@@ -1,5 +1,5 @@
 import { ArrowLeft, X } from 'lucide-react'
-import { NeighborhoodGraph } from './NeighborhoodGraph'
+import { DocumentDetail } from './DocumentDetail'
 import type { Selection, SelectionStack } from '@/lib/brainSelection'
 import type { AnswerPack, BrainEvent, DocumentNeighborhood, DocumentReadResult } from '@/types/brainKnowledge'
 
@@ -41,7 +41,7 @@ export function DetailPane({ stack, onBack, onClear, counters, document, neighbo
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {selection === null && <EmptyDetail counters={counters} />}
         {selection?.kind === 'document' && (document
-          ? <DocumentBody document={document} neighborhood={neighborhood} onSelect={onSelect} />
+          ? <DocumentDetail document={document} neighborhood={neighborhood} events={events} onSelect={onSelect} />
           : <p className="text-sm text-stone-500">Khul raha hai…</p>)}
         {selection?.kind === 'turn' && <TurnPlaceholder events={events} eventId={selection.eventId} />}
         {selection?.kind === 'answer' && <AnswerPlaceholder pack={pack} />}
@@ -68,26 +68,6 @@ function Counter({ label, value }: { label: string; value: number }) {
     <div className="rounded-xl border border-stone-200 p-3">
       <dt className="text-xs text-stone-500">{label}</dt>
       <dd className="mt-1 text-2xl font-bold">{value}</dd>
-    </div>
-  )
-}
-
-function DocumentBody({ document, neighborhood, onSelect }: {
-  document: DocumentReadResult
-  neighborhood: DocumentNeighborhood | null
-  onSelect: (next: Selection) => void
-}) {
-  return (
-    <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-semibold">{document.title}</h2>
-        <p className="mt-1 text-xs text-stone-500">{document.type} · {document.path} · updated {document.updatedAt}</p>
-      </div>
-      <pre className="whitespace-pre-wrap text-xs text-stone-700">{document.text}</pre>
-      {neighborhood && <div>
-        <h3 className="text-sm font-semibold">Connected documents</h3>
-        <div className="mt-2"><NeighborhoodGraph neighborhood={neighborhood} onOpen={path => onSelect({ kind: 'document', path })} /></div>
-      </div>}
     </div>
   )
 }
