@@ -1,5 +1,6 @@
 import { ArrowLeft, X } from 'lucide-react'
 import { DocumentDetail } from './DocumentDetail'
+import { TurnDetail } from './TurnDetail'
 import type { Selection, SelectionStack } from '@/lib/brainSelection'
 import type { AnswerPack, BrainEvent, DocumentNeighborhood, DocumentReadResult } from '@/types/brainKnowledge'
 
@@ -43,7 +44,7 @@ export function DetailPane({ stack, onBack, onClear, counters, document, neighbo
         {selection?.kind === 'document' && (document
           ? <DocumentDetail document={document} neighborhood={neighborhood} events={events} onSelect={onSelect} />
           : <p className="text-sm text-stone-500">Khul raha hai…</p>)}
-        {selection?.kind === 'turn' && <TurnPlaceholder events={events} eventId={selection.eventId} />}
+        {selection?.kind === 'turn' && <TurnBody events={events} eventId={selection.eventId} onSelect={onSelect} />}
         {selection?.kind === 'answer' && <AnswerPlaceholder pack={pack} />}
       </div>
     </aside>
@@ -72,9 +73,16 @@ function Counter({ label, value }: { label: string; value: number }) {
   )
 }
 
-function TurnPlaceholder({ events, eventId }: { events: BrainEvent[]; eventId: string }) {
+function TurnBody({ events, eventId, onSelect }: {
+  events: BrainEvent[]
+  eventId: string
+  onSelect: (next: Selection) => void
+}) {
   const event = events.find(candidate => candidate.id === eventId)
-  return <p className="text-sm text-stone-500">{event ? 'Is turn ki tafseel abhi aa rahi hai.' : 'Ye turn ab is din mein nahi hai.'}</p>
+  // The day rolled over, or a refresh dropped it: say so rather than render an
+  // empty turn that looks like a loading state which never finishes.
+  if (!event) return <p className="text-sm text-stone-500">Ye turn ab is din mein nahi hai.</p>
+  return <TurnDetail event={event} events={events} onSelect={onSelect} />
 }
 
 function AnswerPlaceholder({ pack }: { pack: AnswerPack | null }) {

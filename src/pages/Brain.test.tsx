@@ -28,7 +28,7 @@ const documentRead: DocumentReadResult = {
 
 const turnEvent: BrainEvent = {
   id: 'event-turn', scopeId: 'a', action: 'agent.turn', targetId: 'turn-2',
-  metadata: { sessionId: 's1', prompt: 'mere clients kaun hain', documentsRead: [document.path], total_cost_usd: 0.0123, duration_ms: 4200 },
+  metadata: { sessionId: 's1', prompt: 'mere clients kaun hain', documentsRead: [document.path], totalCostUsd: 0.0123, durationMs: 4200 },
   createdAt: '2026-09-15T10:05:00.000Z',
 }
 
@@ -156,5 +156,44 @@ describe('Brain document reader', () => {
     const chip = within(detail()).getByRole('button', { name: /mere clients kaun hain/ })
     fireEvent.click(chip)
     await waitFor(() => expect(within(detail()).queryByRole('navigation', { name: 'Outline' })).toBeNull())
+  })
+})
+
+describe('Brain turn reader', () => {
+  const conversation = [
+    { id: 'turn-1', role: 'user' as const, content: 'mere clients kaun hain', toolCalls: [], createdAt: turnEvent.createdAt },
+    { id: 'turn-2', role: 'assistant' as const, content: 'Yasir aur Bilal.', toolCalls: [], createdAt: turnEvent.createdAt },
+  ]
+
+  async function openTurn() {
+    await mount()
+    fireEvent.click(await screen.findByRole('button', { name: /mere clients kaun hain/ }))
+  }
+
+  it('shows the conversation behind an agent turn', async () => {
+    api.agentSessionTurns.mockResolvedValue(conversation)
+    await openTurn()
+    await waitFor(() => expect(within(detail()).getByText('Yasir aur Bilal.')).toBeTruthy())
+    expect(api.agentSessionTurns).toHaveBeenCalledWith('s1')
+    expect(within(detail()).getAllByText('mere clients kaun hain').length).toBeGreaterThan(0)
+  })
+
+  it('shows what the turn cost', async () => {
+    api.agentSessionTurns.mockResolvedValue(conversation)
+    await openTurn()
+    await waitFor(() => expect(within(detail()).getByText(/\$0\.0123/)).toBeTruthy())
+    expect(within(detail()).getByText(/4\.2s/)).toBeTruthy()
+  })
+
+  it('says so plainly when a turn was temporary rather than showing an empty box', async () => {
+    api.brainListEvents.mockResolvedValue([{
+      ...turnEvent,
+      metadata: { sessionId: 's1', totalCostUsd: 0.002, durationMs: 1000 },
+    }])
+    await mount()
+    fireEvent.click(await screen.findByRole('button', { name: /Agent turn/ }))
+    await waitFor(() => expect(within(detail()).getByText(/Temporary mode/)).toBeTruthy())
+    // The session store must not even be asked for a turn that was never kept.
+    expect(api.agentSessionTurns).not.toHaveBeenCalled()
   })
 })
