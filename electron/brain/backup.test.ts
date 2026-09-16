@@ -74,7 +74,7 @@ describe('Brain portable backup', () => {
     roots.push(fresh)
     const freshBrainRoot = join(fresh, 'brain')
     const { manifest } = BrainBackupManager.restoreAtomic(archive, freshBrainRoot)
-    expect(manifest).toMatchObject({ format: 'flowdesk-brain-backup', archiveFormatVersion: ARCHIVE_FORMAT_VERSION, databaseSchemaVersion: 6 })
+    expect(manifest).toMatchObject({ format: 'flowdesk-brain-backup', archiveFormatVersion: ARCHIVE_FORMAT_VERSION, databaseSchemaVersion: 7 })
 
     const restored = new BrainDatabase(join(freshBrainRoot, 'brain.sqlite'))
     expect(restored.listScopes().map(scope => scope.externalRef).sort()).toEqual(['acme', 'acme-site'])

@@ -30,7 +30,7 @@ import type {
 } from '../../src/types/brain'
 
 /** SQLite schema version (`PRAGMA user_version`), not the backup archive's. */
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 const TABLES = [
   'scopes', 'scope_links', 'memories', 'memory_revisions', 'memory_candidates',
@@ -42,6 +42,7 @@ const TABLES = [
   'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
   'knowledge_documents', 'knowledge_fts', 'knowledge_links', 'knowledge_candidates',
   'knowledge_sections', 'knowledge_vectors',
+  'entity_mentions', 'entity_merge_proposals',
 ] as const
 
 type SqlRow = Record<string, unknown>
@@ -287,6 +288,28 @@ export class BrainDatabase {
         CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, scope_id TEXT NOT NULL REFERENCES scopes(id), type TEXT NOT NULL, name TEXT NOT NULL, properties_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS entity_aliases (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFERENCES entities(id), alias TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0, UNIQUE(entity_id, alias));
         CREATE TABLE IF NOT EXISTS entity_edges (id TEXT PRIMARY KEY, from_entity_id TEXT NOT NULL REFERENCES entities(id), to_entity_id TEXT NOT NULL REFERENCES entities(id), relation TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0, source_ref TEXT NOT NULL, created_at TEXT NOT NULL);
+        -- v7: the entity spine. The entities and entity_edges tables have
+        -- existed since v1 with writers and zero rows; these two are what make
+        -- them usable. A mention is the same relationship whether it points at a
+        -- document, an opportunity or a capture, so one table with a target_kind
+        -- column beats three near-identical join tables.
+        CREATE TABLE IF NOT EXISTS entity_mentions (
+          entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          target_kind TEXT NOT NULL, target_id TEXT NOT NULL,
+          source_ref TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+          PRIMARY KEY(entity_id, target_kind, target_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_mentions_target ON entity_mentions(target_kind, target_id);
+        -- Resolution auto-matches only on a verified identifier. Anything softer
+        -- lands here and waits for a human, because a missed match is a visible
+        -- duplicate while a wrong merge silently mixes two clients' facts.
+        CREATE TABLE IF NOT EXISTS entity_merge_proposals (
+          id TEXT PRIMARY KEY, scope_id TEXT NOT NULL REFERENCES scopes(id),
+          keep_entity_id TEXT NOT NULL REFERENCES entities(id),
+          merge_entity_id TEXT NOT NULL REFERENCES entities(id),
+          reason TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, decided_at TEXT,
+          UNIQUE(keep_entity_id, merge_entity_id)
+        );
         CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, scope_id TEXT NOT NULL REFERENCES scopes(id), platform TEXT NOT NULL, external_id TEXT, canonical_url TEXT, content_hash TEXT NOT NULL, captured_at TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}');
         CREATE TABLE IF NOT EXISTS capture_envelopes (id TEXT PRIMARY KEY, source_id TEXT REFERENCES sources(id), job_id TEXT, envelope_json TEXT NOT NULL, content_hash TEXT NOT NULL UNIQUE, captured_at TEXT NOT NULL, expires_at TEXT);
         CREATE TABLE IF NOT EXISTS source_deletions (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, reason TEXT NOT NULL, deleted_at TEXT NOT NULL);
