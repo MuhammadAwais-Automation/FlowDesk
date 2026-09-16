@@ -181,7 +181,7 @@ describe('Brain scope transitions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
     fireEvent.change(screen.getByPlaceholderText(/poochein/), { target: { value: 'Yasir Bhai?' } })
     fireEvent.keyDown(screen.getByPlaceholderText(/poochein/), { key: 'Enter' })
-    await waitFor(() => expect(screen.getByText('Private client A')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText(/wiki\/clients\/private-a\.md/)).toBeTruthy())
     expect(api.brainKnowledgeSearch).toHaveBeenCalledWith({ scopeId: 'a', query: 'Yasir Bhai?', limit: 12 })
     fireEvent.click(screen.getByRole('button', { name: 'Library' }))
     expect(screen.queryByPlaceholderText('Search documents…')).toBeTruthy()
