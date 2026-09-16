@@ -197,3 +197,34 @@ describe('Brain turn reader', () => {
     expect(api.agentSessionTurns).not.toHaveBeenCalled()
   })
 })
+
+describe('Brain Ask', () => {
+  const pack = {
+    question: 'Yasir ka rate kya hai',
+    evidence: 'PKR 40,000 monthly.',
+    sections: [{ path: document.path, title: document.title, headingPath: 'Rates', text: 'PKR 40,000 monthly.', score: 2.4 }],
+    pointerFollowed: null,
+    strategy: 'ranked' as const,
+    estimatedTokens: 120,
+    candidatesConsidered: 5,
+  }
+
+  it('answers from the retrieval ladder and shows how it found the answer', async () => {
+    api.brainKnowledgeAnswerPack.mockResolvedValue(pack)
+    await mount()
+    fireEvent.click(nav('Ask'))
+    const box = screen.getByPlaceholderText(/poochein/)
+    fireEvent.change(box, { target: { value: 'Yasir ka rate kya hai' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+
+    await waitFor(() => expect(within(detail()).getByText('PKR 40,000 monthly.')).toBeTruthy())
+    expect(api.brainKnowledgeAnswerPack).toHaveBeenCalledWith({ scopeId: 'a', question: 'Yasir ka rate kya hai' })
+    // The page must no longer run the keyword path the agent stopped using.
+    expect(api.brainKnowledgeSearch).not.toHaveBeenCalled()
+
+    const pane = detail()
+    expect(within(pane).getByRole('button', { name: `${document.path}#Rates` })).toBeTruthy()
+    expect(within(pane).getByText(/rank kiya/)).toBeTruthy()
+    expect(within(pane).getByText('5')).toBeTruthy()
+  })
+})

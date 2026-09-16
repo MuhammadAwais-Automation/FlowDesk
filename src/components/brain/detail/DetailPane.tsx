@@ -1,4 +1,5 @@
 import { ArrowLeft, X } from 'lucide-react'
+import { AnswerDetail } from './AnswerDetail'
 import { DocumentDetail } from './DocumentDetail'
 import { TurnDetail } from './TurnDetail'
 import type { Selection, SelectionStack } from '@/lib/brainSelection'
@@ -45,7 +46,9 @@ export function DetailPane({ stack, onBack, onClear, counters, document, neighbo
           ? <DocumentDetail document={document} neighborhood={neighborhood} events={events} onSelect={onSelect} />
           : <p className="text-sm text-stone-500">Khul raha hai…</p>)}
         {selection?.kind === 'turn' && <TurnBody events={events} eventId={selection.eventId} onSelect={onSelect} />}
-        {selection?.kind === 'answer' && <AnswerPlaceholder pack={pack} />}
+        {selection?.kind === 'answer' && (pack
+          ? <AnswerDetail pack={pack} onSelect={onSelect} />
+          : <p className="text-sm text-stone-500">Jawab dhoonda ja raha hai…</p>)}
       </div>
     </aside>
   )
@@ -83,8 +86,4 @@ function TurnBody({ events, eventId, onSelect }: {
   // empty turn that looks like a loading state which never finishes.
   if (!event) return <p className="text-sm text-stone-500">Ye turn ab is din mein nahi hai.</p>
   return <TurnDetail event={event} events={events} onSelect={onSelect} />
-}
-
-function AnswerPlaceholder({ pack }: { pack: AnswerPack | null }) {
-  return <p className="text-sm text-stone-500">{pack ? pack.evidence : 'Koi sawal nahi poocha gaya.'}</p>
 }

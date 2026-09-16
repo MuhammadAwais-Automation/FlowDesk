@@ -198,17 +198,13 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     setAskBusy(true)
     setError('')
     try {
-      const hits = await api.brainKnowledgeSearch({ scopeId: scope.id, query: askQuery.trim(), limit: 12 })
+      // The same call the agent makes. Before this, the page ran keyword search
+      // while the agent got the ladder -- so the owner could not ask their own
+      // Brain the question their agent could answer.
+      const pack = await api.brainKnowledgeAnswerPack({ scopeId: scope.id, question: askQuery.trim() })
       if (isCurrent()) {
-        setAskPack({
-          question: askQuery.trim(),
-          evidence: hits.length > 0 ? '' : 'No local knowledge matched this question.',
-          sections: hits.map(hit => ({ path: hit.path, title: hit.title, headingPath: '', text: hit.snippet, score: hit.score })),
-          pointerFollowed: null,
-          strategy: 'ranked',
-          estimatedTokens: 0,
-          candidatesConsidered: hits.length,
-        })
+        setAskPack(pack)
+        setStack(current => pushSelection(current, { kind: 'answer', question: pack.question }))
       }
     } catch (reason) {
       if (isCurrent()) setError(reason instanceof Error ? reason.message : String(reason))

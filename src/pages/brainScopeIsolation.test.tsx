@@ -40,6 +40,15 @@ const compactionReport: CompactionReport = {
   scanned: 2, merged: 1, leftStandalone: 1,
   decisions: [{ capturePath: 'captures/x.md', outcome: 'merged', targetPath: 'wiki/clients/private-a.md', topScore: 0.5, secondScore: null }],
 }
+const answerPack = {
+  question: 'Yasir Bhai?',
+  evidence: 'Private [match] A',
+  sections: [{ path: 'wiki/clients/private-a.md', title: 'Private client A', headingPath: 'Rates', text: 'Private [match] A', score: 1 }],
+  pointerFollowed: null,
+  strategy: 'ranked' as const,
+  estimatedTokens: 20,
+  candidatesConsidered: 3,
+}
 const unresolvedLink: UnresolvedLink = { documentPath: 'wiki/clients/private-a.md', documentTitle: 'Private client A', targetPath: 'wiki/people/ghost-a.md' }
 const consent = { requiresConsent: true, provider: 'whatsapp', fields: ['body'], retentionDays: 30, destinationScopeId: 'a' }
 
@@ -64,6 +73,7 @@ const api = {
   brainKnowledgeImportVault: vi.fn(), brainKnowledgeCompact: vi.fn(), brainKnowledgeMigrateMemories: vi.fn(),
   brainExportBackup: vi.fn(), brainImportBackup: vi.fn(),
   brainKnowledgeDailyNote: vi.fn(), brainListEvents: vi.fn(), brainKnowledgeNeighbors: vi.fn(), brainKnowledgeBuildVectors: vi.fn(), brainKnowledgeVectorStatus: vi.fn(),
+  brainKnowledgeAnswerPack: vi.fn(), agentSessionTurns: vi.fn(),
 }
 let Brain: ComponentType
 
@@ -176,14 +186,14 @@ describe('Brain scope transitions', () => {
   })
 
   it('asks a question on Ask and shows a cited passage, independent of the Library search state', async () => {
-    api.brainKnowledgeSearch.mockResolvedValue([searchHit])
+    api.brainKnowledgeAnswerPack.mockResolvedValue(answerPack)
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Ask/ }))
     fireEvent.change(screen.getByPlaceholderText(/poochein/), { target: { value: 'Yasir Bhai?' } })
     fireEvent.keyDown(screen.getByPlaceholderText(/poochein/), { key: 'Enter' })
-    await waitFor(() => expect(screen.getByText(/wiki\/clients\/private-a\.md/)).toBeTruthy())
-    expect(api.brainKnowledgeSearch).toHaveBeenCalledWith({ scopeId: 'a', query: 'Yasir Bhai?', limit: 12 })
-    fireEvent.click(screen.getByRole('button', { name: 'Library' }))
+    await waitFor(() => expect(screen.getAllByText(/wiki\/clients\/private-a\.md/).length).toBeGreaterThan(0))
+    expect(api.brainKnowledgeAnswerPack).toHaveBeenCalledWith({ scopeId: 'a', question: 'Yasir Bhai?' })
+    fireEvent.click(screen.getByRole('button', { name: /^Library/ }))
     expect(screen.queryByPlaceholderText('Search documents…')).toBeTruthy()
   })
 
