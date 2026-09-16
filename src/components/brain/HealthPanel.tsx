@@ -1,4 +1,4 @@
-import { FolderOpen, RotateCcw, Sparkles, Upload } from 'lucide-react'
+import { FolderOpen, RotateCcw, Sparkles, Upload, Users } from 'lucide-react'
 import { Card } from './Card'
 import type { CompactionReport, ManifestRender, VaultImportReport, VectorIndexReport } from '@/types/brainKnowledge'
 
@@ -16,12 +16,16 @@ export interface HealthPanelProps {
   vectorStatus: { documents: number; vectors: number; model: string; failed: boolean } | null
   vectorBuilding: boolean
   vectorReport: VectorIndexReport | null
+  entityCount: number
+  entityBackfilling: boolean
+  entityReport: { scanned: number; created: number; linked: number } | null
   chooseVaultFolder: () => void
   importVault: () => void
   loadManifest: () => void
   runCompaction: () => void
   runMigration: (dryRun: boolean) => void
   buildVectors: () => void
+  runEntityBackfill: () => void
 }
 
 /**
@@ -33,6 +37,7 @@ export function HealthPanel({
   knowledgeVaultRoot, knowledgeImporting, knowledgeImportReport, knowledgeManifest,
   knowledgeCompacting, knowledgeCompactReport, migrating, migrateReport,
   vectorStatus, vectorBuilding, vectorReport,
+  entityCount, entityBackfilling, entityReport, runEntityBackfill,
   chooseVaultFolder, importVault, loadManifest, runCompaction, runMigration, buildVectors,
 }: HealthPanelProps) {
   return (
@@ -84,6 +89,27 @@ export function HealthPanel({
         </div>
         <p className="mt-2 text-xs text-stone-500">Purane "Remember something" se saved memories ko is Library mein copy karta hai. Idempotent — dubara chalana safe hai.</p>
         {migrateReport && <p className="mt-3 text-xs text-stone-600">Scanned {migrateReport.scanned} · Migrated {migrateReport.migrated} · Unchanged {migrateReport.unchanged}{migrateReport.dryRun ? ' · (dry run — kuch likha nahi gaya)' : ''}</p>}
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between">
+          <h2 className="flex items-center gap-2 font-semibold"><Users size={17} /> Log aur cheezein</h2>
+          <button
+            onClick={() => runEntityBackfill()}
+            disabled={entityBackfilling}
+            className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+          >{entityBackfilling ? 'Dhoondh raha hai…' : entityCount > 0 ? 'Dobara scan karein' : 'Log dhoondein'}</button>
+        </div>
+        <p className="mt-2 text-xs text-stone-500">
+          Library ke clients, log aur projects ko alag cheezon ki tarah pehchanta hai, taake "Yasir Bhai ke baare mein sab kuch" ek jagah aa sake.
+          Research aur notes se koi cheez nahi banti — wo kisi ke <em>baare mein</em> hain, khud koi nahi.
+          Dobara chalana bilkul safe hai; jo pehle bana hua hai wo dobara nahi banta.
+        </p>
+        <p className="mt-3 text-xs text-stone-600">{entityCount} pehchani hui cheezein</p>
+        {entityReport && <p className="mt-1 text-xs text-stone-600">
+          Scanned {entityReport.scanned} · Naye {entityReport.created} · Jore {entityReport.linked}
+          {entityReport.created === 0 && entityReport.linked === 0 && ' — sab pehle se maujood tha'}
+        </p>}
       </Card>
 
       <Card>

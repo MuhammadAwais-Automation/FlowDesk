@@ -42,6 +42,7 @@ const api = {
   brainExportBackup: vi.fn(), brainImportBackup: vi.fn(), brainKnowledgeDailyNote: vi.fn(),
   brainListEvents: vi.fn(), brainKnowledgeNeighbors: vi.fn(), brainKnowledgeBuildVectors: vi.fn(),
   brainKnowledgeVectorStatus: vi.fn(), brainKnowledgeAnswerPack: vi.fn(), agentSessionTurns: vi.fn(),
+  brainEntityList: vi.fn(), brainEntityBackfill: vi.fn(),
 }
 
 let Brain: ComponentType
@@ -71,6 +72,7 @@ beforeEach(() => {
   api.brainKnowledgeVectorStatus.mockResolvedValue({ documents: 1, vectors: 0, model: 'test', failed: false })
   api.onBrainEvent.mockReturnValue(() => undefined)
   api.agentSessionTurns.mockResolvedValue([])
+  api.brainEntityList.mockResolvedValue([])
 })
 
 afterEach(cleanup)
@@ -226,5 +228,34 @@ describe('Brain Ask', () => {
     expect(within(pane).getByRole('button', { name: `${document.path}#Rates` })).toBeTruthy()
     expect(within(pane).getByText(/rank kiya/)).toBeTruthy()
     expect(within(pane).getByText('5')).toBeTruthy()
+  })
+})
+
+describe('Brain Health entities', () => {
+  it('finds the people and projects in the Library and reports what it did', async () => {
+    api.brainEntityBackfill.mockResolvedValue({ scanned: 157, created: 24, linked: 24 })
+    await mount()
+    fireEvent.click(nav('Health'))
+
+    expect(screen.getByText('0 pehchani hui cheezein')).toBeTruthy()
+    api.brainEntityList.mockResolvedValue([
+      { id: 'e1', scopeId: 'a', type: 'org', name: 'TWG Trade Finance', createdAt: '', updatedAt: '' },
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Log dhoondein' }))
+
+    await waitFor(() => expect(api.brainEntityBackfill).toHaveBeenCalledWith({ scopeId: 'a' }))
+    await waitFor(() => expect(screen.getByText(/Naye 24/)).toBeTruthy())
+    // The count comes from a refresh, so the button proves it ran rather than
+    // just reporting a number back to itself.
+    await waitFor(() => expect(screen.getByText('1 pehchani hui cheezein')).toBeTruthy())
+  })
+
+  it('says plainly when a second run found nothing new', async () => {
+    api.brainEntityBackfill.mockResolvedValue({ scanned: 157, created: 0, linked: 0 })
+    await mount()
+    fireEvent.click(nav('Health'))
+    fireEvent.click(screen.getByRole('button', { name: 'Log dhoondein' }))
+
+    await waitFor(() => expect(screen.getByText(/sab pehle se maujood tha/)).toBeTruthy())
   })
 })

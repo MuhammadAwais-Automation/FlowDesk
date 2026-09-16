@@ -74,6 +74,7 @@ const api = {
   brainExportBackup: vi.fn(), brainImportBackup: vi.fn(),
   brainKnowledgeDailyNote: vi.fn(), brainListEvents: vi.fn(), brainKnowledgeNeighbors: vi.fn(), brainKnowledgeBuildVectors: vi.fn(), brainKnowledgeVectorStatus: vi.fn(),
   brainKnowledgeAnswerPack: vi.fn(), agentSessionTurns: vi.fn(),
+  brainEntityList: vi.fn(), brainEntityBackfill: vi.fn(),
 }
 let Brain: ComponentType
 
@@ -108,6 +109,7 @@ beforeEach(() => {
   api.brainGetOpportunityEvidence.mockResolvedValue([])
   api.brainListSourceMetrics.mockResolvedValue([])
   api.brainGetConsent.mockResolvedValue(false)
+  api.brainEntityList.mockResolvedValue([])
 })
 
 afterEach(cleanup)

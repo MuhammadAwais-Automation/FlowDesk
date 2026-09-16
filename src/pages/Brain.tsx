@@ -13,6 +13,7 @@ import { BRAIN_TABS } from '@/lib/brainUi'
 import type { BrainCandidate, BrainScope, BrainStatus } from '@/types/brain'
 import type {
   AnswerPack,
+  BrainEntity,
   BrainEvent,
   CompactionReport,
   DocumentNeighborhood,
@@ -75,6 +76,10 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const [vectorBuilding, setVectorBuilding] = useState(false)
   const [vectorReport, setVectorReport] = useState<VectorIndexReport | null>(null)
 
+  const [entities, setEntities] = useState<BrainEntity[]>([])
+  const [entityBackfilling, setEntityBackfilling] = useState(false)
+  const [entityReport, setEntityReport] = useState<{ scanned: number; created: number; linked: number } | null>(null)
+
   const [events, setEvents] = useState<BrainEvent[]>([])
   const [dailyNotePath, setDailyNotePath] = useState<string | null>(null)
 
@@ -94,13 +99,14 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     // shows a note that is one refresh stale.
     const daily = await api.brainKnowledgeDailyNote({ scopeId: activeScope.id })
       .catch(() => ({ written: false, path: '' }))
-    const [nextStatus, nextCandidates, nextKnowledgeCandidates, nextUnresolvedLinks, nextKnowledgeList, nextEvents, nextVectorStatus] = await Promise.all([
+    const [nextStatus, nextCandidates, nextKnowledgeCandidates, nextUnresolvedLinks, nextKnowledgeList, nextEvents, nextVectorStatus, nextEntities] = await Promise.all([
       api.brainGetStatus(), api.brainListCandidates(activeScope.id),
       api.brainKnowledgeListCandidates({ scopeId: activeScope.id }),
       api.brainKnowledgeListUnresolvedLinks({ scopeId: activeScope.id }),
       api.brainKnowledgeList({ scopeId: activeScope.id, limit: 200 }),
       api.brainListEvents({ scopeId: activeScope.id, ...todayBounds() }).catch(() => [] as BrainEvent[]),
       api.brainKnowledgeVectorStatus({ scopeId: activeScope.id }).catch(() => null),
+      api.brainEntityList({ scopeId: activeScope.id }).catch(() => [] as BrainEntity[]),
     ])
     if (selectedScopeId.current !== activeScope.id) return
     setStatus(nextStatus)
@@ -111,6 +117,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     setEvents(nextEvents)
     setDailyNotePath(daily.written ? daily.path : null)
     setVectorStatus(nextVectorStatus)
+    setEntities(nextEntities)
   }, [])
 
   useEffect(() => {
@@ -269,6 +276,18 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     }
   }
 
+  async function runEntityBackfill() {
+    if (!scope) return
+    setEntityBackfilling(true)
+    try {
+      const report = await api.brainEntityBackfill({ scopeId: scope.id })
+      if (selectedScopeId.current === scope.id) setEntityReport(report)
+      await refresh(scope)
+    } finally {
+      if (selectedScopeId.current === scope.id) setEntityBackfilling(false)
+    }
+  }
+
   async function runMigration(dryRun: boolean) {
     const request = ++migrateRequest.current
     setMigrating(true)
@@ -328,6 +347,10 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
             runCompaction={() => void runCompaction()}
             runMigration={dryRun => void runMigration(dryRun)}
             buildVectors={() => void buildVectors()}
+            entityCount={entities.length}
+            entityBackfilling={entityBackfilling}
+            entityReport={entityReport}
+            runEntityBackfill={() => void runEntityBackfill()}
           />
         ) : (
           <>
