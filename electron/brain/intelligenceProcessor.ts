@@ -3,6 +3,7 @@ import { getDomain } from 'tldts'
 import { z } from 'zod'
 import type { BrainSourceMetric, OpportunityCategory } from '../../src/types/brain'
 import type { BrainDatabase } from './database'
+import { EntityStore } from './knowledge/entities'
 import { percentileMomentum, scoreOpportunity } from './intelligence'
 
 export interface IntelligenceAuthor {
@@ -371,5 +372,40 @@ export function persistIntelligence(database: BrainDatabase, result: Intelligenc
     }
   }
   for (const metric of result.metrics) database.recordSourceMetric({ scopeId: result.scopeId, ...metric })
+
   return { opportunities: result.opportunities.length, evidence, metrics: result.metrics.length }
+}
+
+/**
+ * Persists the author entities this module has always found and always thrown
+ * away, which is why 93 opportunities sit in the database with nobody attached.
+ *
+ * Separate from `persistIntelligence`, and called a stage earlier, because of a
+ * real constraint rather than taste: recipe stages talk to each other through
+ * gzipped artifacts on disk, and `recipeDefinitions.ts` deliberately strips
+ * author names out of those before writing. So entities have to be stored while
+ * the result is still in memory -- by the time persistence runs at `summarize`,
+ * the names are gone, correctly.
+ *
+ * The consequence is stated rather than hidden: entities are created here, but
+ * they are **not** linked to their opportunities, because the identity does not
+ * survive to the stage where opportunities get their ids. Closing that gap means
+ * either putting handles into the durable artifact -- a privacy decision that
+ * belongs to the owner -- or restructuring the recipe stages.
+ *
+ * Only verified handles are kept. A verified handle is evidence of identity; a
+ * display name is one post's text, and trusting it would mint an entity per post.
+ */
+export function persistIntelligenceEntities(database: BrainDatabase, result: IntelligenceResult): { entities: number } {
+  const entities = new EntityStore(database.handle)
+  let stored = 0
+  for (const author of result.entities) {
+    if (!author.verifiedHandle) continue
+    entities.resolve({
+      scopeId: result.scopeId, type: 'person', name: author.name,
+      identifier: { kind: 'handle', value: author.verifiedHandle },
+    })
+    stored += 1
+  }
+  return { entities: stored }
 }

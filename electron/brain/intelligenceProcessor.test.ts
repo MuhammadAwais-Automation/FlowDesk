@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BrainDatabase } from './database'
+import { EntityStore } from './knowledge/entities'
 import {
   calculateRecency,
   extractBuyerIntent,
@@ -12,6 +13,7 @@ import {
   parseIntelligenceResult,
   processIntelligence,
   persistIntelligence,
+  persistIntelligenceEntities,
 } from './intelligenceProcessor'
 
 const roots: string[] = []
@@ -418,6 +420,60 @@ describe('deterministic intelligence golden fixtures', () => {
     weaker.opportunities[0].evidence[0] = { ...weaker.opportunities[0].evidence[0], id: 'weaker-evidence', sourceRef: 'li:weaker' }
     persistIntelligence(database, weaker)
     expect(database.listOpportunities({ scopeId: scope.id })[0].score).toBe(initialScore)
+    database.close()
+  })
+})
+
+describe('persistIntelligenceEntities', () => {
+  function withDatabase() {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-entities-intel-'))
+    roots.push(root)
+    const database = new BrainDatabase(join(root, 'brain.sqlite'))
+    const scope = database.ensureScope({ type: 'client', externalRef: 'client-e', name: 'Client E' })
+    return { database, scope, store: new EntityStore(database.handle) }
+  }
+
+  const post = (externalId: string, author: { name: string; verifiedHandle?: string | null }) => ({
+    platform: 'linkedin', externalId, sourceRef: `https://linkedin.test/posts/${externalId}`,
+    text: 'Looking for a React developer for a blocked dashboard.', observedAt: now, engagement: 4,
+    author: { name: author.name, verifiedHandle: author.verifiedHandle ?? null },
+  })
+
+  it('stores an entity for a verified author', () => {
+    const { database, scope, store } = withDatabase()
+    const result = processIntelligence({
+      scopeId: scope.id, now, icpTerms: ['react'],
+      records: [post('a', { name: 'Alex Rivera', verifiedHandle: '@alexrivera' })],
+    })
+
+    expect(persistIntelligenceEntities(database, result)).toEqual({ entities: 1 })
+    expect(store.list([scope.id]).map(entity => entity.name)).toEqual(['Alex Rivera'])
+    database.close()
+  })
+
+  it('stores nothing for an author with no verified handle', () => {
+    const { database, scope, store } = withDatabase()
+    const result = processIntelligence({
+      scopeId: scope.id, now, icpTerms: ['react'],
+      records: [post('b', { name: 'Someone' })],
+    })
+
+    // A display name is one post's text. Trusting it would mint an entity per post.
+    expect(persistIntelligenceEntities(database, result)).toEqual({ entities: 0 })
+    expect(store.list([scope.id])).toHaveLength(0)
+    database.close()
+  })
+
+  it('resolves the same handle to one entity across runs', () => {
+    const { database, scope, store } = withDatabase()
+    const result = processIntelligence({
+      scopeId: scope.id, now, icpTerms: ['react'],
+      records: [post('c', { name: 'Alex Rivera', verifiedHandle: '@alexrivera' })],
+    })
+    persistIntelligenceEntities(database, result)
+    persistIntelligenceEntities(database, result)
+
+    expect(store.list([scope.id])).toHaveLength(1)
     database.close()
   })
 })

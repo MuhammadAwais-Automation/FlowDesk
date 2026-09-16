@@ -6,7 +6,7 @@ import { z } from 'zod'
 import type { BrainJob } from '../../src/types/brain'
 import type { ArtifactStore } from './artifactStore'
 import type { BrainDatabase } from './database'
-import { parseIntelligenceResult, persistIntelligence, processIntelligence, type IntelligenceRecord } from './intelligenceProcessor'
+import { parseIntelligenceResult, persistIntelligence, persistIntelligenceEntities, processIntelligence, type IntelligenceRecord } from './intelligenceProcessor'
 import { socialRecipeRequestSchema } from './socialRecipes'
 import { capabilityFailure, type BrainCapabilityErrorCode, type BrainCapabilityRequest, type BrainCapabilityResult } from './capabilityProtocol'
 
@@ -122,6 +122,9 @@ export class RecipeStepHandlers {
       })
       const queryTerms = typeof job.parameters.query === 'string' ? job.parameters.query.toLowerCase().match(/[a-z0-9]+/g) ?? [] : []
       const result = processIntelligence({ scopeId: job.scopeId, records: intelligenceRecords, icpTerms: [...socialIntelligenceKeywordConfig.icpTerms, ...queryTerms], now: job.createdAt })
+      // Store the authors before stripping them: names must not reach a durable
+      // artifact, but the Brain is entitled to know who it heard from.
+      persistIntelligenceEntities(this.database, result)
       // Display names are not required by later recipe stages, so keep them out of
       // durable derived artifacts. Raw provider content remains retention-governed.
       const safe = { ...result, entities: [] }
