@@ -1,7 +1,7 @@
 import type { CustomTool } from './browser'
 import type { ProjectSessionSnapshot } from './project'
 import type { BrainCandidate, BrainContextPack, BrainDecisionBrief, BrainJob, BrainMemory, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainQuery, BrainScope, BrainScopeQuery, BrainSourceMetric, BrainStatus, MemoryKind, OpportunityEvidence } from './brain'
-import type { BrainEvent, CompactionReport, DocumentNeighborhood, VectorIndexReport, DecideCandidateInput, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, ProposeCandidateInput, UnresolvedLink, VaultImportReport } from './brainKnowledge'
+import type { AnswerPack, BrainEvent, CompactionReport, DocumentNeighborhood, VectorIndexReport, DecideCandidateInput, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, ProposeCandidateInput, UnresolvedLink, VaultImportReport } from './brainKnowledge'
 
 export interface GmailSession {
   email: string
@@ -195,6 +195,7 @@ export interface ElectronAPI {
   brainKnowledgeSearch: (input: { scopeId: string; query: string; types?: KnowledgeDocType[]; limit?: number }) => Promise<DocumentSearchHit[]>
   brainKnowledgeDailyNote: (input: { scopeId: string; date?: string }) => Promise<{ date: string; path: string; written: boolean; eventCount: number; body: string }>
   brainKnowledgeNeighbors: (input: { scopeId: string; path: string; depth?: number }) => Promise<DocumentNeighborhood>
+  brainKnowledgeAnswerPack: (input: { scopeId: string; question: string; tokenBudget?: number }) => Promise<AnswerPack>
   brainKnowledgeBuildVectors: (input: { scopeId: string }) => Promise<VectorIndexReport>
   brainKnowledgeVectorStatus: (input: { scopeId: string }) => Promise<{ documents: number; vectors: number; model: string; failed: boolean }>
   brainListEvents: (input: { scopeId: string; from: string; to: string; limit?: number }) => Promise<BrainEvent[]>

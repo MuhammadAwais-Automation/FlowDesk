@@ -20,6 +20,7 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite'
+import type { AnswerPack, AnswerPackSection } from '../../../src/types/brainKnowledge'
 import { type DocumentStore, shadowByNearestScope } from './documents'
 
 type SqlRow = Record<string, unknown>
@@ -117,24 +118,7 @@ export interface AnswerPackInput {
   maxSections?: number
 }
 
-export interface AnswerPackSection {
-  path: string
-  title: string
-  headingPath: string
-  text: string
-  score: number
-}
-
-export interface AnswerPack {
-  question: string
-  /** The text to hand the model. Never empty — see `NO_EVIDENCE`. */
-  evidence: string
-  sections: AnswerPackSection[]
-  pointerFollowed: { from: string; to: string } | null
-  strategy: 'strong-signal' | 'ranked' | 'fuzzy' | 'none'
-  estimatedTokens: number
-  candidatesConsidered: number
-}
+export type { AnswerPack, AnswerPackSection }
 
 const NO_EVIDENCE = 'No local knowledge matched this question.'
 

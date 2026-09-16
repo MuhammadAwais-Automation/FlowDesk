@@ -240,3 +240,28 @@ export interface VectorSearchHit {
   title: string
   score: number
 }
+
+/** One verbatim passage the retrieval ladder chose, with where it came from. */
+export interface AnswerPackSection {
+  path: string
+  title: string
+  headingPath: string
+  text: string
+  score: number
+}
+
+/**
+ * What the retrieval ladder returns for one question: assembled evidence plus
+ * enough provenance to see how it was found. `strategy` and `pointerFollowed`
+ * are what make the answer checkable rather than merely plausible.
+ */
+export interface AnswerPack {
+  question: string
+  /** The text to hand the model. Never empty. */
+  evidence: string
+  sections: AnswerPackSection[]
+  pointerFollowed: { from: string; to: string } | null
+  strategy: 'strong-signal' | 'ranked' | 'fuzzy' | 'none'
+  estimatedTokens: number
+  candidatesConsidered: number
+}
