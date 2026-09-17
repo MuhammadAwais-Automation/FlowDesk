@@ -258,84 +258,6 @@ ${body}
   })()`
 }
 
-export function uploadImageScript(
-  imageBase64: string,
-  projectId: string,
-  mimeType: string = 'image/jpeg',
-  fileName: string = 'image.jpg',
-): string {
-  return buildScript(`
-    var token = await getAccessToken()
-    if (!token) return { ok: false, error: 'no Google access token found — not signed in to Google Flow, or the session has expired' }
-
-    var body = {
-      clientContext: { projectId: ${JSON.stringify(projectId)}, tool: 'PINHOLE' },
-      fileName: ${JSON.stringify(fileName)},
-      imageBytes: ${JSON.stringify(imageBase64)},
-      isHidden: false,
-      isUserUploaded: true,
-      mimeType: ${JSON.stringify(mimeType)},
-    }
-
-    var res = await callSandboxApi('/v1/flow/uploadImage', body, token)
-    var media = res.json && res.json.media
-    if (res.status !== 200 || !media || !media.name) {
-      return {
-        ok: false,
-        error: 'Google Flow did not confirm the upload (HTTP ' + res.status + ')',
-        detail: res.raw ? res.raw.slice(0, 400) : null,
-      }
-    }
-
-    return { ok: true, uploaded: true, mediaId: media.name }
-  `)
-}
-
-/**
- * Generates a short video, in one of two modes Flow's own UI offers:
- *
- * - `INGREDIENTS`: one or more reference images, composed into a video
- *   (`POST /v1/video:batchAsyncGenerateVideoReferenceImages`,
- *   `referenceImages: [{ mediaId, imageUsageType: "IMAGE_USAGE_TYPE_ASSET" }]`).
- * - `FRAMES`: a single start image animated
- *   (`POST /v1/video:batchAsyncGenerateVideoStartImage`,
- *   `startImage: { mediaId }`).
- *
- * Both endpoints share the same envelope — only ONE `clientContext` (unlike
- * image generation's two), `userPaygateTier` sitting directly on it, and the
- * same response shape (`workflows[0].metadata.primaryMediaId` is what
- * `getVideoStatusScript` polls, NOT `workflows[0].name`).
- *
- * ── Two models, three confirmed combinations, one confirmed unsupported ──
- *
- * | model | mode | key | how confirmed |
- * |---|---|---|---|
- * | Veo 3.1 Lite | INGREDIENTS | `veo_3_1_r2v_lite` | 2 live generations |
- * | Omni Flash | INGREDIENTS | `abra_r2v_6s` | 1 live generation |
- * | Omni Flash | FRAMES | `abra_i2v_6s` | 1 live generation |
- *
- * Veo 3.1 Lite + FRAMES has NOT been captured — the reference kit's
- * `models.json` suggests a name for it, but two other values from that same
- * table (this project's own earlier `abra_r2v_6s` guess, and a start-image
- * model key) turned out wrong when checked, so it is not extrapolated to
- * here; requesting it returns a clear error instead of a guess.
- *
- * An end frame (`endImage`) was tried with Omni Flash FRAMES and Google's
- * own API rejected it outright: `"Unknown name \\"endImage\\" at
- * 'requests[0]': Cannot find field."` — Omni Flash's FRAMES mode does not
- * support an end frame at all, confirmed by the server's own error, not
- * inferred. Whether Veo 3.1 Lite's FRAMES mode (unconfirmed either way)
- * would accept one is unknown, so `endImageMediaId` is not offered on any
- * model until that is captured. `startImage`'s real captured shape also
- * carried a `cropCoordinates` object (the UI's own crop rectangle) — omitted
- * here as untested-necessary rather than guessed, following this project's
- * own rule against including a field never confirmed required.
- *
- * Omni Flash's model key names bake the duration into the key itself
- * (`_6s`) — the user selected 6s here; 4s/8s/10s almost certainly exist as
- * sibling keys (`abra_r2v_4s`, etc.) but none of those has been captured,
- * so only 6s is offered.
- */
 export type VideoModel = 'VEO_3_1_LITE' | 'OMNI_FLASH'
 export type VideoMode = 'INGREDIENTS' | 'FRAMES'
 
@@ -616,3 +538,181 @@ export function listProjectsScript(): string {
   `)
 }
 
+
+/**
+ * Deletes a project.
+ *
+ *   QI2zvc ["projects/<id>"] -> []
+ *
+ * Captured deleting the throwaway probe project. The empty reply carries no
+ * confirmation of any kind, so this reports what it asked for rather than
+ * claiming the project is gone — there is nothing in the answer to check.
+ */
+export function deleteProjectScript(projectId: string): string {
+  return buildScript(`
+    var id = ${JSON.stringify(projectId)}
+    var out = await callBatch('QI2zvc', ['projects/' + id])
+    if (!out.ok) return out
+    return {
+      ok: true,
+      requested: true,
+      projectId: id,
+      note: 'Flow answers a delete with an empty result, so this confirms the request was accepted, not that the project is gone. List projects to verify.',
+    }
+  `)
+}
+
+/**
+ * Uploads a local image and returns its media id.
+ *
+ *   maseQ [<ctx>,"<base64>","<mimeType>",1,null,null,null,null,"<fileName>",
+ *          null,"<uuid>","<uuid>"]
+ *     -> [["<mediaId>","<projectId>", …
+ *
+ * The first capture of this was cut off at the recorder's 200KB payload limit,
+ * which showed the base64 but not what followed it. Re-captured with a small
+ * image so the whole shape was visible — the tail (mime type, file name, the
+ * two uuids) would otherwise have been guesswork.
+ */
+export function uploadImageScript(base64: string, projectId: string, mimeType: string, fileName: string): string {
+  return buildScript(`
+    var projectId = ${JSON.stringify(projectId)}
+    var token
+    try {
+      token = await getRecaptchaToken('IMAGE_UPLOAD')
+    } catch (e) {
+      return { ok: false, error: 'could not mint a reCAPTCHA token: ' + String((e && e.message) || e) }
+    }
+
+    var arg = [
+      clientContext(projectId, token),
+      ${JSON.stringify(base64)},
+      ${JSON.stringify(mimeType)},
+      1, null, null, null, null,
+      ${JSON.stringify(fileName)},
+      null,
+      uuidUpper(), uuidUpper(),
+    ]
+
+    var out = await callBatch('maseQ', arg)
+    if (!out.ok) return out
+
+    var first = Array.isArray(out.payload) ? out.payload[0] : null
+    var mediaId = Array.isArray(first) ? first[0] : null
+    if (typeof mediaId !== 'string' || !mediaId) {
+      return { ok: false, error: 'Google Flow did not return a media id for the upload', detail: JSON.stringify(out.payload).slice(0, 300) }
+    }
+    return { ok: true, uploaded: true, mediaId: mediaId, fileName: ${JSON.stringify(fileName)} }
+  `)
+}
+
+/**
+ * Fetches the bytes of one media item.
+ *
+ * There is no download *request* to copy. Flow's own download button builds a
+ * Blob in the page and saves it — the capture shows `blob:https://flow.google.com/…`
+ * and no network call at all. What it saves was already fetched when the media
+ * was displayed, from `https://flow.google.com/asb/<token>` (same origin, plain
+ * GET, image/webp).
+ *
+ * So this fetches that URL directly. The URL comes from a listing
+ * (`listProjectsScript` thumbnails, `listProjectMediaScript`) rather than being
+ * constructed, because the token in it is opaque and not derivable from a media
+ * id.
+ */
+export function fetchMediaUrlScript(mediaUrl: string): string {
+  return buildScript(`
+    var url = ${JSON.stringify(mediaUrl)}
+    if (url.indexOf('/asb/') === -1 && url.indexOf('googleusercontent.com') === -1) {
+      return { ok: false, error: 'refusing to fetch a URL that is not a Flow media URL: ' + url.slice(0, 80) }
+    }
+
+    var res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) return { ok: false, error: 'media fetch failed (HTTP ' + res.status + ') -- Flow media URLs expire, so re-list the project and try the fresh URL' }
+
+    var blob = await res.blob()
+    var base64 = await new Promise(function (resolve, reject) {
+      var reader = new FileReader()
+      reader.onerror = function () { reject(new Error('could not read the media bytes')) }
+      reader.onload = function () { resolve(String(reader.result).split(',')[1] || '') }
+      reader.readAsDataURL(blob)
+    })
+    return { ok: true, contentType: blob.type || 'image/webp', byteSize: blob.size, base64: base64 }
+  `)
+}
+
+/**
+ * Generates a video from an existing image as its first frame.
+ *
+ *   MZZa6b [[[[null,null,[[["<prompt>"]]]],[[null,"<mediaId>"]],"<modelKey>",1,
+ *             null,[null,null,null,null,"<uuid>","<uuid>"]]],<ctx>,["<uuid>",2]]
+ *
+ * Same envelope as text-to-video with one extra element: the source media id.
+ * The captured model key was `abra_r2v_10s` — r2v where text-to-video used
+ * t2v — so the key is passed through rather than mapped, as elsewhere here.
+ */
+export function generateVideoFromImageScript(prompt: string, projectId: string, mediaId: string, modelKey: string): string {
+  return buildScript(`
+    var token
+    try {
+      token = await getRecaptchaToken('VIDEO_GENERATION')
+    } catch (e) {
+      return { ok: false, error: 'could not mint a reCAPTCHA token: ' + String((e && e.message) || e) }
+    }
+
+    var arg = [
+      [[
+        [null, null, [[[${JSON.stringify(prompt)}]]]],
+        [[null, ${JSON.stringify(mediaId)}]],
+        ${JSON.stringify(modelKey)},
+        1,
+        null,
+        [null, null, null, null, uuidUpper(), uuidUpper()],
+      ]],
+      clientContext(${JSON.stringify(projectId)}, token),
+      [uuidUpper(), 2],
+    ]
+
+    var out = await callBatch('MZZa6b', arg)
+    if (!out.ok) return out
+    return { ok: true, requested: true, model: ${JSON.stringify(modelKey)}, result: safe(out.payload) }
+  `)
+}
+
+/**
+ * Extends an existing video.
+ *
+ *   jIps6 [[[[null,"<sourceVideoId>",<startFrame>,<endFrame>],
+ *            [null,null,[[["<prompt>"]]]],"abra_edit",1,
+ *            [null,"<sceneId>",null,null,"<uuid>"]]],<ctx>,["<uuid>",2]]
+ *
+ * The captured call used frames 0..240 of the source and the model key
+ * `abra_edit`. Both are sent as captured: the frame range is the only one
+ * demonstrated, and inventing a different one would be inventing behaviour.
+ */
+export function extendVideoScript(prompt: string, projectId: string, sourceVideoId: string, sceneId: string): string {
+  return buildScript(`
+    var token
+    try {
+      token = await getRecaptchaToken('VIDEO_GENERATION')
+    } catch (e) {
+      return { ok: false, error: 'could not mint a reCAPTCHA token: ' + String((e && e.message) || e) }
+    }
+
+    var arg = [
+      [[
+        [null, ${JSON.stringify(sourceVideoId)}, 0, 240],
+        [null, null, [[[${JSON.stringify(prompt)}]]]],
+        'abra_edit',
+        1,
+        [null, ${JSON.stringify(sceneId)}, null, null, uuidUpper()],
+      ]],
+      clientContext(${JSON.stringify(projectId)}, token),
+      [uuidUpper(), 2],
+    ]
+
+    var out = await callBatch('jIps6', arg)
+    if (!out.ok) return out
+    return { ok: true, requested: true, result: safe(out.payload) }
+  `)
+}

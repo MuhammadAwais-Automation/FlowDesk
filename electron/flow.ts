@@ -9,9 +9,10 @@ import { join, extname } from 'node:path'
 import { app } from 'electron'
 import { findViewByUrl, listViewUrls } from './sessions'
 import {
-  createProjectScript, renameProjectScript, listProjectsScript, listProjectMediaScript,
-  uploadImageScript, generateImageScript, generateVideoScript, videoModelsScript,
-  mediaStatusScript, getCreditsScript,
+  createProjectScript, renameProjectScript, deleteProjectScript, listProjectsScript,
+  listProjectMediaScript, uploadImageScript, fetchMediaUrlScript,
+  generateImageScript, generateVideoScript, generateVideoFromImageScript,
+  extendVideoScript, videoModelsScript, mediaStatusScript, getCreditsScript,
   type ImageModel,
 } from './flowBridge'
 
@@ -100,30 +101,6 @@ export function flowCreateProject(projectTitle: string): Promise<FlowResult> {
   return call(createProjectScript(title))
 }
 
-const MIME_BY_EXT: Record<string, string> = {
-  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
-}
-
-/**
- * Uploads a local image file so it can be used as a reference in
- * flowGenerateImage or as a video's start frame. Returns a mediaId.
- */
-export async function flowUploadImage(localFilePath: string, projectId: string): Promise<FlowResult> {
-  const path = String(localFilePath ?? '').trim()
-  if (!path) return { ok: false, error: 'refusing to upload without a local file path' }
-  const id = String(projectId ?? '').trim()
-  if (!id) return { ok: false, error: 'refusing to upload without a projectId' }
-
-  let bytes: Buffer
-  try {
-    bytes = await readFile(path)
-  } catch (e) {
-    return { ok: false, error: `could not read ${path}: ${e instanceof Error ? e.message : String(e)}` }
-  }
-  const mimeType = MIME_BY_EXT[extname(path).toLowerCase()] ?? 'image/jpeg'
-  return call(uploadImageScript(bytes.toString('base64'), id, mimeType, path.split(/[\\/]/).pop() ?? 'image.jpg'))
-}
-
 export interface MediaBytesResult {
   ok: boolean
   error?: string
@@ -131,95 +108,6 @@ export interface MediaBytesResult {
   contentType?: string
 }
 
-/**
- * Fetches the real bytes of a Flow media item (generated or uploaded),
- * shared by `flowDownloadImage` (saves to disk) and `flowViewImage` (hands
- * the bytes to the agent so it can actually see the image, not just a
- * mediaId).
- *
- * `getMediaScript`'s endpoint (the reference kit's `/v1/media/{id}` REST
- * call) returned HTTP 400 INVALID_ARGUMENT against a real live test — the
- * kit's shape was wrong for this build, same lesson as the video model key.
- * The fix uses the SAME `media.getMediaUrlRedirect` tRPC endpoint already
- * confirmed working for image generation's `viewUrl`, live-tested again
- * here against a freshly uploaded image (loaded correctly, real pixel
- * dimensions back).
- *
- * That endpoint needs the browser's own session cookies (NextAuth,
- * same-origin) — a page-context `fetch()` to it fails with a CORS error the
- * instant it redirects to a different origin CDN, even though an `<img>` tag
- * in that same page loads it fine (images aren't CORS-checked the way fetch
- * is). Node's fetch has no such restriction, so the fix is to read the real
- * session cookies via Electron's cookie API and attach them manually here,
- * rather than trying to extract bytes from inside the page at all.
- */
-async function fetchMediaBytes(mediaId: string): Promise<MediaBytesResult> {
-  const view = findFlowView()
-  if (!view) return { ok: false, error: NOT_OPEN }
-
-  // Origin comes from the view rather than a constant: Flow moved from
-  // labs.google to flow.google.com, and a hardcoded origin here would fetch
-  // with cookies for a host the session is no longer on.
-  let origin: string
-  try {
-    origin = new URL(view.webContents.getURL()).origin
-  } catch {
-    return { ok: false, error: NOT_OPEN }
-  }
-
-  const cookies = await view.webContents.session.cookies.get({ url: origin })
-  const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ')
-
-  const url = `${origin}/fx/api/trpc/media.getMediaUrlRedirect?name=${encodeURIComponent(mediaId)}&mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL`
-
-  let res: Response
-  try {
-    res = await fetch(url, { headers: { Cookie: cookieHeader } })
-  } catch (e) {
-    return { ok: false, error: `download request failed: ${e instanceof Error ? e.message : String(e)}` }
-  }
-  if (!res.ok) return { ok: false, error: `download failed (HTTP ${res.status})` }
-
-  const contentType = res.headers.get('content-type') ?? 'image/jpeg'
-  return { ok: true, bytes: Buffer.from(await res.arrayBuffer()), contentType }
-}
-
-/**
- * Downloads a generated (or uploaded) image to disk. `mediaId` comes from a
- * flowGenerateImage or flowUploadImage result.
- */
-export async function flowDownloadImage(mediaId: string): Promise<FlowResult> {
-  const id = String(mediaId ?? '').trim()
-  if (!id) return { ok: false, error: 'refusing to download without a mediaId' }
-
-  const fetched = await fetchMediaBytes(id)
-  if (!fetched.ok || !fetched.bytes) return { ok: false, error: fetched.error }
-
-  const ext = fetched.contentType?.includes('png') ? 'png' : fetched.contentType?.includes('webp') ? 'webp' : 'jpg'
-  const dir = join(app.getPath('downloads'), 'FlowDesk Studio')
-  await mkdir(dir, { recursive: true })
-  const filePath = join(dir, `${id}.${ext}`)
-  await writeFile(filePath, fetched.bytes)
-  return { ok: true, downloaded: true, filePath }
-}
-
-/**
- * Fetches a generated (or uploaded) image's real bytes so the agent tool
- * layer can attach them as an image content block — the agent actually
- * SEES the image this way, rather than only getting a mediaId/URL back in
- * text. `mediaId` comes from a flowGenerateImage or flowUploadImage result.
- */
-export async function flowViewImage(mediaId: string): Promise<MediaBytesResult> {
-  const id = String(mediaId ?? '').trim()
-  if (!id) return { ok: false, error: 'refusing to view without a mediaId' }
-  return fetchMediaBytes(id)
-}
-
-/**
- * Generates one video. `modelKey` is passed through verbatim — call
- * `flowVideoModels` for the keys Flow itself accepts, rather than trusting a
- * table; this bridge's own history records one being wrong.
- */
 export function flowGenerateVideo(prompt: string, projectId: string, modelKey: string): Promise<FlowResult> {
   const text = String(prompt ?? '').trim()
   if (!text) return Promise.resolve({ ok: false, error: 'refusing to generate a video without a prompt' })
@@ -260,5 +148,111 @@ export function flowListProjectMedia(projectId: string): Promise<FlowResult> {
 /** The video model keys Flow accepts, read from Flow rather than hardcoded. */
 export function flowVideoModels(): Promise<FlowResult> {
   return call(videoModelsScript())
+}
+
+/** Deletes a project. Flow answers with nothing, so this reports the request. */
+export function flowDeleteProject(projectId: string): Promise<FlowResult> {
+  const id = String(projectId ?? '').trim()
+  if (!id) return Promise.resolve({ ok: false, error: 'refusing to delete without a projectId' })
+  return call(deleteProjectScript(id))
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
+}
+
+/** Uploads a local image into a project and returns its media id. */
+export async function flowUploadImage(localFilePath: string, projectId: string): Promise<FlowResult> {
+  const path = String(localFilePath ?? '').trim()
+  if (!path) return { ok: false, error: 'refusing to upload without a local file path' }
+  const id = String(projectId ?? '').trim()
+  if (!id) return { ok: false, error: 'refusing to upload without a projectId' }
+
+  let bytes: Buffer
+  try {
+    bytes = await readFile(path)
+  } catch (e) {
+    return { ok: false, error: `could not read ${path}: ${e instanceof Error ? e.message : String(e)}` }
+  }
+  const mimeType = MIME_BY_EXT[extname(path).toLowerCase()] ?? 'image/jpeg'
+  const fileName = path.split(/[\/]/).pop() ?? 'image.jpg'
+  return call(uploadImageScript(bytes.toString('base64'), id, mimeType, fileName))
+}
+
+export interface MediaBytesResult {
+  ok: boolean
+  error?: string
+  bytes?: Buffer
+  contentType?: string
+}
+
+/**
+ * Fetches one media item's bytes from its Flow URL.
+ *
+ * The URL has to come from a listing rather than be built from a media id: the
+ * token in it is opaque, and Flow's own download is a Blob save with no
+ * network request to copy.
+ */
+async function fetchMediaBytes(mediaUrl: string): Promise<MediaBytesResult> {
+  const fetched = await call(fetchMediaUrlScript(mediaUrl))
+  if (!fetched.ok || typeof fetched.base64 !== 'string') {
+    return { ok: false, error: typeof fetched.error === 'string' ? fetched.error : 'media fetch failed' }
+  }
+  return {
+    ok: true,
+    bytes: Buffer.from(fetched.base64, 'base64'),
+    contentType: typeof fetched.contentType === 'string' ? fetched.contentType : 'image/webp',
+  }
+}
+
+/** Saves one media item to disk, given its URL from a listing. */
+export async function flowDownloadMedia(mediaUrl: string): Promise<FlowResult> {
+  const url = String(mediaUrl ?? '').trim()
+  if (!url) return { ok: false, error: 'refusing to download without a media URL' }
+
+  const fetched = await fetchMediaBytes(url)
+  if (!fetched.ok || !fetched.bytes) return { ok: false, error: fetched.error }
+
+  const ext = fetched.contentType?.includes('png') ? 'png'
+    : fetched.contentType?.includes('webp') ? 'webp'
+    : fetched.contentType?.includes('mp4') ? 'mp4' : 'jpg'
+  const dir = join(app.getPath('downloads'), 'FlowDesk Studio')
+  await mkdir(dir, { recursive: true })
+  const filePath = join(dir, `flow-${Date.now()}.${ext}`)
+  await writeFile(filePath, fetched.bytes)
+  return { ok: true, downloaded: true, filePath, byteSize: fetched.bytes.length }
+}
+
+/** Hands the raw bytes back, so the agent can actually look at the image. */
+export function flowViewMedia(mediaUrl: string): Promise<MediaBytesResult> {
+  const url = String(mediaUrl ?? '').trim()
+  if (!url) return Promise.resolve({ ok: false, error: 'refusing to view without a media URL' })
+  return fetchMediaBytes(url)
+}
+
+/** Generates a video using an existing image as its first frame. */
+export function flowGenerateVideoFromImage(prompt: string, projectId: string, mediaId: string, modelKey: string): Promise<FlowResult> {
+  const text = String(prompt ?? '').trim()
+  if (!text) return Promise.resolve({ ok: false, error: 'refusing to generate a video without a prompt' })
+  const id = String(projectId ?? '').trim()
+  if (!id) return Promise.resolve({ ok: false, error: 'refusing to generate without a projectId' })
+  const media = String(mediaId ?? '').trim()
+  if (!media) return Promise.resolve({ ok: false, error: 'refusing to generate without a source mediaId' })
+  const model = String(modelKey ?? '').trim()
+  if (!model) return Promise.resolve({ ok: false, error: 'refusing to generate without a model key -- call flowVideoModels first' })
+  return call(generateVideoFromImageScript(text, id, media, model))
+}
+
+/** Extends an existing video from its first 240 frames -- the only range captured. */
+export function flowExtendVideo(prompt: string, projectId: string, sourceVideoId: string, sceneId: string): Promise<FlowResult> {
+  const text = String(prompt ?? '').trim()
+  if (!text) return Promise.resolve({ ok: false, error: 'refusing to extend without a prompt' })
+  const id = String(projectId ?? '').trim()
+  if (!id) return Promise.resolve({ ok: false, error: 'refusing to extend without a projectId' })
+  const source = String(sourceVideoId ?? '').trim()
+  if (!source) return Promise.resolve({ ok: false, error: 'refusing to extend without a source video id' })
+  const scene = String(sceneId ?? '').trim()
+  if (!scene) return Promise.resolve({ ok: false, error: 'refusing to extend without a scene id' })
+  return call(extendVideoScript(text, id, source, scene))
 }
 

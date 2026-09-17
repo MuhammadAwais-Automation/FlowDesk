@@ -1,6 +1,11 @@
 import { z } from 'zod'
 import { tool } from '@anthropic-ai/claude-agent-sdk'
-import { flowGenerateImage, flowCreateProject, flowListProjects, flowUploadImage, flowDownloadImage, flowGenerateVideo, flowGetCredits, flowViewImage, flowRenameProject, flowListProjectMedia, flowVideoModels, flowMediaStatus } from '../flow'
+import {
+  flowListProjects, flowCreateProject, flowRenameProject, flowDeleteProject,
+  flowListProjectMedia, flowUploadImage, flowDownloadMedia, flowViewMedia,
+  flowGenerateImage, flowGenerateVideo, flowGenerateVideoFromImage, flowExtendVideo,
+  flowVideoModels, flowMediaStatus, flowGetCredits,
+} from '../flow'
 import type { RequestApproval } from './approval'
 
 /**
@@ -44,9 +49,9 @@ const MIME_BY_CONTENT_TYPE: Record<string, 'image/jpeg' | 'image/png' | 'image/w
  * fails, the text result still goes through — a failed "also attach the
  * image" step should not make the whole tool call look like it failed.
  */
-async function withImagePreview(mediaId: string, textValue: unknown) {
+async function withImagePreview(mediaUrl: string, textValue: unknown) {
   let textBlockText = text(textValue)
-  const fetched = await flowViewImage(mediaId)
+  const fetched = await flowViewMedia(mediaUrl)
 
   const content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[] = []
   if (fetched.ok && fetched.bytes) {
@@ -96,17 +101,18 @@ export function createFlowTools(requestApproval: RequestApproval) {
           input: { prompt, projectId, imageModel },
         })
         if (!approved) return denied('The image was not generated.')
-        const generated = await flowGenerateImage(prompt, projectId, imageModel)
-        if (!generated.ok || typeof generated.mediaId !== 'string') return result(generated)
-        return withImagePreview(generated.mediaId, generated)
+        // No preview attached: generation answers with ids, and a fetchable
+        // media URL only appears in a later listing. Claiming to show the
+        // image here would mean guessing that URL.
+        return result(await flowGenerateImage(prompt, projectId, imageModel))
       },
     ),
     tool(
       'studio_flow_upload_image',
-      'Upload a local image file to Google Flow using an internal API Google does not officially publish, so it can be used as a visual reference or as a video start frame. Carries the same account-risk as other Google Flow tools. Returns a mediaId usable with studio_flow_generate_image (referenceMediaIds) or studio_flow_generate_video. Always requires approval.',
+      'Upload a local image file into a Google Flow project and get back a mediaId, usable as the first frame for studio_flow_generate_video_from_image. Carries the same account-risk as the other Google Flow tools. Always requires approval.',
       {
         localFilePath: z.string().min(1).describe('Absolute path to a local image file (jpg/png/webp).'),
-        projectId: z.string().min(1).describe('The project id from an already-open Google Flow project URL.'),
+        projectId: z.string().min(1).describe('Project id, from studio_flow_list_projects.'),
       },
       async ({ localFilePath, projectId }) => {
         const approved = await requestApproval({
@@ -120,37 +126,94 @@ export function createFlowTools(requestApproval: RequestApproval) {
       },
     ),
     tool(
-      'studio_flow_view_image',
-      'View a Google Flow image (generated or uploaded), attaching the real image so you can actually see it — not just its mediaId. Needs the mediaId from a prior studio_flow_generate_image or studio_flow_upload_image result. Read-only against the account (no credits spent), but still uses an internal API Google does not officially publish, so approval is still required.',
+      'studio_flow_download_media',
+      'Save one Google Flow image or video to disk. Takes the media URL from studio_flow_list_projects or studio_flow_list_project_media — not a media id, because Flow own download is a browser-side blob save with no request to copy, and the fetchable URL only appears in a listing. Those URLs expire, so re-list if the fetch fails. Read-only against the account, no credits spent.',
       {
-        mediaId: z.string().min(1).describe('The mediaId from a prior generate/upload result.'),
+        mediaUrl: z.string().min(1).describe('A Flow media URL from a listing result.'),
       },
-      async ({ mediaId }) => {
+      async ({ mediaUrl }) => {
         const approved = await requestApproval({
-          tool: 'studio_flow_view_image',
-          title: 'View a Google Flow image',
-          detail: `mediaId: ${mediaId}\n\n— this calls an internal Google API that is not officially published. —`,
-          input: { mediaId },
+          tool: 'studio_flow_download_media',
+          title: 'Download media from Google Flow',
+          detail: '— this calls an internal Google API that is not officially published. Read-only. —',
+          input: { mediaUrl },
         })
-        if (!approved) return denied('The image was not viewed.')
-        return withImagePreview(mediaId, { ok: true, mediaId })
+        if (!approved) return denied('Nothing was downloaded.')
+        return result(await flowDownloadMedia(mediaUrl))
       },
     ),
     tool(
-      'studio_flow_download_image',
-      'Download a Google Flow-generated image to a local FlowDesk Studio downloads folder using an internal API Google does not officially publish. Needs the mediaId from a prior studio_flow_generate_image result. Read-only against the account (no credits spent), but still uses the unofficial API, so approval is still required.',
+      'studio_flow_view_media',
+      'Look at a Google Flow image yourself — fetches the bytes and attaches them, so you can judge what was actually generated instead of trusting a prompt. Takes a media URL from a listing. No credits spent.',
       {
-        mediaId: z.string().min(1).describe('The mediaId from a studio_flow_generate_image result.'),
+        mediaUrl: z.string().min(1).describe('A Flow media URL from a listing result.'),
       },
-      async ({ mediaId }) => {
+      async ({ mediaUrl }) => {
         const approved = await requestApproval({
-          tool: 'studio_flow_download_image',
-          title: 'Download an image from Google Flow',
-          detail: `mediaId: ${mediaId}\n\n— this calls an internal Google API that is not officially published. —`,
-          input: { mediaId },
+          tool: 'studio_flow_view_media',
+          title: 'View media from Google Flow',
+          detail: '— this calls an internal Google API that is not officially published. Read-only. —',
+          input: { mediaUrl },
         })
-        if (!approved) return denied('The image was not downloaded.')
-        return result(await flowDownloadImage(mediaId))
+        if (!approved) return denied('The media was not fetched.')
+        return withImagePreview(mediaUrl, { mediaUrl })
+      },
+    ),
+    tool(
+      'studio_flow_delete_project',
+      'Delete a Google Flow project. This cannot be undone. Flow answers a delete with nothing at all, so the result confirms the request was accepted rather than that the project is gone — list projects afterwards to check. Always requires approval.',
+      {
+        projectId: z.string().min(1).describe('Project id, from studio_flow_list_projects.'),
+      },
+      async ({ projectId }) => {
+        const approved = await requestApproval({
+          tool: 'studio_flow_delete_project',
+          title: 'Delete a Google Flow project',
+          detail: `Project ${projectId} will be deleted permanently.\n\n— this calls an internal Google API that is not officially published. —`,
+          input: { projectId },
+        })
+        if (!approved) return denied('The project was not deleted.')
+        return result(await flowDeleteProject(projectId))
+      },
+    ),
+    tool(
+      'studio_flow_generate_video_from_image',
+      'Generate a video that starts from an existing image, rather than from text alone. The mediaId comes from studio_flow_upload_image or a project media listing. Call studio_flow_video_models for a valid modelKey — the captured key for this mode was abra_r2v_10s, which differs from the text-to-video keys. Spends real Flow credits.',
+      {
+        prompt: z.string().min(1).max(4000).describe('How the image should move. Sent word for word.'),
+        projectId: z.string().min(1).describe('Project id, from studio_flow_list_projects.'),
+        mediaId: z.string().min(1).describe('The image to animate, from an upload or a media listing.'),
+        modelKey: z.string().min(1).describe('A model key from studio_flow_video_models, for example abra_r2v_10s.'),
+      },
+      async ({ prompt, projectId, mediaId, modelKey }) => {
+        const approved = await requestApproval({
+          tool: 'studio_flow_generate_video_from_image',
+          title: 'Generate a video from an image in Google Flow',
+          detail: `${prompt}\n\nModel: ${modelKey}\n\n— calls an internal Google API that is not officially published, and spends real Flow credits. —`,
+          input: { prompt, projectId, mediaId, modelKey },
+        })
+        if (!approved) return denied('The video was not generated.')
+        return result(await flowGenerateVideoFromImage(prompt, projectId, mediaId, modelKey))
+      },
+    ),
+    tool(
+      'studio_flow_extend_video',
+      'Extend an existing Google Flow video, continuing the scene. Uses the first 240 frames of the source — the only range that has been captured — and the abra_edit model. Spends real Flow credits.',
+      {
+        prompt: z.string().min(1).max(4000).describe('How the scene should continue. Sent word for word.'),
+        projectId: z.string().min(1).describe('Project id, from studio_flow_list_projects.'),
+        sourceVideoId: z.string().min(1).describe('The video to continue, from a media listing.'),
+        sceneId: z.string().min(1).describe('The scene id the source video belongs to, from a media listing.'),
+      },
+      async ({ prompt, projectId, sourceVideoId, sceneId }) => {
+        const approved = await requestApproval({
+          tool: 'studio_flow_extend_video',
+          title: 'Extend a video in Google Flow',
+          detail: `${prompt}\n\n— calls an internal Google API that is not officially published, and spends real Flow credits. —`,
+          input: { prompt, projectId, sourceVideoId, sceneId },
+        })
+        if (!approved) return denied('The video was not extended.')
+        return result(await flowExtendVideo(prompt, projectId, sourceVideoId, sceneId))
       },
     ),
     tool(
@@ -289,8 +352,11 @@ export const FLOW_TOOL_BASE_NAMES = [
   'studio_flow_media_status',
   'studio_flow_generate_image',
   'studio_flow_upload_image',
-  'studio_flow_view_image',
-  'studio_flow_download_image',
+  'studio_flow_download_media',
+  'studio_flow_view_media',
+  'studio_flow_delete_project',
+  'studio_flow_generate_video_from_image',
+  'studio_flow_extend_video',
   'studio_flow_generate_video',
   'studio_flow_get_credits',
 ] as const

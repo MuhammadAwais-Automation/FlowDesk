@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./sessions', () => ({ findViewByUrl: () => null, listViewUrls: () => ['https://mail.google.com/'] }))
 
-const { flowGenerateImage, flowCreateProject, flowUploadImage, flowDownloadImage, flowGenerateVideo, flowMediaStatus, flowGetCredits, flowViewImage, flowRenameProject, flowListProjectMedia, flowVideoModels } = await import('./flow')
+const { flowGenerateImage, flowCreateProject, flowUploadImage, flowDownloadMedia, flowGenerateVideo, flowGenerateVideoFromImage, flowExtendVideo, flowDeleteProject, flowMediaStatus, flowGetCredits, flowViewMedia, flowRenameProject, flowListProjectMedia, flowVideoModels } = await import('./flow')
 
 describe('flow generate image', () => {
   it('refuses an empty prompt before touching the network', () => {
@@ -63,13 +63,13 @@ describe('flow upload image', () => {
 
 describe('flow download image', () => {
   it('refuses without a mediaId', async () => {
-    const out = await flowDownloadImage('   ')
+    const out = await flowDownloadMedia('   ')
     expect(out.ok).toBe(false)
-    expect(String(out.error)).toContain('mediaId')
+    expect(String(out.error)).toContain('media URL')
   })
 
   it('reports Google Flow not being open as a result, not a throw', async () => {
-    const out = await flowDownloadImage('media-1')
+    const out = await flowDownloadMedia('media-1')
     expect(out.ok).toBe(false)
     expect(String(out.error)).toContain('Google Flow is not open')
   })
@@ -149,13 +149,13 @@ describe('flow video models', () => {
 
 describe('flow view image', () => {
   it('refuses without a mediaId', async () => {
-    const out = await flowViewImage('   ')
+    const out = await flowViewMedia('   ')
     expect(out.ok).toBe(false)
-    expect(String(out.error)).toContain('mediaId')
+    expect(String(out.error)).toContain('media URL')
   })
 
   it('reports Google Flow not being open as a result, not a throw', async () => {
-    const out = await flowViewImage('media-1')
+    const out = await flowViewMedia('media-1')
     expect(out.ok).toBe(false)
     expect(String(out.error)).toContain('Google Flow is not open')
   })
@@ -168,3 +168,42 @@ describe('flow get credits', () => {
     expect(String(out.error)).toContain('Google Flow is not open')
   })
 })
+
+describe('flow delete project', () => {
+  it('refuses without a projectId', async () => {
+    const out = await flowDeleteProject('   ')
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('projectId')
+  })
+})
+
+describe('flow generate video from image', () => {
+  it('refuses without a source mediaId', async () => {
+    const out = await flowGenerateVideoFromImage('move it', 'proj-1', '  ', 'abra_r2v_10s')
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('mediaId')
+  })
+
+  it('refuses without a model key rather than inventing one', async () => {
+    // The r2v key differs from the t2v keys; a default here would be a guess
+    // paid for with the owner's credits.
+    const out = await flowGenerateVideoFromImage('move it', 'proj-1', 'media-1', '  ')
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('model key')
+  })
+})
+
+describe('flow extend video', () => {
+  it('refuses without a source video id', async () => {
+    const out = await flowExtendVideo('continue', 'proj-1', '  ', 'scene-1')
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('source video id')
+  })
+
+  it('refuses without a scene id', async () => {
+    const out = await flowExtendVideo('continue', 'proj-1', 'vid-1', '  ')
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('scene id')
+  })
+})
+
