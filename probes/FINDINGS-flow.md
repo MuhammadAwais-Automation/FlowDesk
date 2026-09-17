@@ -372,3 +372,110 @@ Chromium build sends — but the underlying fact remains that this is not how
 Google intends Flow to be automated. `studio_flow_generate_image` requires
 approval on every call, and the approval dialog states the account-risk
 explicitly rather than presenting this as an ordinary write action.
+
+---
+
+# 2026-09-17 — Google replaced Flow. Everything above is written against a dead API.
+
+## What happened
+
+Flow moved from `labs.google/fx/tools/flow` (Next.js, tRPC) to
+`flow.google.com` (Angular, `batchexecute`). The build label in the live page
+is `boq_labs-ai-sandbox-frontend_20260915.10_p0` — 15 September 2026.
+
+This went unnoticed for weeks because every host check in FlowDesk was the
+literal string `labs.google`. A Flow page open on screen reported "Google Flow
+is not open", and the discovery recorder was never offered the view, so no
+capture could be taken to notice any of it. One diagnostic line settled it:
+
+```
+dom-ready https://flow.google.com/ -> NO HOST MATCH
+```
+
+## The old API is gone, verified
+
+`probes/flow-02-old-endpoints.js` GETs each old tRPC route on the new origin.
+Every one answers **200 with the Angular app's HTML** — including a control
+route that certainly does not exist (`flowdesk.thisRouteIsNotReal`).
+
+The control is what makes this readable. Without it, "200" looks like "the
+route is alive"; with it, 200-plus-HTML clearly means the SPA serves its shell
+for every path and the tRPC API is not there at all. That is also the whole
+explanation for `studio_flow_create_project`'s HTTP 400: it POSTs JSON to a
+path that returns a web page.
+
+The 2026-09-17 capture also contains **zero** calls to
+`aisandbox-pa.googleapis.com`, the origin every image/video script here posts
+to. It was not merely unused during that capture — the page never touched it.
+
+## The new protocol
+
+`POST /_/AiSandboxAngularFrontend/data/batchexecute?rpcids=<id>&bl=&f.sid=&_reqid=&rt=c`
+
+```
+f.req=[[["<rpcid>","<argument as a JSON STRING>",null,"generic"]]]
+at=<token>
+```
+
+The inner argument is double-encoded — a JSON string inside the array, not an
+object. Responses are `)]}'` followed by alternating length/JSON lines; the
+result rides in a row shaped `["wrb.fr","<rpcid>","<payload as JSON string>",…]`.
+The number of framing rows varies, so the envelope must be searched for by
+rpcid rather than indexed.
+
+Per-session values, confirmed by `probes/flow-01-boq-params.js` against the
+captured request's own values rather than assumed from boq convention:
+
+| Sent as | Read from |
+|---|---|
+| `at` | `WIZ_global_data.SNlM0e` |
+| `bl` | `WIZ_global_data.cfb2h` |
+| `f.sid` | `WIZ_global_data.FdrFJe` |
+
+## RPC ids seen so far
+
+16 appeared in the capture. Five had readable arguments:
+
+| rpcid | Argument | Meaning |
+|---|---|---|
+| `UpteDb` | `["projects/*",21,null,null,null,null,[1]]` | **List projects — built and live-tested: 21 projects returned, newest "Mascot Project"** |
+| `nzlxg` | `[]` | Returns `[1050,1,2,2,null,1050]`. Replays cleanly (`flow-03-credits-rpc.js`). **Suspected credits; the mapping is NOT verified** — 1050 matching a plausible balance is suggestive, not proof. Settle it by reading the balance off the Flow UI and comparing. |
+| `xI9TVb` | `["userPreferences/"]` | User preferences |
+| `NfrxTb` | `[null,22]` | Returns `[]`. Unidentified. |
+| `WuwhI` | `[["PAGE_VIEW",…]]` | Analytics. Ignore. |
+
+Not yet identified, seen but without readable payloads in this capture:
+`LPzVkd`, `qJcgMc`, `HTrJv`, `mrlkwd`, `ngNC2`, `yBhWQ`, `tRARke`, `Zzl0ze`,
+`ve2Lsc`, `as29s`, `DTaVef`.
+
+None of them can be mapped from this capture, because the only action
+performed while recording was loading the project list. Create, rename,
+delete, generate and upload were never exercised.
+
+## Status of every shipped tool
+
+| Tool | State |
+|---|---|
+| `studio_flow_list_projects` | **Works.** Rebuilt on `UpteDb`; 21 projects returned live. |
+| `studio_flow_create_project` | **Dead.** tRPC `project.createProject` returns HTML. Confirmed HTTP 400 in use. |
+| `studio_flow_generate_image` | **Dead.** Posts to `aisandbox-pa.googleapis.com`, which the new app never calls. |
+| `studio_flow_upload_image` | **Dead.** Same origin. |
+| `studio_flow_download_image` / `studio_flow_view_image` | **Dead.** `media.getMediaUrlRedirect` returns HTML. |
+| `studio_flow_generate_video` | **Dead.** Same origin. |
+| `studio_flow_get_video_status` | **Dead.** Same origin. |
+| `studio_flow_get_credits` | **Dead**, but `nzlxg` is the likely replacement pending the check above. |
+
+## What each remaining tool needs
+
+One captured action each, performed once by hand with the recorder attached —
+the recorder now attaches, so this is the only blocker. In rough order of cost
+to the account:
+
+1. **Create a project** — no credits spent.
+2. **Rename / delete a project** — no credits; neither was ever built, and
+   `project.createProject` was the only naming call the old API had.
+3. **Open a project and view an existing image** — no credits; recovers
+   download/view.
+4. **Generate one image** — spends credits.
+5. **Generate one video** — spends more credits, and only one exact
+   tier/aspect combination was ever captured even on the old API.
