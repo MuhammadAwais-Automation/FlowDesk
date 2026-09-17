@@ -41,6 +41,8 @@ export interface AppSettings {
   minimizeToTray: boolean
   theme: 'light' | 'dark' | 'system'
   leadAgentProvider: 'claude' | 'codex' | 'antigravity'
+  /** Which Claude model the lead agent runs on. Ignored by the other providers. */
+  claudeAgentModel: 'claude-opus-5' | 'claude-sonnet-5' | 'claude-haiku-4-5'
   /**
    * When true, the Agent tab skips the approval dialog for every tool call —
    * Claude's built-in tools (Bash, Write, Edit, ...) and FlowDesk's own

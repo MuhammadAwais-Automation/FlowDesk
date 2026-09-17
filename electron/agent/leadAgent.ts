@@ -192,6 +192,8 @@ export type AgentStreamEvent =
  */
 export interface AgentTurnOptions {
   resumeSessionId?: string
+  /** Which Claude model to run. Omitted falls back to the SDK's own default. */
+  model?: string
 }
 
 export function agentFailureMessage(error: unknown): string {
@@ -291,7 +293,16 @@ export async function* runClaudeAgentTurn(
     // coding-agent system prompt this agent does not act on -- it drives
     // browser workers, WhatsApp, NotebookLM and the Brain, none of which the
     // preset knows about.
-    systemPrompt: AGENT_SYSTEM_PROMPT,
+    ...(options.model ? { model: options.model } : {}),
+    // The agent is told which model it is, because it can no longer read it
+    // anywhere else. The claude_code preset used to state it; dropping that
+    // preset left the agent answering "I don't know my own version", which is
+    // a worse answer than the truth we already have here.
+    systemPrompt: options.model
+      ? `${AGENT_SYSTEM_PROMPT}
+
+You are running on the model \`${options.model}\`. Say so if asked.`
+      : AGENT_SYSTEM_PROMPT,
     // A guardrail, not a product limitation: complex delegated work can
     // reasonably need several tool/result cycles, but must still stop
     // before an accidental loop consumes the desktop session forever.

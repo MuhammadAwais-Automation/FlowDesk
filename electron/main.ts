@@ -1790,7 +1790,7 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
   const pendingToolCalls = new Map<string, agentSessions.AgentToolCallEntry>()
   for await (const event of runAgentTurn(
     promptToSend, abortController, projectRuntime, leadAgentProvider,
-    requestApproval, bypassPermissions, { resumeSessionId },
+    requestApproval, bypassPermissions, { resumeSessionId, model: configuredSettings.claudeAgentModel },
   )) {
     if (event.type === 'provider_session') providerSessionId = event.id
     if (event.type === 'done') {
