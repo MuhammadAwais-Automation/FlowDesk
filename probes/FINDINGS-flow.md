@@ -479,3 +479,118 @@ to the account:
 4. **Generate one image** — spends credits.
 5. **Generate one video** — spends more credits, and only one exact
    tier/aspect combination was ever captured even on the old API.
+
+---
+
+# 2026-09-17 (second pass) — the new API, mapped
+
+Captured while the owner performed, by hand, in one session: create a project,
+rename it twice (to `FlowDeskProbeAlpha7` then `FlowDeskProbeBeta7`), generate
+an image, generate a video, download both. 109 calls over 426 seconds.
+
+**Zero calls to `aisandbox-pa.googleapis.com`.** Image and video generation
+have moved *into* batchexecute; the separate media origin the old bridge used
+is not contacted at all any more.
+
+## Actions, with their real arguments
+
+Every row below came from a request the owner actually made, not from a guess.
+`<RECAPTCHA>` is an enterprise token beginning `0cAF`.
+
+### `jHPbke` — create project
+
+```
+["projects/*",[null,["Sep 17 - 19:26"]],[null,22]]
+-> ["39baa7ee-f1c0-4db2-a2ae-4da11f527a50",["Sep 17 - 19:26"]]
+```
+
+The title is the app's own timestamp default. **A new project is created
+unnamed-by-the-user and renamed afterwards** — which is why searching the
+capture for `FlowDeskProbeAlpha7` found the rename, not the creation.
+
+### `o8DA4` — rename project
+
+```
+["projects/<id>",["<newTitle>"],[["project_title"]],[null,22]]
+-> ["<newTitle>"]
+```
+
+A field-masked update: `[["project_title"]]` names the field being written.
+The old API had no rename at all, so this is new capability, not a port.
+
+### `ogiZ0b` — generate image
+
+```
+[ null,
+  [[ null,null,null, <seed>, 3, "NARWHAL", null,
+     [null,22,null,null,null,"<projectId>",null,null,null,null,[<RECAPTCHA>,1]],
+     [[["a boy in jungle"]]],          <- the prompt, nested three deep
+     null,null,null, "<uuidA>", "<uuidB>" ]],
+  1,
+  [null,22,null,null,null,"<projectId>",null,null,null,null,[<RECAPTCHA>,1]],
+  ["<uuidC>"] ]
+```
+
+The recaptcha token appears at **two** levels again, exactly as the old
+aisandbox call did. The already-solved technique carries over: the page has
+`grecaptcha.enterprise` loaded, and `grecaptcha.enterprise.execute()` in-page
+mints a fresh token (see the header of this file).
+
+### `YhhmEf` — generate video
+
+```
+[ [[ [null,null,[[["viral tiktok video about kids playing, …"]]]],
+     "abra_t2v_8s", 1, null,
+     [null,null,null,null,"<uuidA>","<uuidB>"] ]],
+  [null,22,null,null,null,"<projectId>",null,null,null,null,[<RECAPTCHA>,1]],
+  ["<uuidC>",2] ]
+-> [null,1038,[["99594be4-…",null,null,["Kids playing viral video",[…],null,null,"8136473e-…","BEB8D9AD-…",…
+```
+
+`1038` in the response is very close to the 1050 `nzlxg` reports, which is
+consistent with a credit balance after one video — **consistent, not proof**.
+
+### `Zzl0ze` — list media inside a project
+
+```
+["projects/<id>",null,null,null,[1]]
+-> [null,null,null,[["00298a45-…",1,"Man smiling ou…", …
+```
+
+Carries media ids and their prompts. This is what a "show me what is in this
+project" tool would call, and likely the route to a media id for download.
+
+### `ngNC2` — get one project
+
+```
+["tools/PINHOLE/projects/<id>"]  -> ["<id>",["<title>"],null,null,null,…
+```
+
+### `yBhWQ` — available video models
+
+```
+[] -> [[["veo_3_1_quality",1],["veo_3_1_lite",1],["abra",1],["veo_3_1_fast",1],…
+```
+
+Answers a question the old bridge could only guess at: which model keys are
+valid. The old code hardcoded one combination and the FINDINGS above record
+that the reference kit's table could not be trusted.
+
+### Still unidentified
+
+`mrlkwd` (`["<projectId>"]` -> `[]`), `as29s`, `jwpduf`
+(`[null,null,[["<mediaId>"]]]`), `HTrJv`, `tRARke`, `LPzVkd`, `qJcgMc`,
+`ve2Lsc`, `DTaVef`, `NfrxTb`, `xI9TVb` (userPreferences), `WuwhI` (analytics).
+
+**Delete was never performed**, so no delete call is in this capture and none
+should be inferred from `mrlkwd` just because its shape would fit.
+
+## What can now be rebuilt, and in what order
+
+1. `create_project` — `jHPbke`. No recaptcha, no credits. Cheapest.
+2. `rename_project` — `o8DA4`. New capability.
+3. `list_project_media` — `Zzl0ze`. Read-only.
+4. `get_credits` — `nzlxg`, pending the balance check.
+5. `generate_image` — `ogiZ0b`. Needs recaptcha; spends credits.
+6. `generate_video` — `YhhmEf`. Same, plus a model key from `yBhWQ`.
+7. `delete_project` — needs one more captured action.
