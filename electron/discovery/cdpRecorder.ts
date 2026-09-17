@@ -1,5 +1,5 @@
 import { writeFile, mkdir } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { WebContents } from 'electron'
 
 /**
@@ -197,6 +197,24 @@ export interface CdpRecorderOptions {
   onAttach?: (info: string) => void
 }
 
+
+/**
+ * Appends one line about whether this recorder actually attached.
+ *
+ * Attach status only ever went to console.log, which is invisible to anyone
+ * reading the capture afterwards -- a missing capture file looked identical
+ * whether the recorder failed to attach, attached and saw nothing matching, or
+ * was never asked to run. Same shape as logLinkRoutingDecision in sessions.ts.
+ */
+function note(outFile: string, line: string): void {
+  try {
+    const fs: typeof import('node:fs') = require('node:fs')
+    fs.mkdirSync(dirname(outFile), { recursive: true })
+    fs.appendFileSync(join(dirname(outFile), '_cdp-attach.log'), `${new Date().toISOString()} ${line}
+`)
+  } catch { /* discovery aid only */ }
+}
+
 const attached = new WeakSet<WebContents>()
 
 export function startCdpRecorder(options: CdpRecorderOptions): () => void {
@@ -206,15 +224,28 @@ export function startCdpRecorder(options: CdpRecorderOptions): () => void {
   const matchesUrl = (url: string) => urlMatches.some(m => url.includes(m))
   const bufferLimit = options.bufferLimit ?? 1500
 
-  if (attached.has(webContents)) return () => {}
+  if (attached.has(webContents)) {
+    note(outFile, `already attached, skipping: ${urlMatch}`)
+    return () => {}
+  }
 
   try {
-    if (!webContents.debugger.isAttached()) webContents.debugger.attach('1.3')
+    if (webContents.debugger.isAttached()) {
+      // Someone else holds the one debugger slot -- DevTools, most likely.
+      // Worth recording rather than proceeding silently: commands sent over a
+      // session this recorder did not open produce no capture and no error.
+      note(outFile, `another debugger already holds ${urlMatch}; recording anyway`)
+    } else {
+      webContents.debugger.attach('1.3')
+    }
   } catch (error) {
-    options.onAttach?.(`FAILED to attach: ${error instanceof Error ? error.message : String(error)}`)
+    const message = error instanceof Error ? error.message : String(error)
+    options.onAttach?.(`FAILED to attach: ${message}`)
+    note(outFile, `FAILED to attach to ${urlMatch}: ${message}`)
     return () => {}
   }
   attached.add(webContents)
+  note(outFile, `attached to ${urlMatch}`)
 
   const log: CdpCapture[] = []
   const pending = new Map<string, PendingRequest>()
