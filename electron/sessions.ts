@@ -33,6 +33,22 @@ function logLinkRoutingDecision(via: 'window-open' | 'will-navigate', from: stri
  * it costs a debugger attachment on that view, which conflicts with opening
  * DevTools there, so a host stays listed only while it is being studied.
  */
+/**
+ * Records which URLs the CDP recorder was offered and which it took. Writes to
+ * the same file cdpRecorder.ts uses, so one file answers "was it even asked?"
+ * and "did it attach?" together.
+ */
+function logCdpDecision(url: string, matchedHost: string | undefined, packaged: boolean) {
+  if (packaged) return
+  try {
+    const fs: typeof import('node:fs') = require('node:fs')
+    const dir = join(app.getAppPath(), 'probes', 'out')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.appendFileSync(join(dir, '_cdp-attach.log'), `${new Date().toISOString()} dom-ready ${url} -> ${matchedHost ?? 'NO HOST MATCH'}
+`)
+  } catch { /* discovery aid only */ }
+}
+
 const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'labs.google']
 
 /**
@@ -216,6 +232,11 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
     // Discovery only. Writes captures containing real message text and contact
     // names, so it never runs in a packaged build.
     const cdpHost = app.isPackaged ? undefined : CDP_RECORDER_HOSTS.find(host => currentUrl.includes(host))
+    // Every dom-ready, matched or not. Without this a view that never triggers
+    // the recorder is indistinguishable from one where the recorder attached
+    // and saw nothing -- the exact ambiguity that stalled the Google Flow
+    // project-list capture, with the page provably open on screen.
+    logCdpDecision(currentUrl, cdpHost, app.isPackaged)
     if (cdpHost) {
       startCdpRecorder({
         webContents: view.webContents,
