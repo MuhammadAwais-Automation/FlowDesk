@@ -598,7 +598,11 @@ export function listProjectsScript(): string {
     // lines. Scan every line for the envelope carrying our rpcid rather than
     // assuming a position: the number of framing rows varies per response.
     var payload = null
-    var lines = text.split('\n')
+    // String.fromCharCode(10), not '\\n': this body is a TS template literal,
+    // so an escape written here is resolved by TypeScript and the page would
+    // receive a real newline inside a string literal -- an unterminated string,
+    // which surfaces only as "script error" at run time.
+    var lines = text.split(String.fromCharCode(10))
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim()
       if (line.charAt(0) !== '[') continue
