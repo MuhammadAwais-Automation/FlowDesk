@@ -7,7 +7,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join, extname } from 'node:path'
 import { app } from 'electron'
-import { findViewByUrl } from './sessions'
+import { findViewByUrl, listViewUrls } from './sessions'
 import {
   generateImageScript, createProjectScript, uploadImageScript,
   generateVideoScript, getVideoStatusScript, getCreditsScript,
@@ -23,9 +23,22 @@ export interface FlowResult {
 const NOT_OPEN =
   'Google Flow is not open. Open the Studio page in FlowDesk, select Google Flow, choose a Google account, and open a project, then retry.'
 
+/**
+ * Says what is open when Flow is not, because "not open" alone is
+ * undiagnosable: a Google sign-in redirect, a still-loading tab and a genuinely
+ * closed Studio all produce the same sentence, and the owner reporting "it IS
+ * open" has no way to show otherwise.
+ */
+function openUrlSummary(): string {
+  const urls = listViewUrls()
+    .map(url => { try { return new URL(url).host } catch { return url } })
+    .filter(host => host.length > 0)
+  return urls.length > 0 ? ` Open right now: ${[...new Set(urls)].join(', ')}.` : ' No browser views are open at all.'
+}
+
 async function call(script: string): Promise<FlowResult> {
   const view = findViewByUrl('labs.google')
-  if (!view) return { ok: false, error: NOT_OPEN }
+  if (!view) return { ok: false, error: NOT_OPEN + openUrlSummary() }
   try {
     const result = await view.webContents.executeJavaScript(script)
     if (result && typeof result === 'object') return result as FlowResult

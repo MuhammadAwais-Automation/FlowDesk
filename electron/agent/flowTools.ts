@@ -81,7 +81,7 @@ export function createFlowTools(requestApproval: RequestApproval) {
     ),
     tool(
       'studio_flow_generate_image',
-      'Generate one image in Google Flow (Google AI image/video studio) using an internal API Google does not officially publish — not a documented integration, and using it carries real risk to the current user Google account. Spends real Flow subscription credits. Needs an existing project id, taken from that project own URL (labs.google/fx/tools/flow/project/<projectId>) — creating a new project is not supported yet. Always requires approval; the approval dialog names the account-risk explicitly.',
+      'Generate one image in Google Flow (Google AI image/video studio) using an internal API Google does not officially publish — not a documented integration, and using it carries real risk to the current user Google account. Spends real Flow subscription credits. Needs an existing project id — either from studio_flow_create_project, or from an open project own URL (labs.google/fx/tools/flow/project/<projectId>). Always requires approval; the approval dialog names the account-risk explicitly.',
       {
         prompt: z.string().min(1).max(4000).describe('The exact image prompt. Sent word for word.'),
         projectId: z.string().min(1).describe('The project id from an already-open Google Flow project URL.'),

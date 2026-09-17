@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('./sessions', () => ({ findViewByUrl: () => null }))
+vi.mock('./sessions', () => ({ findViewByUrl: () => null, listViewUrls: () => ['https://mail.google.com/'] }))
 
 const { flowGenerateImage, flowCreateProject, flowUploadImage, flowDownloadImage, flowGenerateVideo, flowGetVideoStatus, flowGetCredits, flowViewImage } = await import('./flow')
 
@@ -23,6 +23,8 @@ describe('flow generate image', () => {
     const out = await flowGenerateImage('a cat', 'proj-1')
     expect(out.ok).toBe(false)
     expect(String(out.error)).toContain('Google Flow is not open')
+    // The message has to say what IS open, or 'not open' is undiagnosable.
+    expect(String(out.error)).toContain('mail.google.com')
   })
 })
 

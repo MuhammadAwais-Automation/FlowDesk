@@ -488,6 +488,15 @@ export function findViewByUrl(match: string): WebContentsView | null {
   return null
 }
 
+/** Every live view URL, for error messages that have to say what IS open. */
+export function listViewUrls(): string[] {
+  const urls: string[] = []
+  for (const view of viewCache.values()) {
+    try { urls.push(view.webContents.getURL()) } catch { /* destroyed */ }
+  }
+  return urls
+}
+
 export function getWhatsAppView(): WebContentsView | null {
   return findViewByUrl('web.whatsapp.com')
 }
