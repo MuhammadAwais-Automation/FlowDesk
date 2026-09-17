@@ -60,7 +60,11 @@ const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'flow.google.com', '
  * directly against the page's own Resource Timing API.
  */
 const CDP_RECORDER_EXTRA_HOSTS: Record<string, string[]> = {
-  'flow.google.com': ['aisandbox-pa.googleapis.com', 'labs.google'],
+  // googleusercontent is where Flow's media actually lives: a download in the
+  // UI fetches from there, so without it a download is invisible to the
+  // recorder in exactly the way aisandbox once was -- indistinguishable from
+  // "the user did not do it".
+  'flow.google.com': ['aisandbox-pa.googleapis.com', 'labs.google', 'googleusercontent.com'],
   'labs.google': ['aisandbox-pa.googleapis.com'],
 }
 
