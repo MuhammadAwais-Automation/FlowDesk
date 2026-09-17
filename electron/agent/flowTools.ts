@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { tool } from '@anthropic-ai/claude-agent-sdk'
-import { flowGenerateImage, flowCreateProject, flowListProjects, flowUploadImage, flowDownloadImage, flowGenerateVideo, flowGetVideoStatus, flowGetCredits, flowViewImage } from '../flow'
+import { flowGenerateImage, flowCreateProject, flowListProjects, flowUploadImage, flowDownloadImage, flowGenerateVideo, flowGetCredits, flowViewImage, flowRenameProject, flowListProjectMedia, flowVideoModels, flowMediaStatus } from '../flow'
 import type { RequestApproval } from './approval'
 
 /**
@@ -84,23 +84,19 @@ export function createFlowTools(requestApproval: RequestApproval) {
       'Generate one image in Google Flow (Google AI image/video studio) using an internal API Google does not officially publish — not a documented integration, and using it carries real risk to the current user Google account. Spends real Flow subscription credits. Needs an existing project id — either from studio_flow_create_project, or from an open project own URL (labs.google/fx/tools/flow/project/<projectId>). Always requires approval; the approval dialog names the account-risk explicitly.',
       {
         prompt: z.string().min(1).max(4000).describe('The exact image prompt. Sent word for word.'),
-        projectId: z.string().min(1).describe('The project id from an already-open Google Flow project URL.'),
-        aspectRatio: z.enum(['LANDSCAPE', 'LANDSCAPE_4_3', 'SQUARE', 'PORTRAIT_3_4', 'PORTRAIT']).optional()
-          .describe('16:9, 4:3, 1:1, 3:4, or 9:16. Defaults to LANDSCAPE (16:9).'),
+        projectId: z.string().min(1).describe('Project id, from studio_flow_list_projects or studio_flow_create_project.'),
         imageModel: z.enum(['NANO_BANANA_PRO', 'NANO_BANANA_2']).optional()
-          .describe('Which Flow image model to use. Defaults to NANO_BANANA_PRO. "Nano Banana 2 Lite" is not available yet.'),
-        referenceMediaIds: z.array(z.string()).optional()
-          .describe('mediaIds (from a prior studio_flow_generate_image or studio_flow_upload_image result) to use as visual references for this generation.'),
+          .describe('Which Flow image model. Defaults to NANO_BANANA_2, the model the captured request used.'),
       },
-      async ({ prompt, projectId, aspectRatio, imageModel, referenceMediaIds }) => {
+      async ({ prompt, projectId, imageModel }) => {
         const approved = await requestApproval({
           tool: 'studio_flow_generate_image',
           title: 'Generate an image in Google Flow',
           detail: `${prompt}\n\n— this calls an internal Google API that is not officially published, and spends real Flow credits on this Google account. Google could flag or restrict the account for automated use. —`,
-          input: { prompt, projectId, aspectRatio, imageModel, referenceMediaIds },
+          input: { prompt, projectId, imageModel },
         })
         if (!approved) return denied('The image was not generated.')
-        const generated = await flowGenerateImage(prompt, projectId, aspectRatio, imageModel, referenceMediaIds)
+        const generated = await flowGenerateImage(prompt, projectId, imageModel)
         if (!generated.ok || typeof generated.mediaId !== 'string') return result(generated)
         return withImagePreview(generated.mediaId, generated)
       },
@@ -159,42 +155,96 @@ export function createFlowTools(requestApproval: RequestApproval) {
     ),
     tool(
       'studio_flow_generate_video',
-      'Generate a short Portrait video in Google Flow, using an internal API Google does not officially publish. Spends real Flow subscription credits and carries real account-risk. Two modes: INGREDIENTS (compose from one or more reference images) or FRAMES (animate a single start image — no end frame support: Omni Flash rejects one outright, and Veo 3.1 Lite + FRAMES has no confirmed model key). Only 3 model+mode combinations are confirmed: Veo 3.1 Lite+INGREDIENTS, Omni Flash+INGREDIENTS, Omni Flash+FRAMES (6 seconds). mediaIds come from prior studio_flow_generate_image or studio_flow_upload_image results — for FRAMES only the first id is used. Submits the request only — poll with studio_flow_get_video_status for the finished video. Always requires approval.',
+      'Generate a video from a text prompt in Google Flow, using an internal API Google does not officially publish. Spends real Flow subscription credits and carries real account-risk. Call studio_flow_video_models first to get a valid modelKey — the keys are read from Flow itself rather than hardcoded, because a hardcoded table has already been wrong once here. Submits the request; the result carries the media id. Always requires approval.',
       {
-        mode: z.enum(['INGREDIENTS', 'FRAMES']).describe('INGREDIENTS composes from reference images; FRAMES animates a single start image.'),
-        model: z.enum(['VEO_3_1_LITE', 'OMNI_FLASH']).describe('Which video model. Omni Flash generates 6-second clips; Veo 3.1 Lite only supports INGREDIENTS mode so far.'),
-        mediaIds: z.array(z.string().min(1)).min(1)
-          .describe('mediaId(s) from prior generate/upload results. For FRAMES mode, only the first is used as the start image.'),
-        prompt: z.string().min(1).max(4000).describe('The exact motion/scene prompt for the video.'),
-        projectId: z.string().min(1).describe('The project id from an already-open Google Flow project URL.'),
+        prompt: z.string().min(1).max(4000).describe('The exact scene prompt for the video. Sent word for word.'),
+        projectId: z.string().min(1).describe('Project id, from studio_flow_list_projects or studio_flow_create_project.'),
+        modelKey: z.string().min(1).describe('A model key from studio_flow_video_models, for example abra_t2v_8s.'),
       },
-      async ({ mode, model, mediaIds, prompt, projectId }) => {
+      async ({ prompt, projectId, modelKey }) => {
         const approved = await requestApproval({
           tool: 'studio_flow_generate_video',
           title: 'Generate a video in Google Flow',
-          detail: `${prompt}\n\nModel: ${model} · Mode: ${mode}\n\n— calls an internal Google API that is not officially published, and spends real Flow credits. Google could flag or restrict the account for automated use. —`,
-          input: { mode, model, mediaIds, prompt, projectId },
+          detail: `${prompt}
+
+Model: ${modelKey}
+
+— calls an internal Google API that is not officially published, and spends real Flow credits. Google could flag or restrict the account for automated use. —`,
+          input: { prompt, projectId, modelKey },
         })
         if (!approved) return denied('The video was not generated.')
-        return result(await flowGenerateVideo(mode, model, mediaIds, prompt, projectId))
+        return result(await flowGenerateVideo(prompt, projectId, modelKey))
       },
     ),
     tool(
-      'studio_flow_get_video_status',
-      'Check whether a Google Flow video submitted by studio_flow_generate_video has finished rendering. Read-only against the account (no credits spent), but still uses the unofficial API, so approval is still required.',
-      {
-        mediaId: z.string().min(1).describe('The mediaId returned by studio_flow_generate_video.'),
-        projectId: z.string().min(1).describe('The project id from an already-open Google Flow project URL.'),
-      },
-      async ({ mediaId, projectId }) => {
+      'studio_flow_video_models',
+      'List the video model keys Google Flow currently accepts, read from Flow itself. Read-only, no credits. Call this before studio_flow_generate_video rather than guessing a model name.',
+      {},
+      async () => {
         const approved = await requestApproval({
-          tool: 'studio_flow_get_video_status',
-          title: 'Check a Google Flow video status',
-          detail: `mediaId: ${mediaId}\n\n— this calls an internal Google API that is not officially published. —`,
-          input: { mediaId, projectId },
+          tool: 'studio_flow_video_models',
+          title: 'List Google Flow video models',
+          detail: '— this calls an internal Google API that is not officially published. Read-only. —',
+          input: {},
         })
-        if (!approved) return denied('The status was not checked.')
-        return result(await flowGetVideoStatus(mediaId, projectId))
+        if (!approved) return denied('Models were not listed.')
+        return result(await flowVideoModels())
+      },
+    ),
+    tool(
+      'studio_flow_media_status',
+      'Look up one Google Flow media item by the id a generation returned — use it to check on a video after studio_flow_generate_video. Read-only against the account, no credits spent.',
+      {
+        mediaId: z.string().min(1).describe('The media id from a generate result.'),
+      },
+      async ({ mediaId }) => {
+        const approved = await requestApproval({
+          tool: 'studio_flow_media_status',
+          title: 'Check a Google Flow media item',
+          detail: `mediaId: ${mediaId}
+
+— this calls an internal Google API that is not officially published. —`,
+          input: { mediaId },
+        })
+        if (!approved) return denied('The media was not checked.')
+        return result(await flowMediaStatus(mediaId))
+      },
+    ),
+    tool(
+      'studio_flow_rename_project',
+      'Rename an existing Google Flow project. No credits spent. Uses an internal API Google does not officially publish, so it still requires approval.',
+      {
+        projectId: z.string().min(1).describe('Project id, from studio_flow_list_projects.'),
+        projectTitle: z.string().min(1).max(200).describe('The new title.'),
+      },
+      async ({ projectId, projectTitle }) => {
+        const approved = await requestApproval({
+          tool: 'studio_flow_rename_project',
+          title: 'Rename a Google Flow project',
+          detail: `New title: ${projectTitle}
+
+— this calls an internal Google API that is not officially published. —`,
+          input: { projectId, projectTitle },
+        })
+        if (!approved) return denied('The project was not renamed.')
+        return result(await flowRenameProject(projectId, projectTitle))
+      },
+    ),
+    tool(
+      'studio_flow_list_project_media',
+      'List the images and videos already inside one Google Flow project, with the prompt each was made from. Read-only, no credits spent.',
+      {
+        projectId: z.string().min(1).describe('Project id, from studio_flow_list_projects.'),
+      },
+      async ({ projectId }) => {
+        const approved = await requestApproval({
+          tool: 'studio_flow_list_project_media',
+          title: 'List media in a Google Flow project',
+          detail: '— this calls an internal Google API that is not officially published. Read-only. —',
+          input: { projectId },
+        })
+        if (!approved) return denied('Media was not listed.')
+        return result(await flowListProjectMedia(projectId))
       },
     ),
     tool(
@@ -233,12 +283,15 @@ export function createFlowTools(requestApproval: RequestApproval) {
 export const FLOW_TOOL_BASE_NAMES = [
   'studio_flow_list_projects',
   'studio_flow_create_project',
+  'studio_flow_rename_project',
+  'studio_flow_list_project_media',
+  'studio_flow_video_models',
+  'studio_flow_media_status',
   'studio_flow_generate_image',
   'studio_flow_upload_image',
   'studio_flow_view_image',
   'studio_flow_download_image',
   'studio_flow_generate_video',
-  'studio_flow_get_video_status',
   'studio_flow_get_credits',
 ] as const
 export const FLOW_TOOL_NAMES = FLOW_TOOL_BASE_NAMES.map(name => `mcp__workers__${name}`)

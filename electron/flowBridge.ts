@@ -166,6 +166,82 @@ const PRELUDE = `
     return { status: res.status, json: json, raw: text }
   }
 
+
+  /**
+   * One batchexecute call. Every Flow RPC on flow.google.com goes through this
+   * envelope, so the framing lives in exactly one place -- the argument is a
+   * JSON *string* inside the array, and the reply is )]}' followed by
+   * alternating length/JSON lines whose count varies, so the result row is
+   * searched for by rpcid rather than indexed.
+   *
+   * at / bl / f.sid are per-session and come from the page; see
+   * probes/flow-01-boq-params.js for how each key was confirmed.
+   */
+  async function callBatch(rpcId, arg) {
+    var wiz = window.WIZ_global_data
+    if (!wiz || !wiz.SNlM0e) {
+      return { ok: false, error: 'Flow page has no session token yet (WIZ_global_data.SNlM0e missing) -- let the page finish loading and retry' }
+    }
+
+    var form = new URLSearchParams()
+    form.set('f.req', JSON.stringify([[[rpcId, JSON.stringify(arg), null, 'generic']]]))
+    form.set('at', wiz.SNlM0e)
+
+    var query = new URLSearchParams()
+    query.set('rpcids', rpcId)
+    query.set('source-path', '/')
+    if (wiz.cfb2h) query.set('bl', wiz.cfb2h)
+    if (wiz.FdrFJe) query.set('f.sid', wiz.FdrFJe)
+    query.set('hl', 'en-US')
+    query.set('_reqid', String(Math.floor(Math.random() * 900000) + 100000))
+    query.set('rt', 'c')
+
+    var res = await fetch('/_/AiSandboxAngularFrontend/data/batchexecute?' + query.toString(), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: form.toString(),
+    })
+    var text = await res.text()
+    if (res.status !== 200) {
+      return { ok: false, error: 'Google Flow refused the request (HTTP ' + res.status + ')', detail: text.slice(0, 300) }
+    }
+
+    var payload = null
+    var lines = text.split(String.fromCharCode(10))
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim()
+      if (line.charAt(0) !== '[') continue
+      var rows = null
+      try { rows = JSON.parse(line) } catch (e) { continue }
+      if (!Array.isArray(rows)) continue
+      for (var j = 0; j < rows.length; j++) {
+        var row = rows[j]
+        if (Array.isArray(row) && row[0] === 'wrb.fr' && row[1] === rpcId && typeof row[2] === 'string') {
+          try { payload = JSON.parse(row[2]) } catch (e) {}
+        }
+      }
+    }
+    if (payload === null) {
+      return { ok: false, error: 'Google Flow answered but carried no ' + rpcId + ' result', detail: text.slice(0, 300) }
+    }
+    return { ok: true, payload: payload }
+  }
+
+  /** Uppercase UUID, matching the casing every captured Flow request used. */
+  function uuidUpper() {
+    return uuid().toUpperCase()
+  }
+
+  /**
+   * The client-context block every Flow RPC carries. Captured identically at
+   * two levels inside image and video generation, so it is built once here
+   * rather than written out twice and drifting.
+   */
+  function clientContext(projectId, recaptchaToken) {
+    return [null, 22, null, null, null, projectId, null, null, null, null, [recaptchaToken, 1]]
+  }
+
   function safe(value) {
     try { return JSON.parse(JSON.stringify(value)) } catch (e) { return null }
   }
@@ -182,134 +258,6 @@ ${body}
   })()`
 }
 
-/**
- * Creates a new Flow project.
- *
- * Captured from a real click on "New project":
- *
- *   POST /fx/api/trpc/project.createProject
- *   { "json": { "projectTitle": "<title>", "toolName": "PINHOLE" } }
- *   -> 200 { "result": { "data": { "json": { "result": {
- *        "projectId": "<uuid>", "projectInfo": { "projectTitle": "<title>" }
- *      }, "status": 200, "statusText": "OK" } } } }
- *
- * Plain same-origin tRPC over labs.google — no recaptcha, no
- * aisandbox-pa.googleapis.com involved, unlike image generation.
- */
-export function createProjectScript(projectTitle: string): string {
-  return buildScript(`
-    var projectTitle = ${JSON.stringify(projectTitle)}
-    var res = await fetch('/fx/api/trpc/project.createProject', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json', 'accept': '*/*' },
-      body: JSON.stringify({ json: { projectTitle: projectTitle, toolName: 'PINHOLE' } }),
-    })
-    var text = await res.text()
-    var json = null
-    try { json = JSON.parse(text) } catch (e) {}
-
-    var inner = json && json.result && json.result.data && json.result.data.json && json.result.data.json.result
-    if (res.status !== 200 || !inner || !inner.projectId) {
-      return {
-        ok: false,
-        error: 'Google Flow did not confirm the new project (HTTP ' + res.status + ')',
-        detail: text ? text.slice(0, 400) : null,
-      }
-    }
-
-    return { ok: true, created: true, projectId: inner.projectId, projectTitle: inner.projectInfo ? inner.projectInfo.projectTitle : projectTitle }
-  `)
-}
-
-/**
- * Generates one image in an existing Flow project.
- *
- * `projectId` must come from an already-open project's URL
- * (`labs.google/fx/tools/flow/project/<projectId>`) — creating a new
- * project has not been captured/verified yet, so is not offered here.
- *
- * Matches the real captured request exactly: the recaptcha token appears at
- * both the outer `clientContext` and the per-request `clientContext` — both
- * were present on the request that returned 200 with real image data, and
- * dropping either is exactly the "hand-picked subset" mistake this project's
- * own findings already document from the Facebook comment mutation.
- */
-export function generateImageScript(
-  prompt: string,
-  projectId: string,
-  aspectRatio: ImageAspectRatio = 'LANDSCAPE',
-  imageModel: ImageModel = 'NANO_BANANA_PRO',
-  referenceMediaIds: string[] = [],
-): string {
-  return buildScript(`
-    var token = await getAccessToken()
-    if (!token) return { ok: false, error: 'no Google access token found — not signed in to Google Flow, or the session has expired' }
-
-    var recaptchaToken
-    try {
-      recaptchaToken = await getRecaptchaToken('IMAGE_GENERATION')
-    } catch (e) {
-      return { ok: false, error: 'reCAPTCHA failed: ' + String((e && e.message) || e) }
-    }
-
-    var projectId = ${JSON.stringify(projectId)}
-    var clientContext = {
-      recaptchaContext: { token: recaptchaToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' },
-      projectId: projectId,
-      tool: 'PINHOLE',
-      sessionId: ';' + Date.now(),
-    }
-
-    var body = {
-      clientContext: clientContext,
-      mediaGenerationContext: { batchId: uuid() },
-      useNewMedia: true,
-      requests: [{
-        clientContext: clientContext,
-        imageModelName: ${JSON.stringify(IMAGE_MODEL_MAP[imageModel])},
-        imageAspectRatio: ${JSON.stringify(ASPECT_RATIO_MAP[aspectRatio])},
-        structuredPrompt: { parts: [{ text: ${JSON.stringify(prompt)} }] },
-        seed: Math.floor(Math.random() * 1000000),
-        imageInputs: ${JSON.stringify(referenceMediaIds)}.map(function (mediaId) {
-          return { name: mediaId, imageInputType: 'IMAGE_INPUT_TYPE_REFERENCE' }
-        }),
-      }],
-    }
-
-    var res = await callSandboxApi('/v1/projects/' + projectId + '/flowMedia:batchGenerateImages', body, token)
-
-    var media = res.json && res.json.media
-    if (res.status !== 200 || !media || !media.length) {
-      return {
-        ok: false,
-        error: 'Google Flow did not confirm the image (HTTP ' + res.status + ')',
-        detail: res.raw ? res.raw.slice(0, 400) : null,
-      }
-    }
-
-    var mediaId = media[0].name
-    return {
-      ok: true,
-      generated: true,
-      mediaId: mediaId,
-      // The generate response does not carry a viewable URL — the real
-      // client fetches one separately via this same tRPC redirect endpoint.
-      viewUrl: 'https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=' + mediaId + '&mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL',
-      raw: safe(media[0]),
-    }
-  `)
-}
-
-/**
- * Uploads an image (base64) so it can be used as a reference or as a
- * video's start/end frame. Returns a mediaId usable with
- * `generateImageScript`'s `referenceMediaIds` or `generateVideoScript`.
- *
- * From the reference kit's `upload_image` (`/v1/flow/uploadImage`), not yet
- * independently captured against this project's own session — see the
- * header comment.
- */
 export function uploadImageScript(
   imageBase64: string,
   projectId: string,
@@ -396,249 +344,275 @@ const VIDEO_MODEL_KEYS: Record<VideoModel, Partial<Record<VideoMode, string>>> =
   OMNI_FLASH: { INGREDIENTS: 'abra_r2v_6s', FRAMES: 'abra_i2v_6s' },
 }
 
-export function generateVideoScript(
-  mode: VideoMode,
-  model: VideoModel,
-  mediaIds: string[],
-  prompt: string,
-  projectId: string,
-  userPaygateTier: string = 'PAYGATE_TIER_ONE',
-): string {
-  const modelKey = VIDEO_MODEL_KEYS[model][mode]
-  if (!modelKey) {
-    return buildScript(`
-      return { ok: false, error: ${JSON.stringify(`${model} does not have a confirmed model key for ${mode} mode yet`)} }
-    `)
-  }
+export const __testing = { AISANDBOX_API, RECAPTCHA_SITE_KEY, AISANDBOX_API_KEY, ASPECT_RATIO_MAP, IMAGE_MODEL_MAP, VIDEO_MODEL_KEYS, buildScript }
 
-  const endpoint = mode === 'INGREDIENTS'
-    ? '/v1/video:batchAsyncGenerateVideoReferenceImages'
-    : '/v1/video:batchAsyncGenerateVideoStartImage'
-
-  const mediaField = mode === 'INGREDIENTS'
-    ? `referenceImages: ${JSON.stringify(mediaIds)}.map(function (mediaId) {
-          return { mediaId: mediaId, imageUsageType: 'IMAGE_USAGE_TYPE_ASSET' }
-        }),`
-    : `startImage: { mediaId: ${JSON.stringify(mediaIds[0] ?? '')} },`
-
-  return buildScript(`
-    var token = await getAccessToken()
-    if (!token) return { ok: false, error: 'no Google access token found — not signed in to Google Flow, or the session has expired' }
-
-    var recaptchaToken
-    try {
-      recaptchaToken = await getRecaptchaToken('VIDEO_GENERATION')
-    } catch (e) {
-      return { ok: false, error: 'reCAPTCHA failed: ' + String((e && e.message) || e) }
-    }
-
-    var body = {
-      mediaGenerationContext: { batchId: uuid(), audioFailurePreference: 'BLOCK_SILENCED_VIDEOS' },
-      clientContext: {
-        projectId: ${JSON.stringify(projectId)},
-        tool: 'PINHOLE',
-        userPaygateTier: ${JSON.stringify(userPaygateTier)},
-        sessionId: ';' + Date.now(),
-        recaptchaContext: { token: recaptchaToken, applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB' },
-      },
-      requests: [{
-        outputSpec: { resolution: 'VIDEO_RESOLUTION_720P' },
-        aspectRatio: 'VIDEO_ASPECT_RATIO_PORTRAIT',
-        textInput: { structuredPrompt: { parts: [{ text: ${JSON.stringify(prompt)} }] } },
-        videoModelKey: ${JSON.stringify(modelKey)},
-        seed: Math.floor(Math.random() * 100000),
-        metadata: {},
-        ${mediaField}
-      }],
-      useV2ModelConfig: true,
-    }
-
-    var res = await callSandboxApi(${JSON.stringify(endpoint)}, body, token)
-    var workflow = res.json && res.json.workflows && res.json.workflows[0]
-    var mediaId = workflow && workflow.metadata ? workflow.metadata.primaryMediaId : null
-    if (res.status !== 200 || !mediaId) {
-      return {
-        ok: false,
-        error: 'Google Flow did not confirm the video request (HTTP ' + res.status + ')',
-        detail: res.raw ? res.raw.slice(0, 400) : null,
-      }
-    }
-
-    // Async — this confirms the request was accepted and returns the id to
-    // poll with getVideoStatusScript, not a finished video.
-    return { ok: true, submitted: true, mediaId: mediaId, workflowId: workflow.name, remainingCredits: res.json.remainingCredits }
-  `)
-}
+/* ─────────────────────────────────────────────────────────────────────────
+ * Flow's current API (flow.google.com, batchexecute).
+ *
+ * Every script below was written from a request the owner actually made on
+ * 2026-09-17 while the recorder was attached — create, rename, generate image,
+ * generate video — not from the reference kit and not from the retired
+ * labs.google tRPC API, which the same capture proved is gone (see
+ * probes/FINDINGS-flow.md).
+ * ──────────────────────────────────────────────────────────────────────── */
 
 /**
- * Polls a submitted video's status. `mediaId` is the `mediaId` returned by
- * `generateVideoScript`, NOT its `workflowId`.
+ * Creates a project.
  *
- * Captured from a real completed video:
+ *   jHPbke ["projects/*",[null,["<title>"]],[null,22]]
+ *     -> ["<newProjectId>",["<title>"]]
  *
- *   POST /v1/video:batchCheckAsyncVideoGenerationStatus
- *   { media: [{ name: mediaId, projectId }] }
- *   -> 200 { media: [{ mediaMetadata: { mediaStatus: { mediaGenerationStatus: "MEDIA_GENERATION_STATUS_SUCCESSFUL" } },
- *                       video: { generatedVideo: {...}, dimensions: { length: "8s" } } }] }
+ * Flow's own UI creates with a timestamp title and renames afterwards, so a
+ * title given here is simply the title it is created with — no second call.
  */
-export function getVideoStatusScript(mediaId: string, projectId: string): string {
+export function createProjectScript(projectTitle: string): string {
   return buildScript(`
-    var token = await getAccessToken()
-    if (!token) return { ok: false, error: 'no Google access token found — not signed in to Google Flow, or the session has expired' }
+    var title = ${JSON.stringify(projectTitle)}
+    var out = await callBatch('jHPbke', ['projects/*', [null, [title]], [null, 22]])
+    if (!out.ok) return out
 
-    var res = await callSandboxApi('/v1/video:batchCheckAsyncVideoGenerationStatus', {
-      media: [{ name: ${JSON.stringify(mediaId)}, projectId: ${JSON.stringify(projectId)} }],
-    }, token)
-
-    var media = res.json && res.json.media && res.json.media[0]
-    if (res.status !== 200 || !media) {
-      return { ok: false, error: 'Google Flow did not return video status (HTTP ' + res.status + ')', detail: res.raw ? res.raw.slice(0, 400) : null }
+    var projectId = Array.isArray(out.payload) ? out.payload[0] : null
+    if (typeof projectId !== 'string' || !projectId) {
+      return { ok: false, error: 'Google Flow did not return a project id', detail: JSON.stringify(out.payload).slice(0, 300) }
     }
-
-    var status = media.mediaMetadata && media.mediaMetadata.mediaStatus ? media.mediaMetadata.mediaStatus.mediaGenerationStatus : null
-    return {
-      ok: true,
-      status: status,
-      done: status === 'MEDIA_GENERATION_STATUS_SUCCESSFUL',
-      raw: safe(media),
-    }
+    var returnedTitle = Array.isArray(out.payload[1]) ? out.payload[1][0] : title
+    return { ok: true, created: true, projectId: projectId, projectTitle: returnedTitle }
   `)
 }
 
 /**
- * Reads the account's real Flow tier and remaining VIDEO credits.
+ * Renames a project.
  *
- *   GET /v1/credits?key=...
- *   -> 200 { credits, userPaygateTier, sku, serviceTier, subscriptionCredits }
+ *   o8DA4 ["projects/<id>",["<title>"],[["project_title"]],[null,22]]
+ *     -> ["<title>"]
  *
- * This is video credits ONLY. Image generation is not credited here at
- * all — confirmed by checking every captured response across this whole
- * project for any quota/daily-limit field: none exists anywhere. Google
- * Flow's image daily limit is enforced silently server-side with no
- * queryable remaining-count; the only way to learn its shape is to hit it
- * and capture the resulting error, which has not happened yet.
+ * The third element is a field mask naming what is being written. New
+ * capability: the retired API had no rename at all, so a project's name was
+ * fixed at creation.
+ */
+export function renameProjectScript(projectId: string, projectTitle: string): string {
+  return buildScript(`
+    var id = ${JSON.stringify(projectId)}
+    var title = ${JSON.stringify(projectTitle)}
+    var out = await callBatch('o8DA4', ['projects/' + id, [title], [['project_title']], [null, 22]])
+    if (!out.ok) return out
+
+    var confirmed = Array.isArray(out.payload) ? out.payload[0] : null
+    if (confirmed !== title) {
+      return { ok: false, error: 'Google Flow did not confirm the new title', detail: JSON.stringify(out.payload).slice(0, 300) }
+    }
+    return { ok: true, renamed: true, projectId: id, projectTitle: confirmed }
+  `)
+}
+
+/**
+ * Lists a project's media.
+ *
+ *   Zzl0ze ["projects/<id>",null,null,null,[1]]
+ *     -> [null,null,null,[["<mediaId>",1,"<prompt>", ...
+ *
+ * Walked rather than indexed: the entries sit several levels down and the
+ * wrapper shape is not something one capture can promise stays fixed.
+ */
+export function listProjectMediaScript(projectId: string): string {
+  return buildScript(`
+    var id = ${JSON.stringify(projectId)}
+    var out = await callBatch('Zzl0ze', ['projects/' + id, null, null, null, [1]])
+    if (!out.ok) return out
+
+    var media = []
+    function walk(node, depth) {
+      if (!Array.isArray(node) || depth > 6) return
+      if (typeof node[0] === 'string' && node[0].length > 20 && typeof node[2] === 'string') {
+        media.push({ mediaId: node[0], prompt: node[2] })
+        return
+      }
+      for (var i = 0; i < node.length; i++) walk(node[i], depth + 1)
+    }
+    walk(out.payload, 0)
+    return { ok: true, count: media.length, media: media }
+  `)
+}
+
+/**
+ * Generates one image.
+ *
+ *   ogiZ0b [null,[[null,null,null,<seed>,3,"NARWHAL",null,<ctx>,[[["<prompt>"]]],
+ *                 null,null,null,"<uuid>","<uuid>"]],1,<ctx>,["<uuid>"]]
+ *
+ * `<ctx>` is the client context, and the recaptcha token inside it appears at
+ * TWO levels — exactly as the retired aisandbox call required. Dropping either
+ * is the "hand-picked subset" mistake this project's findings already record.
+ *
+ * The aspect-ratio enums the old API took have no visible slot in this payload;
+ * only the captured combination is sent, and the tool no longer offers a ratio
+ * it cannot demonstrate.
+ */
+export function generateImageScript(prompt: string, projectId: string, imageModel: ImageModel): string {
+  return buildScript(`
+    var prompt = ${JSON.stringify(prompt)}
+    var projectId = ${JSON.stringify(projectId)}
+    var model = ${JSON.stringify('')} || ${JSON.stringify(IMAGE_MODEL_MAP)}[${JSON.stringify(imageModel)}]
+
+    var token
+    try {
+      token = await getRecaptchaToken('IMAGE_GENERATION')
+    } catch (e) {
+      return { ok: false, error: 'could not mint a reCAPTCHA token: ' + String((e && e.message) || e) }
+    }
+
+    var ctx = clientContext(projectId, token)
+    var seed = Math.floor(Math.random() * 2000000000)
+    var arg = [
+      null,
+      [[null, null, null, seed, 3, model, null, ctx, [[[prompt]]], null, null, null, uuidUpper(), uuidUpper()]],
+      1,
+      ctx,
+      [uuidUpper()],
+    ]
+
+    var out = await callBatch('ogiZ0b', arg)
+    if (!out.ok) return out
+    return { ok: true, requested: true, model: model, seed: seed, result: safe(out.payload) }
+  `)
+}
+
+/**
+ * Generates one video.
+ *
+ *   YhhmEf [[[[null,null,[[["<prompt>"]]]],"<modelKey>",1,null,
+ *             [null,null,null,null,"<uuid>","<uuid>"]]],<ctx>,["<uuid>",2]]
+ *     -> [null,<creditsLeft>,[["<operationId>",null,null,["<title>",…,"<mediaId>",…
+ *
+ * The model key is passed through verbatim rather than mapped through a table:
+ * `videoModelsScript` reads the valid keys from Flow itself, and this file's
+ * own history records the reference kit's model table being wrong.
+ */
+export function generateVideoScript(prompt: string, projectId: string, modelKey: string): string {
+  return buildScript(`
+    var prompt = ${JSON.stringify(prompt)}
+    var projectId = ${JSON.stringify(projectId)}
+    var modelKey = ${JSON.stringify(modelKey)}
+
+    var token
+    try {
+      token = await getRecaptchaToken('VIDEO_GENERATION')
+    } catch (e) {
+      return { ok: false, error: 'could not mint a reCAPTCHA token: ' + String((e && e.message) || e) }
+    }
+
+    var arg = [
+      [[[null, null, [[[prompt]]]], modelKey, 1, null, [null, null, null, null, uuidUpper(), uuidUpper()]]],
+      clientContext(projectId, token),
+      [uuidUpper(), 2],
+    ]
+
+    var out = await callBatch('YhhmEf', arg)
+    if (!out.ok) return out
+
+    // Second element was the credit balance after the captured generation.
+    // Reported as an unlabelled number rather than named "credits": the
+    // meaning is consistent with the balance nzlxg returns but is not proven.
+    var creditsAfter = Array.isArray(out.payload) && typeof out.payload[1] === 'number' ? out.payload[1] : null
+    return { ok: true, requested: true, model: modelKey, creditsAfterIfThatIsWhatItIs: creditsAfter, result: safe(out.payload) }
+  `)
+}
+
+/**
+ * The video model keys Flow itself accepts.
+ *
+ *   yBhWQ [] -> [[["veo_3_1_quality",1],["veo_3_1_lite",1],["abra",1], …
+ */
+export function videoModelsScript(): string {
+  return buildScript(`
+    var out = await callBatch('yBhWQ', [])
+    if (!out.ok) return out
+
+    var models = []
+    function walk(node, depth) {
+      if (!Array.isArray(node) || depth > 5) return
+      if (typeof node[0] === 'string' && node[0].length > 2 && typeof node[1] === 'number') {
+        models.push(node[0])
+        return
+      }
+      for (var i = 0; i < node.length; i++) walk(node[i], depth + 1)
+    }
+    walk(out.payload, 0)
+    return { ok: true, models: models }
+  `)
+}
+
+/**
+ * Looks up one media item, by the id a generation returned.
+ *
+ *   jwpduf [null,null,[["<mediaId>"]]]
+ *
+ * Captured immediately after video generation with the id that generation
+ * returned, which is what a poll looks like — but this capture does not show
+ * it being called repeatedly, so it is exposed as a lookup rather than
+ * described as a progress API.
+ */
+export function mediaStatusScript(mediaId: string): string {
+  return buildScript(`
+    var out = await callBatch('jwpduf', [null, null, [[${JSON.stringify(mediaId)}]]])
+    if (!out.ok) return out
+    return { ok: true, media: safe(out.payload) }
+  `)
+}
+
+/**
+ * Returns the numbers Flow reports for this account.
+ *
+ *   nzlxg [] -> [1050,1,2,2,null,1050]
+ *
+ * Deliberately unlabelled. 1050 looked like a credit balance and the number
+ * after one video generation was 1038, which is consistent — consistent is not
+ * proof, and naming these fields "credits" on that basis is exactly the
+ * confident-sounding guess this file exists to avoid. Compare against the
+ * balance Flow's own UI shows to settle it.
  */
 export function getCreditsScript(): string {
   return buildScript(`
-    var token = await getAccessToken()
-    if (!token) return { ok: false, error: 'no Google access token found — not signed in to Google Flow, or the session has expired' }
-
-    var res = await fetch(AISANDBOX_API + '/v1/credits?key=' + AISANDBOX_API_KEY, { headers: { 'Authorization': 'Bearer ' + token } })
-    var text = await res.text()
-    var json = null
-    try { json = JSON.parse(text) } catch (e) {}
-
-    if (res.status !== 200 || !json) {
-      return { ok: false, error: 'Google Flow did not return credits (HTTP ' + res.status + ')', detail: text ? text.slice(0, 400) : null }
+    var out = await callBatch('nzlxg', [])
+    if (!out.ok) return out
+    return {
+      ok: true,
+      raw: safe(out.payload),
+      note: 'Unlabelled on purpose: the first and last numbers behave like a credit balance but that has not been verified against the figure Flow shows in its own UI.',
     }
-
-    return { ok: true, tier: json.userPaygateTier || null, raw: safe(json) }
   `)
 }
-
-export const __testing = { AISANDBOX_API, RECAPTCHA_SITE_KEY, AISANDBOX_API_KEY, ASPECT_RATIO_MAP, IMAGE_MODEL_MAP, VIDEO_MODEL_KEYS, buildScript }
-
 
 /**
  * Lists the Google Flow projects this account owns.
  *
- * This is the first call written against Flow's CURRENT frontend. Google
- * replaced the labs.google Next.js app (tRPC, `/fx/api/trpc/...`) with an
- * Angular app on flow.google.com that speaks `batchexecute`; the 2026-09-17
- * capture of a real project-list load contains zero tRPC requests, so every
- * other script in this file is written against an API that is no longer there.
+ *   UpteDb ["projects/*",21,null,null,null,null,[1]]
+ *     -> [[["<projectId>",["<title>",null,[<seconds>,<nanos>],"<thumbUrl>"]], …]]
  *
- * Captured request, exactly:
- *
- *   POST /_/AiSandboxAngularFrontend/data/batchexecute?rpcids=UpteDb&...
- *   f.req=[[["UpteDb","[\"projects/*\",21,null,null,null,null,[1]]",null,"generic"]]]
- *   at=<token>
- *
- * The inner argument is sent as a JSON *string*, not an object — that double
- * encoding is what batchexecute expects, and flattening it produces a 400.
- *
- * `at`, `bl` and `f.sid` are per-session and are read from the page rather
- * than hardcoded; probes/flow-01-boq-params.js confirmed each key against the
- * captured values (SNlM0e, cfb2h, FdrFJe) rather than assuming the usual boq
- * names held here.
+ * The first call written against Flow's current frontend, and the one that
+ * live-tested at 21 real projects. Walked rather than indexed at a fixed
+ * depth, so an extra wrapper level in a future response returns nothing rather
+ * than silently returning zero projects.
  */
 export function listProjectsScript(): string {
   return buildScript(`
-    var wiz = window.WIZ_global_data
-    if (!wiz || !wiz.SNlM0e) {
-      return { ok: false, error: 'Flow page has no session token yet (WIZ_global_data.SNlM0e missing) — let the page finish loading and retry' }
-    }
+    var out = await callBatch('UpteDb', ['projects/*', 21, null, null, null, null, [1]])
+    if (!out.ok) return out
 
-    var inner = JSON.stringify(['projects/*', 21, null, null, null, null, [1]])
-    var body = new URLSearchParams()
-    body.set('f.req', JSON.stringify([[['UpteDb', inner, null, 'generic']]]))
-    body.set('at', wiz.SNlM0e)
-
-    var query = new URLSearchParams()
-    query.set('rpcids', 'UpteDb')
-    query.set('source-path', '/')
-    if (wiz.cfb2h) query.set('bl', wiz.cfb2h)
-    if (wiz.FdrFJe) query.set('f.sid', wiz.FdrFJe)
-    query.set('hl', 'en-US')
-    query.set('_reqid', String(Math.floor(Math.random() * 900000) + 100000))
-    query.set('rt', 'c')
-
-    var res = await fetch('/_/AiSandboxAngularFrontend/data/batchexecute?' + query.toString(), {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-      body: body.toString(),
-    })
-    var text = await res.text()
-    if (res.status !== 200) {
-      return { ok: false, error: 'Flow refused the project list (HTTP ' + res.status + ')', detail: text.slice(0, 300) }
-    }
-
-    // batchexecute answers with a )]}' guard, then alternating length/JSON
-    // lines. Scan every line for the envelope carrying our rpcid rather than
-    // assuming a position: the number of framing rows varies per response.
-    var payload = null
-    // String.fromCharCode(10), not '\\n': this body is a TS template literal,
-    // so an escape written here is resolved by TypeScript and the page would
-    // receive a real newline inside a string literal -- an unterminated string,
-    // which surfaces only as "script error" at run time.
-    var lines = text.split(String.fromCharCode(10))
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim()
-      if (line.charAt(0) !== '[') continue
-      var rows = null
-      try { rows = JSON.parse(line) } catch (e) { continue }
-      if (!Array.isArray(rows)) continue
-      for (var j = 0; j < rows.length; j++) {
-        var row = rows[j]
-        if (Array.isArray(row) && row[0] === 'wrb.fr' && row[1] === 'UpteDb' && typeof row[2] === 'string') {
-          try { payload = JSON.parse(row[2]) } catch (e) {}
-        }
-      }
-    }
-    if (payload === null) {
-      return { ok: false, error: 'Flow answered but carried no UpteDb result', detail: text.slice(0, 300) }
-    }
-
-    // Shape seen in the capture:
-    //   [[ [ "<projectId>", [ "<title>", null, [seconds, nanos], "<thumbUrl>" ] ], ... ]]
-    // Walked rather than indexed at a fixed depth, so an extra wrapper level
-    // in a future response does not silently return zero projects.
     var projects = []
     function walk(node, depth) {
       if (!Array.isArray(node) || depth > 6) return
       var id = node[0]
       var meta = node[1]
-      var looksLikeProject = typeof id === 'string' && id.length > 20 && Array.isArray(meta) && typeof meta[0] === 'string'
-      if (looksLikeProject) {
+      if (typeof id === 'string' && id.length > 20 && Array.isArray(meta) && typeof meta[0] === 'string') {
         var created = Array.isArray(meta[2]) && typeof meta[2][0] === 'number' ? new Date(meta[2][0] * 1000).toISOString() : null
         projects.push({ projectId: id, title: meta[0], createdAt: created, thumbnailUrl: typeof meta[3] === 'string' ? meta[3] : null })
         return
       }
-      for (var k = 0; k < node.length; k++) walk(node[k], depth + 1)
+      for (var i = 0; i < node.length; i++) walk(node[i], depth + 1)
     }
-    walk(payload, 0)
-
+    walk(out.payload, 0)
     return { ok: true, count: projects.length, projects: projects }
   `)
 }
+

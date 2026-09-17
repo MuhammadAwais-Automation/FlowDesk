@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./sessions', () => ({ findViewByUrl: () => null, listViewUrls: () => ['https://mail.google.com/'] }))
 
-const { flowGenerateImage, flowCreateProject, flowUploadImage, flowDownloadImage, flowGenerateVideo, flowGetVideoStatus, flowGetCredits, flowViewImage } = await import('./flow')
+const { flowGenerateImage, flowCreateProject, flowUploadImage, flowDownloadImage, flowGenerateVideo, flowMediaStatus, flowGetCredits, flowViewImage, flowRenameProject, flowListProjectMedia, flowVideoModels } = await import('./flow')
 
 describe('flow generate image', () => {
   it('refuses an empty prompt before touching the network', () => {
@@ -76,52 +76,72 @@ describe('flow download image', () => {
 })
 
 describe('flow generate video', () => {
-  it('refuses without any mediaIds', async () => {
-    const out = await flowGenerateVideo('INGREDIENTS', 'VEO_3_1_LITE', [], 'a dog running', 'proj-1')
-    expect(out.ok).toBe(false)
-    expect(String(out.error)).toContain('mediaId')
-  })
-
-  it('refuses when mediaIds are all blank', async () => {
-    const out = await flowGenerateVideo('INGREDIENTS', 'VEO_3_1_LITE', ['   '], 'a dog running', 'proj-1')
-    expect(out.ok).toBe(false)
-    expect(String(out.error)).toContain('mediaId')
-  })
-
   it('refuses an empty prompt', async () => {
-    const out = await flowGenerateVideo('INGREDIENTS', 'VEO_3_1_LITE', ['media-1'], '   ', 'proj-1')
+    const out = await flowGenerateVideo('   ', 'proj-1', 'abra_t2v_8s')
     expect(out.ok).toBe(false)
     expect(String(out.error)).toContain('prompt')
   })
 
   it('refuses without a projectId', async () => {
-    const out = await flowGenerateVideo('INGREDIENTS', 'VEO_3_1_LITE', ['media-1'], 'a dog running', '   ')
+    const out = await flowGenerateVideo('a dog running', '   ', 'abra_t2v_8s')
     expect(out.ok).toBe(false)
     expect(String(out.error)).toContain('projectId')
   })
 
+  it('refuses without a model key rather than inventing one', async () => {
+    // The reference kit's model table was wrong once already; guessing a
+    // default here would repeat that with the owner's credits.
+    const out = await flowGenerateVideo('a dog running', 'proj-1', '  ')
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('model key')
+  })
+
   it('reports Google Flow not being open as a result, not a throw', async () => {
-    const out = await flowGenerateVideo('FRAMES', 'OMNI_FLASH', ['media-1'], 'a dog running', 'proj-1')
+    const out = await flowGenerateVideo('a dog running', 'proj-1', 'abra_t2v_8s')
     expect(out.ok).toBe(false)
     expect(String(out.error)).toContain('Google Flow is not open')
   })
 })
 
-describe('flow get video status', () => {
+describe('flow media status', () => {
   it('refuses without a mediaId', async () => {
-    const out = await flowGetVideoStatus('   ', 'proj-1')
+    const out = await flowMediaStatus('   ')
     expect(out.ok).toBe(false)
     expect(String(out.error)).toContain('mediaId')
   })
 
+  it('reports Google Flow not being open as a result, not a throw', async () => {
+    const out = await flowMediaStatus('media-1')
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('Google Flow is not open')
+  })
+})
+
+describe('flow rename project', () => {
   it('refuses without a projectId', async () => {
-    const out = await flowGetVideoStatus('media-1', '   ')
+    const out = await flowRenameProject('  ', 'New name')
     expect(out.ok).toBe(false)
     expect(String(out.error)).toContain('projectId')
   })
 
+  it('refuses an empty title', async () => {
+    const out = await flowRenameProject('proj-1', '   ')
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('title')
+  })
+})
+
+describe('flow list project media', () => {
+  it('refuses without a projectId', async () => {
+    const out = await flowListProjectMedia('   ')
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('projectId')
+  })
+})
+
+describe('flow video models', () => {
   it('reports Google Flow not being open as a result, not a throw', async () => {
-    const out = await flowGetVideoStatus('media-1', 'proj-1')
+    const out = await flowVideoModels()
     expect(out.ok).toBe(false)
     expect(String(out.error)).toContain('Google Flow is not open')
   })

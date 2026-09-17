@@ -9,9 +9,10 @@ import { join, extname } from 'node:path'
 import { app } from 'electron'
 import { findViewByUrl, listViewUrls } from './sessions'
 import {
-  generateImageScript, createProjectScript, uploadImageScript,
-  generateVideoScript, getVideoStatusScript, getCreditsScript, listProjectsScript,
-  type ImageAspectRatio, type ImageModel, type VideoMode, type VideoModel,
+  createProjectScript, renameProjectScript, listProjectsScript, listProjectMediaScript,
+  uploadImageScript, generateImageScript, generateVideoScript, videoModelsScript,
+  mediaStatusScript, getCreditsScript,
+  type ImageModel,
 } from './flowBridge'
 
 export interface FlowResult {
@@ -71,16 +72,14 @@ async function call(script: string): Promise<FlowResult> {
 const MAX_PROMPT_LENGTH = 4000
 
 /**
- * Generates one image in an existing Flow project. `projectId` comes from
- * the project's own URL (labs.google/fx/tools/flow/project/<projectId>).
+ * Generates one image in an existing project. `projectId` comes from
+ * `flowListProjects` or `flowCreateProject`.
+ *
+ * Aspect ratio is no longer a parameter: the retired API took an explicit enum
+ * and the captured request on the current API has no visible slot for one, so
+ * offering the choice would be offering something unproven.
  */
-export function flowGenerateImage(
-  prompt: string,
-  projectId: string,
-  aspectRatio?: ImageAspectRatio,
-  imageModel?: ImageModel,
-  referenceMediaIds?: string[],
-): Promise<FlowResult> {
+export function flowGenerateImage(prompt: string, projectId: string, imageModel?: ImageModel): Promise<FlowResult> {
   const text = String(prompt ?? '').trim()
   if (!text) return Promise.resolve({ ok: false, error: 'refusing to generate an image without a prompt' })
   if (text.length > MAX_PROMPT_LENGTH) {
@@ -88,13 +87,9 @@ export function flowGenerateImage(
   }
   const id = String(projectId ?? '').trim()
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to generate without a projectId' })
-  return call(generateImageScript(text, id, aspectRatio ?? 'LANDSCAPE', imageModel ?? 'NANO_BANANA_PRO', referenceMediaIds ?? []))
+  return call(generateImageScript(text, id, imageModel ?? 'NANO_BANANA_2'))
 }
 
-/**
- * Lists this account's Flow projects, so the agent can pick one instead of
- * asking the owner to copy a project id out of a URL.
- */
 export function flowListProjects(): Promise<FlowResult> {
   return call(listProjectsScript())
 }
@@ -221,43 +216,49 @@ export async function flowViewImage(mediaId: string): Promise<MediaBytesResult> 
 }
 
 /**
- * Generates a short video, Portrait only. `mode: 'INGREDIENTS'` uses one or
- * more reference images (`mediaIds`); `mode: 'FRAMES'` animates a single
- * start image (only `mediaIds[0]` is used — no end frame is offered; Omni
- * Flash's own API rejected one outright, and Veo 3.1 Lite + FRAMES has no
- * confirmed model key yet). `mediaIds` come from a flowGenerateImage or
- * flowUploadImage result. Submission only — poll with flowGetVideoStatus
- * for the finished video.
+ * Generates one video. `modelKey` is passed through verbatim — call
+ * `flowVideoModels` for the keys Flow itself accepts, rather than trusting a
+ * table; this bridge's own history records one being wrong.
  */
-export async function flowGenerateVideo(
-  mode: VideoMode,
-  model: VideoModel,
-  mediaIds: string[],
-  prompt: string,
-  projectId: string,
-): Promise<FlowResult> {
-  const ids = (mediaIds ?? []).map(id => String(id).trim()).filter(Boolean)
-  if (!ids.length) return { ok: false, error: 'refusing to generate a video without at least one mediaId' }
+export function flowGenerateVideo(prompt: string, projectId: string, modelKey: string): Promise<FlowResult> {
   const text = String(prompt ?? '').trim()
-  if (!text) return { ok: false, error: 'refusing to generate a video without a prompt' }
+  if (!text) return Promise.resolve({ ok: false, error: 'refusing to generate a video without a prompt' })
   const id = String(projectId ?? '').trim()
-  if (!id) return { ok: false, error: 'refusing to generate without a projectId' }
-
-  const credits = await call(getCreditsScript())
-  const tier = typeof credits.tier === 'string' ? credits.tier : 'PAYGATE_TIER_ONE'
-  return call(generateVideoScript(mode, model, ids, text, id, tier))
+  if (!id) return Promise.resolve({ ok: false, error: 'refusing to generate without a projectId' })
+  const model = String(modelKey ?? '').trim()
+  if (!model) return Promise.resolve({ ok: false, error: 'refusing to generate without a model key — call flowVideoModels first' })
+  return call(generateVideoScript(text, id, model))
 }
 
-/** Reads the account's real Flow tier and remaining VIDEO credits (image generation has a separate, unexposed daily limit — see flowBridge.ts). */
 export function flowGetCredits(): Promise<FlowResult> {
   return call(getCreditsScript())
 }
 
-/** Polls a submitted video's status. `mediaId` comes from a flowGenerateVideo result. */
-export function flowGetVideoStatus(mediaId: string, projectId: string): Promise<FlowResult> {
+/** Looks up one media item by the id a generation returned. */
+export function flowMediaStatus(mediaId: string): Promise<FlowResult> {
   const id = String(mediaId ?? '').trim()
-  if (!id) return Promise.resolve({ ok: false, error: 'refusing to check status without a mediaId' })
-  const pid = String(projectId ?? '').trim()
-  if (!pid) return Promise.resolve({ ok: false, error: 'refusing to check status without a projectId' })
-  return call(getVideoStatusScript(id, pid))
+  if (!id) return Promise.resolve({ ok: false, error: 'refusing to look up without a mediaId' })
+  return call(mediaStatusScript(id))
 }
+
+/** Renames an existing project. New capability: the retired API had none. */
+export function flowRenameProject(projectId: string, projectTitle: string): Promise<FlowResult> {
+  const id = String(projectId ?? '').trim()
+  const title = String(projectTitle ?? '').trim()
+  if (!id) return Promise.resolve({ ok: false, error: 'refusing to rename without a projectId' })
+  if (!title) return Promise.resolve({ ok: false, error: 'refusing to rename to an empty title' })
+  return call(renameProjectScript(id, title))
+}
+
+/** Lists the media already inside a project. */
+export function flowListProjectMedia(projectId: string): Promise<FlowResult> {
+  const id = String(projectId ?? '').trim()
+  if (!id) return Promise.resolve({ ok: false, error: 'refusing to list media without a projectId' })
+  return call(listProjectMediaScript(id))
+}
+
+/** The video model keys Flow accepts, read from Flow rather than hardcoded. */
+export function flowVideoModels(): Promise<FlowResult> {
+  return call(videoModelsScript())
+}
+
