@@ -232,13 +232,18 @@ export async function* runClaudeAgentTurn(
   const toolSet = createAgentToolSet(projectRuntime, requestApproval)
 
   const queryOptions = {
-    // Was `[]` — disables EVERY built-in tool (Read, Bash, Write, ...),
-    // confirmed against the SDK's own doc comment on `tools`. That left
-    // the model with only the custom worker tools, unable to do any
-    // general-purpose file/shell work a user might ask for. The preset
-    // restores them; canUseTool below is what actually gates the risky
-    // ones — allowedTools alone would only pre-approve, not deny.
-    tools: { type: 'preset' as const, preset: 'claude_code' as const },
+    // Exactly the built-ins this agent was already allowed to use without an
+    // approval prompt (READ_ONLY_BUILTIN_TOOLS, below in allowedTools). The
+    // claude_code preset loaded every built-in instead -- Bash, Write, Edit,
+    // Task, NotebookEdit and the rest -- and each one costs its full schema on
+    // every turn whether or not it is ever called.
+    //
+    // Bash, Write and Edit are the deliberate losses. They were already behind
+    // canUseTool, so they never ran unattended, and FlowDesk has its own
+    // run_command and project_* tools for the work they were there for. An
+    // earlier attempt used `tools: []`, which removed the read-only set too and
+    // left the agent unable to open a file at all; this keeps that set.
+    tools: READ_ONLY_BUILTIN_TOOLS,
     mcpServers: { workers: toolSet.server },
     // Tools listed here run without a canUseTool prompt at all: every
     // custom worker tool (each already gates its own risky actions
@@ -282,7 +287,11 @@ export async function* runClaudeAgentTurn(
         ? { behavior: 'allow' as const }
         : { behavior: 'deny' as const, message: 'The user denied this action.' }
     },
-    systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: AGENT_SYSTEM_PROMPT },
+    // FlowDesk's own instructions, not Claude Code's. The preset carried a
+    // coding-agent system prompt this agent does not act on -- it drives
+    // browser workers, WhatsApp, NotebookLM and the Brain, none of which the
+    // preset knows about.
+    systemPrompt: AGENT_SYSTEM_PROMPT,
     // A guardrail, not a product limitation: complex delegated work can
     // reasonably need several tool/result cycles, but must still stop
     // before an accidental loop consumes the desktop session forever.
