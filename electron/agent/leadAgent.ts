@@ -251,7 +251,20 @@ export async function* runClaudeAgentTurn(
       ...toolSet.names,
       ...READ_ONLY_BUILTIN_TOOLS,
     ],
-    strictMcpConfig: false,
+    // Only the worker server. Was false, which let the owner's project
+    // .mcp.json, user settings and plugins load their tools into every
+    // FlowDesk turn -- measured at 3,025 tokens of other people's MCP servers
+    // in one real session.
+    strictMcpConfig: true,
+    // SDK isolation mode. The claude_code preset otherwise reads the owner's
+    // own ~/.claude configuration, so their personal Claude Code setup rode
+    // along on every FlowDesk message: 8,271 tokens of skill listing, 5,741 of
+    // SessionStart hooks, 1,236 of subagent listing -- none of which FlowDesk
+    // uses. It also meant installing a skill in the terminal silently made
+    // this agent more expensive, which is a relationship that should not exist.
+    settingSources: [],
+    skills: [],
+    agents: {},
     permissionMode: 'default' as const,
     canUseTool: async (toolName: string, input: Record<string, unknown>, options: { title?: string; displayName?: string }) => {
       if (bypassPermissions) return { behavior: 'allow' as const }
