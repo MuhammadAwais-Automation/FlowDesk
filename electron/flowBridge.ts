@@ -538,3 +538,103 @@ export function getCreditsScript(): string {
 
 export const __testing = { AISANDBOX_API, RECAPTCHA_SITE_KEY, AISANDBOX_API_KEY, ASPECT_RATIO_MAP, IMAGE_MODEL_MAP, VIDEO_MODEL_KEYS, buildScript }
 
+
+/**
+ * Lists the Google Flow projects this account owns.
+ *
+ * This is the first call written against Flow's CURRENT frontend. Google
+ * replaced the labs.google Next.js app (tRPC, `/fx/api/trpc/...`) with an
+ * Angular app on flow.google.com that speaks `batchexecute`; the 2026-09-17
+ * capture of a real project-list load contains zero tRPC requests, so every
+ * other script in this file is written against an API that is no longer there.
+ *
+ * Captured request, exactly:
+ *
+ *   POST /_/AiSandboxAngularFrontend/data/batchexecute?rpcids=UpteDb&...
+ *   f.req=[[["UpteDb","[\"projects/*\",21,null,null,null,null,[1]]",null,"generic"]]]
+ *   at=<token>
+ *
+ * The inner argument is sent as a JSON *string*, not an object — that double
+ * encoding is what batchexecute expects, and flattening it produces a 400.
+ *
+ * `at`, `bl` and `f.sid` are per-session and are read from the page rather
+ * than hardcoded; probes/flow-01-boq-params.js confirmed each key against the
+ * captured values (SNlM0e, cfb2h, FdrFJe) rather than assuming the usual boq
+ * names held here.
+ */
+export function listProjectsScript(): string {
+  return buildScript(`
+    var wiz = window.WIZ_global_data
+    if (!wiz || !wiz.SNlM0e) {
+      return { ok: false, error: 'Flow page has no session token yet (WIZ_global_data.SNlM0e missing) — let the page finish loading and retry' }
+    }
+
+    var inner = JSON.stringify(['projects/*', 21, null, null, null, null, [1]])
+    var body = new URLSearchParams()
+    body.set('f.req', JSON.stringify([[['UpteDb', inner, null, 'generic']]]))
+    body.set('at', wiz.SNlM0e)
+
+    var query = new URLSearchParams()
+    query.set('rpcids', 'UpteDb')
+    query.set('source-path', '/')
+    if (wiz.cfb2h) query.set('bl', wiz.cfb2h)
+    if (wiz.FdrFJe) query.set('f.sid', wiz.FdrFJe)
+    query.set('hl', 'en-US')
+    query.set('_reqid', String(Math.floor(Math.random() * 900000) + 100000))
+    query.set('rt', 'c')
+
+    var res = await fetch('/_/AiSandboxAngularFrontend/data/batchexecute?' + query.toString(), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: body.toString(),
+    })
+    var text = await res.text()
+    if (res.status !== 200) {
+      return { ok: false, error: 'Flow refused the project list (HTTP ' + res.status + ')', detail: text.slice(0, 300) }
+    }
+
+    // batchexecute answers with a )]}' guard, then alternating length/JSON
+    // lines. Scan every line for the envelope carrying our rpcid rather than
+    // assuming a position: the number of framing rows varies per response.
+    var payload = null
+    var lines = text.split('\n')
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim()
+      if (line.charAt(0) !== '[') continue
+      var rows = null
+      try { rows = JSON.parse(line) } catch (e) { continue }
+      if (!Array.isArray(rows)) continue
+      for (var j = 0; j < rows.length; j++) {
+        var row = rows[j]
+        if (Array.isArray(row) && row[0] === 'wrb.fr' && row[1] === 'UpteDb' && typeof row[2] === 'string') {
+          try { payload = JSON.parse(row[2]) } catch (e) {}
+        }
+      }
+    }
+    if (payload === null) {
+      return { ok: false, error: 'Flow answered but carried no UpteDb result', detail: text.slice(0, 300) }
+    }
+
+    // Shape seen in the capture:
+    //   [[ [ "<projectId>", [ "<title>", null, [seconds, nanos], "<thumbUrl>" ] ], ... ]]
+    // Walked rather than indexed at a fixed depth, so an extra wrapper level
+    // in a future response does not silently return zero projects.
+    var projects = []
+    function walk(node, depth) {
+      if (!Array.isArray(node) || depth > 6) return
+      var id = node[0]
+      var meta = node[1]
+      var looksLikeProject = typeof id === 'string' && id.length > 20 && Array.isArray(meta) && typeof meta[0] === 'string'
+      if (looksLikeProject) {
+        var created = Array.isArray(meta[2]) && typeof meta[2][0] === 'number' ? new Date(meta[2][0] * 1000).toISOString() : null
+        projects.push({ projectId: id, title: meta[0], createdAt: created, thumbnailUrl: typeof meta[3] === 'string' ? meta[3] : null })
+        return
+      }
+      for (var k = 0; k < node.length; k++) walk(node[k], depth + 1)
+    }
+    walk(payload, 0)
+
+    return { ok: true, count: projects.length, projects: projects }
+  `)
+}

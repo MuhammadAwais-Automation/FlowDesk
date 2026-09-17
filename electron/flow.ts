@@ -10,7 +10,7 @@ import { app } from 'electron'
 import { findViewByUrl, listViewUrls } from './sessions'
 import {
   generateImageScript, createProjectScript, uploadImageScript,
-  generateVideoScript, getVideoStatusScript, getCreditsScript,
+  generateVideoScript, getVideoStatusScript, getCreditsScript, listProjectsScript,
   type ImageAspectRatio, type ImageModel, type VideoMode, type VideoModel,
 } from './flowBridge'
 
@@ -89,6 +89,14 @@ export function flowGenerateImage(
   const id = String(projectId ?? '').trim()
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to generate without a projectId' })
   return call(generateImageScript(text, id, aspectRatio ?? 'LANDSCAPE', imageModel ?? 'NANO_BANANA_PRO', referenceMediaIds ?? []))
+}
+
+/**
+ * Lists this account's Flow projects, so the agent can pick one instead of
+ * asking the owner to copy a project id out of a URL.
+ */
+export function flowListProjects(): Promise<FlowResult> {
+  return call(listProjectsScript())
 }
 
 /** Creates a new Flow project. Returns the new projectId, for use with flowGenerateImage. */

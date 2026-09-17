@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { tool } from '@anthropic-ai/claude-agent-sdk'
-import { flowGenerateImage, flowCreateProject, flowUploadImage, flowDownloadImage, flowGenerateVideo, flowGetVideoStatus, flowGetCredits, flowViewImage } from '../flow'
+import { flowGenerateImage, flowCreateProject, flowListProjects, flowUploadImage, flowDownloadImage, flowGenerateVideo, flowGetVideoStatus, flowGetCredits, flowViewImage } from '../flow'
 import type { RequestApproval } from './approval'
 
 /**
@@ -198,6 +198,21 @@ export function createFlowTools(requestApproval: RequestApproval) {
       },
     ),
     tool(
+      'studio_flow_list_projects',
+      'List the Google Flow projects on this account, newest first, each with its projectId, title and creation time. Read-only and spends no credits. Use this FIRST when a Flow task needs a project — it removes any need to ask the user to copy a project id out of a URL. Uses an internal API Google does not officially publish, so it still requires approval.',
+      {},
+      async () => {
+        const approved = await requestApproval({
+          tool: 'studio_flow_list_projects',
+          title: 'List Google Flow projects',
+          detail: '— this calls an internal Google API that is not officially published. Read-only. —',
+          input: {},
+        })
+        if (!approved) return denied('Projects were not listed.')
+        return result(await flowListProjects())
+      },
+    ),
+    tool(
       'studio_flow_get_credits',
       'Check the Google Flow account real video-credit balance and paygate tier, using an internal API Google does not officially publish. Read-only, no credits spent. Note: this covers VIDEO credits only — image generation has a separate daily limit that is not exposed by any known endpoint, so this tool cannot report how many images are left today. Still requires approval since it uses the unofficial API.',
       {},
@@ -216,6 +231,7 @@ export function createFlowTools(requestApproval: RequestApproval) {
 }
 
 export const FLOW_TOOL_BASE_NAMES = [
+  'studio_flow_list_projects',
   'studio_flow_create_project',
   'studio_flow_generate_image',
   'studio_flow_upload_image',
