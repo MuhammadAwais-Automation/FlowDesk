@@ -20,6 +20,26 @@ export interface FlowResult {
   [key: string]: unknown
 }
 
+/**
+ * Hosts Google Flow has lived on. `flow.google.com` is where it is now;
+ * `labs.google` is kept because an older session can still be sitting on the
+ * previous path, and a view on either one is a usable Flow session.
+ *
+ * This list existing at all is the bug that hid for weeks: every check was a
+ * literal 'labs.google', so after Google moved the app, a Flow page open on
+ * screen reported "Google Flow is not open" and the discovery recorder never
+ * attached to it either.
+ */
+const FLOW_HOSTS = ['flow.google.com', 'labs.google'] as const
+
+function findFlowView() {
+  for (const host of FLOW_HOSTS) {
+    const view = findViewByUrl(host)
+    if (view) return view
+  }
+  return null
+}
+
 const NOT_OPEN =
   'Google Flow is not open. Open the Studio page in FlowDesk, select Google Flow, choose a Google account, and open a project, then retry.'
 
@@ -37,7 +57,7 @@ function openUrlSummary(): string {
 }
 
 async function call(script: string): Promise<FlowResult> {
-  const view = findViewByUrl('labs.google')
+  const view = findFlowView()
   if (!view) return { ok: false, error: NOT_OPEN + openUrlSummary() }
   try {
     const result = await view.webContents.executeJavaScript(script)
@@ -131,13 +151,23 @@ export interface MediaBytesResult {
  * rather than trying to extract bytes from inside the page at all.
  */
 async function fetchMediaBytes(mediaId: string): Promise<MediaBytesResult> {
-  const view = findViewByUrl('labs.google')
+  const view = findFlowView()
   if (!view) return { ok: false, error: NOT_OPEN }
 
-  const cookies = await view.webContents.session.cookies.get({ url: 'https://labs.google' })
+  // Origin comes from the view rather than a constant: Flow moved from
+  // labs.google to flow.google.com, and a hardcoded origin here would fetch
+  // with cookies for a host the session is no longer on.
+  let origin: string
+  try {
+    origin = new URL(view.webContents.getURL()).origin
+  } catch {
+    return { ok: false, error: NOT_OPEN }
+  }
+
+  const cookies = await view.webContents.session.cookies.get({ url: origin })
   const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ')
 
-  const url = `https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=${encodeURIComponent(mediaId)}&mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL`
+  const url = `${origin}/fx/api/trpc/media.getMediaUrlRedirect?name=${encodeURIComponent(mediaId)}&mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL`
 
   let res: Response
   try {

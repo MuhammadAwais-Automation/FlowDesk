@@ -27,7 +27,9 @@ export const STUDIO_TOOLS: StudioTool[] = [
   {
     id: 'flow',
     label: 'Google Flow',
-    url: 'https://labs.google/fx/tools/flow',
+    // Google moved Flow off labs.google/fx/tools/flow; the old path only
+    // redirects, and every host check in this app missed the redirect target.
+    url: 'https://flow.google.com/',
     icon: Clapperboard,
     requiresGoogleAccount: true,
     accent: '#4285F4',

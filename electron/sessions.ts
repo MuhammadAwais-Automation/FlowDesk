@@ -49,7 +49,7 @@ function logCdpDecision(url: string, matchedHost: string | undefined, packaged: 
   } catch { /* discovery aid only */ }
 }
 
-const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'labs.google']
+const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'flow.google.com', 'labs.google']
 
 /**
  * Extra hosts to capture ALONGSIDE a matched tab host, for sites whose real
@@ -60,6 +60,7 @@ const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'labs.google']
  * directly against the page's own Resource Timing API.
  */
 const CDP_RECORDER_EXTRA_HOSTS: Record<string, string[]> = {
+  'flow.google.com': ['aisandbox-pa.googleapis.com', 'labs.google'],
   'labs.google': ['aisandbox-pa.googleapis.com'],
 }
 
