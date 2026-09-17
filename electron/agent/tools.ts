@@ -12,6 +12,7 @@ import { createStudioTools, STUDIO_TOOL_NAMES } from './studioTools'
 import { createProjectTools, PROJECT_TOOL_NAMES, type ProjectToolRuntime } from './projectTools'
 import { alwaysApprove, type RequestApproval } from './approval'
 import { BRAIN_TOOL_NAMES, createBrainTools } from './brainTools'
+import type { ToolDomain } from './toolDomains'
 
 interface WorkerToolSpec {
   name: string
@@ -60,34 +61,47 @@ function buildWorkerTool(spec: WorkerToolSpec) {
   )
 }
 
-const BASE_AGENT_TOOL_NAMES = [
-  ...WORKER_TOOLS.map(spec => `mcp__workers__${spec.name}`),
-  ...NOTEBOOKLM_TOOL_NAMES,
-  ...WHATSAPP_TOOL_NAMES,
-  ...LINKEDIN_TOOL_NAMES,
-  ...FACEBOOK_TOOL_NAMES,
-  ...FLOW_TOOL_NAMES,
-  ...IMAGE_TOOL_NAMES,
-  ...STUDIO_TOOL_NAMES,
-  ...BRAIN_TOOL_NAMES,
-]
-
 export type { ProjectToolRuntime } from './projectTools'
 
-export function createAgentToolSet(projectRuntime?: ProjectToolRuntime, requestApproval: RequestApproval = alwaysApprove) {
-  const projectTools = projectRuntime ? createProjectTools(projectRuntime) : []
-  const whatsappTools = createWhatsAppTools(requestApproval)
-  const linkedinTools = createLinkedInTools(requestApproval)
-  const facebookTools = createFacebookTools(requestApproval)
-  const flowTools = createFlowTools(requestApproval)
+export function createAgentToolSet(
+  projectRuntime?: ProjectToolRuntime,
+  requestApproval: RequestApproval = alwaysApprove,
+  /**
+   * Which optional families to include. Omitted means all of them — what
+   * codexLeadAgent and the existing tests expect. leadAgent passes the routed
+   * set, so a question about the owner no longer ships 26 LinkedIn schemas.
+   */
+  domains?: ReadonlySet<ToolDomain>,
+) {
+  const wants = (domain: ToolDomain) => domains === undefined || domains.has(domain)
+  const projectTools = projectRuntime && wants('project') ? createProjectTools(projectRuntime) : []
+  const whatsappTools = wants('whatsapp') ? createWhatsAppTools(requestApproval) : []
+  const linkedinTools = wants('linkedin') ? createLinkedInTools(requestApproval) : []
+  const facebookTools = wants('facebook') ? createFacebookTools(requestApproval) : []
+  const flowTools = wants('flow') ? createFlowTools(requestApproval) : []
+  const studioTools = wants('studio') ? createStudioTools(requestApproval) : []
+  const notebooklmTools = wants('notebooklm') ? NOTEBOOKLM_TOOLS : []
+  // Never routed away: the ask_* providers are the agent's whole purpose, the
+  // Brain answers questions that never name it, and the image pair is too
+  // small for gating to save anything.
   const imageTools = createImageTools()
-  const studioTools = createStudioTools(requestApproval)
   const brainTools = createBrainTools(requestApproval)
   return {
     server: createSdkMcpServer({
       name: 'workers',
-      tools: [...WORKER_TOOLS.map(buildWorkerTool), ...NOTEBOOKLM_TOOLS, ...whatsappTools, ...linkedinTools, ...facebookTools, ...flowTools, ...imageTools, ...studioTools, ...brainTools, ...projectTools],
+      tools: [...WORKER_TOOLS.map(buildWorkerTool), ...notebooklmTools, ...whatsappTools, ...linkedinTools, ...facebookTools, ...flowTools, ...imageTools, ...studioTools, ...brainTools, ...projectTools],
     }),
-    names: projectRuntime ? [...BASE_AGENT_TOOL_NAMES, ...PROJECT_TOOL_NAMES] : BASE_AGENT_TOOL_NAMES,
+    names: [
+      ...WORKER_TOOLS.map(spec => `mcp__workers__${spec.name}`),
+      ...IMAGE_TOOL_NAMES,
+      ...BRAIN_TOOL_NAMES,
+      ...(wants('notebooklm') ? NOTEBOOKLM_TOOL_NAMES : []),
+      ...(wants('whatsapp') ? WHATSAPP_TOOL_NAMES : []),
+      ...(wants('linkedin') ? LINKEDIN_TOOL_NAMES : []),
+      ...(wants('facebook') ? FACEBOOK_TOOL_NAMES : []),
+      ...(wants('flow') ? FLOW_TOOL_NAMES : []),
+      ...(wants('studio') ? STUDIO_TOOL_NAMES : []),
+      ...(projectRuntime && wants('project') ? PROJECT_TOOL_NAMES : []),
+    ],
   }
 }

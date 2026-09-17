@@ -16,6 +16,7 @@ import { brainModePolicy, normalizeAgentBrainMode } from './agent/brainMode'
 import { buildContinuationPrompt, planContinuationTurns } from './agent/continuations'
 import { withAgentAbortSlot } from './agent/agentRunAbortSlot'
 import { captureSessionTurns } from './agent/sessionCapture'
+import { widenDomains, type ToolDomain } from './agent/toolDomains'
 
 // Initializes Crashpad so Windows dev runs are less likely to log "not connected" (harmless Chromium noise otherwise).
 crashReporter.start({ productName: 'FlowDesk', uploadToServer: false })
@@ -1637,6 +1638,13 @@ ipcMain.handle('agent:approvalResponse', (_e, requestId: unknown, approved: unkn
   return true
 })
 
+/**
+ * Worker families each Agent session has needed so far. Grows, never shrinks:
+ * tool schemas render ahead of the system prompt in the cached prefix, so a
+ * set that changed shape every turn would pay a fresh cache write every turn.
+ */
+const sessionToolDomains = new Map<string, ReadonlySet<ToolDomain>>()
+
 async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; runId?: unknown; brain?: unknown } | string, mode: 'interactive' | 'continuation' = 'interactive') {
   const prompt = typeof input === 'string' ? input : typeof input?.prompt === 'string' ? input.prompt : ''
   const sessionId = typeof input === 'string' ? 'legacy-agent-session' : typeof input?.sessionId === 'string' ? input.sessionId : 'legacy-agent-session'
@@ -1769,6 +1777,13 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
   }
   if (brainManifest) promptToSend = composePromptWithManifest(promptToSend, brainManifest)
 
+  // Which worker families this turn loads. Routed from the prompt including
+  // its catch-up recap, so "ab usay bhej do" still finds WhatsApp, and widened
+  // rather than replaced, because tool schemas sit ahead of everything else in
+  // the cached prefix -- a set that shrank would re-write the whole cache.
+  const toolDomains = widenDomains(sessionToolDomains.get(sessionId) ?? [], promptToSend)
+  sessionToolDomains.set(sessionId, toolDomains)
+
   const bypassPermissions = configuredSettings.agentBypassPermissions === true
   const requestApproval = makeRequestApproval(runId, sessionId, bypassPermissions)
 
@@ -1790,7 +1805,7 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
   const pendingToolCalls = new Map<string, agentSessions.AgentToolCallEntry>()
   for await (const event of runAgentTurn(
     promptToSend, abortController, projectRuntime, leadAgentProvider,
-    requestApproval, bypassPermissions, { resumeSessionId, model: configuredSettings.claudeAgentModel },
+    requestApproval, bypassPermissions, { resumeSessionId, model: configuredSettings.claudeAgentModel, toolDomains },
   )) {
     if (event.type === 'provider_session') providerSessionId = event.id
     if (event.type === 'done') {

@@ -1,6 +1,7 @@
 import type { query as queryFn, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentTurnUsage } from '../../src/types/brainKnowledge'
 import { createAgentToolSet, type ProjectToolRuntime } from './tools'
+import type { ToolDomain } from './toolDomains'
 import { getClaudeExecutablePath } from '../claudeExecutable'
 import { alwaysApprove, type RequestApproval } from './approval'
 
@@ -194,6 +195,8 @@ export interface AgentTurnOptions {
   resumeSessionId?: string
   /** Which Claude model to run. Omitted falls back to the SDK's own default. */
   model?: string
+  /** Worker families this turn may use. Omitted loads all of them. */
+  toolDomains?: ReadonlySet<ToolDomain>
 }
 
 export function agentFailureMessage(error: unknown): string {
@@ -231,7 +234,7 @@ export async function* runClaudeAgentTurn(
   const toolProviderById = new Map<string, string>()
 
   const binaryPath = getClaudeExecutablePath()
-  const toolSet = createAgentToolSet(projectRuntime, requestApproval)
+  const toolSet = createAgentToolSet(projectRuntime, requestApproval, options.toolDomains)
 
   const queryOptions = {
     // Exactly the built-ins this agent was already allowed to use without an
