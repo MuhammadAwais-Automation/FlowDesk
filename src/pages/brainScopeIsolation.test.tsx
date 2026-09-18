@@ -1,11 +1,15 @@
 /** @vitest-environment jsdom */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BrainCandidate, BrainJob, BrainScope } from '@/types/brain'
-import type { CompactionReport, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocument, UnresolvedLink, VaultImportReport } from '@/types/brainKnowledge'
+import type { CompactionReport, KnowledgeCandidate, KnowledgeDocument, UnresolvedLink, VaultImportReport } from '@/types/brainKnowledge'
 import Intelligence from './Intelligence'
+
+// sigma's entry module reads `WebGL2RenderingContext` at evaluation time, which
+// jsdom does not define -- importing the canvas at all kills the test file.
+vi.mock('@/components/brain/atlas/AtlasCanvas', () => ({ AtlasCanvas: () => null }))
 
 const scopes: BrainScope[] = ['global', 'a', 'b'].map(id => ({
   id, type: id === 'global' ? 'global' : 'client', externalRef: id,
@@ -30,10 +34,6 @@ const knowledgeDocument: KnowledgeDocument = {
   title: 'Private client A', summary: 'Scoped document', contentHash: 'hash-a', byteSize: 10,
   origin: 'curated', validFrom: scopes[0].createdAt, validTo: null,
   createdAt: scopes[0].createdAt, updatedAt: scopes[0].createdAt,
-}
-const searchHit: DocumentSearchHit = {
-  path: 'wiki/clients/private-a.md', title: 'Private client A', type: 'client',
-  snippet: 'Private [match] A', score: 1, updatedAt: scopes[0].createdAt,
 }
 const importReport: VaultImportReport = { scanned: 5, imported: 3, updated: 1, unchanged: 1, skipped: 0, failures: [], durationMs: 12 }
 const compactionReport: CompactionReport = {
@@ -128,7 +128,7 @@ function switchScope(id = 'b') {
 describe('Brain scope transitions', () => {
   it('removes old Review actions while the new refresh is pending and after it fails', async () => {
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: /^Review/ }))
+    fireEvent.click(screen.getByRole('button', { name: /review/ }))
     await waitFor(() => expect(screen.getByText('Private candidate A')).toBeTruthy())
     const refresh = deferred<never>()
     api.brainListCandidates.mockReturnValue(refresh.promise)
@@ -141,64 +141,54 @@ describe('Brain scope transitions', () => {
 
   it('shows knowledge candidates alongside memory candidates and unresolved links in Review, tagged by system, and accepts via the knowledge decide call', async () => {
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: /^Review/ }))
+    fireEvent.click(screen.getByRole('button', { name: /review/ }))
     await waitFor(() => expect(screen.getByText('Private knowledge candidate A')).toBeTruthy())
     expect(screen.getByText('Private candidate A')).toBeTruthy()
-    expect(screen.getByText('Memory')).toBeTruthy()
-    const knowledgeCard = screen.getByText('Private knowledge candidate A').closest('section')!
-    expect(within(knowledgeCard).getByText('Knowledge')).toBeTruthy()
-    const [acceptButton] = within(knowledgeCard).getAllByRole('button')
-    fireEvent.click(acceptButton)
+    expect(screen.getByText(/machine-inferred · note/)).toBeTruthy()
+    expect(screen.getByText(/memory · external · fact/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Accept Private knowledge candidate A' }))
     await waitFor(() => expect(api.brainKnowledgeDecideCandidate).toHaveBeenCalledWith({ id: 'knowledge-candidate-a', decision: 'accept' }))
     expect(screen.getByText(/Private client A/)).toBeTruthy()
     expect(screen.getByText(/wiki\/people\/ghost-a\.md/)).toBeTruthy()
   })
 
-  it('loads the knowledge document list and unresolved links only for the selected scope, discarding a stale response after switching', async () => {
-    const response = deferred<KnowledgeDocument[]>()
-    api.brainKnowledgeList.mockReturnValueOnce(response.promise).mockResolvedValue([])
+  it('loads the knowledge graph only for the selected scope, discarding a stale response after switching', async () => {
+    const response = deferred<{ nodes: Array<{ path: string; title: string; type: 'client'; degree: number; updatedAt: string }>; edges: never[]; unresolvedCount: number }>()
+    api.brainKnowledgeGraph.mockReturnValueOnce(response.promise).mockResolvedValue({ nodes: [], edges: [], unresolvedCount: 0 })
     await mount(Brain)
-    expect(api.brainKnowledgeList).toHaveBeenCalledWith({ scopeId: 'a', limit: 200 })
+    expect(api.brainKnowledgeGraph).toHaveBeenCalledWith({ scopeId: 'a' })
     switchScope()
-    await act(async () => response.resolve([knowledgeDocument]))
-    fireEvent.click(screen.getByRole('button', { name: 'Library' }))
+    await act(async () => response.resolve({
+      nodes: [{ path: knowledgeDocument.path, title: knowledgeDocument.title, type: 'client', degree: 1, updatedAt: knowledgeDocument.updatedAt }],
+      edges: [], unresolvedCount: 0,
+    }))
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'private' } })
     expect(screen.queryByText('Private client A')).toBeNull()
   })
 
-  it('shows recently updated documents on Today and opens the reader from there', async () => {
-    api.brainKnowledgeList.mockResolvedValue([knowledgeDocument])
+  it('opens a document via search and shows its body, scoped to the selected scope', async () => {
+    api.brainKnowledgeGraph.mockResolvedValue({
+      nodes: [{ path: knowledgeDocument.path, title: knowledgeDocument.title, type: 'client', degree: 1, updatedAt: knowledgeDocument.updatedAt }],
+      edges: [], unresolvedCount: 0,
+    })
     api.brainKnowledgeRead.mockResolvedValue({
       path: knowledgeDocument.path, title: knowledgeDocument.title, type: 'client',
       text: 'Full private body A', updatedAt: knowledgeDocument.updatedAt, estimatedTokens: 5, truncated: false,
     })
     await mount(Brain)
-    await waitFor(() => expect(screen.getByText('Private client A')).toBeTruthy())
-    fireEvent.click(screen.getByText('Private client A'))
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'private' } })
+    fireEvent.click(await screen.findByRole('button', { name: /Private client A/ }))
     await waitFor(() => expect(screen.getByText('Full private body A')).toBeTruthy())
     expect(api.brainKnowledgeRead).toHaveBeenCalledWith({ scopeId: 'a', path: knowledgeDocument.path })
   })
 
-  it('searches the Library and shows matching hits with their snippet', async () => {
-    api.brainKnowledgeSearch.mockResolvedValue([searchHit])
-    await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: 'Library' }))
-    fireEvent.change(screen.getByPlaceholderText('Search documents…'), { target: { value: 'private' } })
-    fireEvent.keyDown(screen.getByPlaceholderText('Search documents…'), { key: 'Enter' })
-    await waitFor(() => expect(screen.getByText('Private client A')).toBeTruthy())
-    expect(api.brainKnowledgeSearch).toHaveBeenCalledWith({ scopeId: 'a', query: 'private', types: undefined, limit: 30 })
-    expect(screen.getByText('Private [match] A')).toBeTruthy()
-  })
-
-  it('asks a question on Ask and shows a cited passage, independent of the Library search state', async () => {
+  it('asks a question and shows a cited passage in the drawer', async () => {
     api.brainKnowledgeAnswerPack.mockResolvedValue(answerPack)
     await mount(Brain)
-    fireEvent.click(screen.getByRole('button', { name: /^Ask/ }))
-    fireEvent.change(screen.getByPlaceholderText(/poochein/), { target: { value: 'Yasir Bhai?' } })
-    fireEvent.keyDown(screen.getByPlaceholderText(/poochein/), { key: 'Enter' })
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Yasir Bhai?' } })
+    fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Enter' })
     await waitFor(() => expect(screen.getAllByText(/wiki\/clients\/private-a\.md/).length).toBeGreaterThan(0))
     expect(api.brainKnowledgeAnswerPack).toHaveBeenCalledWith({ scopeId: 'a', question: 'Yasir Bhai?' })
-    fireEvent.click(screen.getByRole('button', { name: /^Library/ }))
-    expect(screen.queryByPlaceholderText('Search documents…')).toBeTruthy()
   })
 
   it('shows a vault import report after Import now, scoped to the selected scope', async () => {

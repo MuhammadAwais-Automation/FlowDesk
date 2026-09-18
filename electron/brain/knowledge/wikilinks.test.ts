@@ -15,7 +15,19 @@ const VAULT = [
 describe('extractWikiLinkTargets', () => {
   it('keeps references and drops aliases, anchors and embeds', () => {
     const body = 'see [[me/profile|my profile]] and [[wiki/me/positioning#Stack]], not ![[diagram.png]]'
-    expect(extractWikiLinkTargets(body)).toEqual(['me/profile', 'wiki/me/positioning#Stack'])
+    expect(extractWikiLinkTargets(body)).toEqual(['me/profile', 'wiki/me/positioning'])
+  })
+
+  // An anchor names a heading inside a document, never part of its path. Review
+  // turns an unresolved target into a real document, so an anchor that survived
+  // here proposed a file called `me/tools#Setup.md`.
+  it('strips an anchor whether or not an alias follows it', () => {
+    expect(extractWikiLinkTargets('[[me/tools#Setup]]')).toEqual(['me/tools'])
+    expect(extractWikiLinkTargets('[[me/tools#Setup|how I set up]]')).toEqual(['me/tools'])
+  })
+
+  it('drops a reference that is nothing but an anchor', () => {
+    expect(extractWikiLinkTargets('[[#Stack]]')).toEqual([])
   })
 })
 

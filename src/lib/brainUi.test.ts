@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { BRAIN_TABS, INTELLIGENCE_TABS, INTELLIGENCE_SOURCES, MONITORABLE_RECIPE_CONTROLS, MONITORABLE_RECIPE_IDS } from './brainUi'
+import { INTELLIGENCE_TABS, INTELLIGENCE_SOURCES, MONITORABLE_RECIPE_CONTROLS, MONITORABLE_RECIPE_IDS } from './brainUi'
 
 describe('Brain UI registry', () => {
   it('keeps Brain and Intelligence as separate complete surfaces', () => {
-    expect(BRAIN_TABS).toEqual(['Today', 'Review', 'Library', 'Ask', 'Atlas', 'Health'])
     expect(INTELLIGENCE_TABS).toEqual(['Overview', 'Sources', 'Monitors', 'Pain Points', 'Trends', 'Opportunities', 'Decision Briefs'])
   })
 

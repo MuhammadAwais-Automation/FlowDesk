@@ -1,30 +1,7 @@
 import Graph from 'graphology'
 import forceAtlas2 from 'graphology-layout-forceatlas2'
 import type { KnowledgeDocType, KnowledgeGraph } from '@/types/brainKnowledge'
-
-/**
- * One colour per document type.
- *
- * Nine types is at the edge of what a categorical palette can keep apart, so
- * these are spread around the wheel rather than chosen to look pleasant
- * together, and `note` — by far the most common — is deliberately the quiet
- * grey so the meaningful types read as figure against it.
- */
-export const TYPE_COLOR: Record<KnowledgeDocType, string> = {
-  me: '#f59e0b',
-  client: '#e11d48',
-  project: '#7c3aed',
-  person: '#0284c7',
-  skill: '#059669',
-  research: '#4f46e5',
-  decision: '#ea580c',
-  source: '#0d9488',
-  note: '#a8a29e',
-}
-
-export const DIMMED_NODE = '#e7e5e4'
-export const DIMMED_EDGE = '#f5f5f4'
-export const EDGE_COLOR = '#d6d3d1'
+import { OBSERVATORY, TYPE_COLOR } from './atlasTheme'
 
 /**
  * Node radius from link count.
@@ -72,7 +49,7 @@ export function buildAtlasGraph(source: KnowledgeGraph, filters: AtlasFilters): 
     graph.addNode(path, {
       label: node.title,
       size: nodeSize(node.degree),
-      color: TYPE_COLOR[node.type] ?? TYPE_COLOR.note,
+      color: TYPE_COLOR[node.type] ?? OBSERVATORY.nodeDim,
       docType: node.type,
       degree: node.degree,
       updatedAt: node.updatedAt,
@@ -84,7 +61,7 @@ export function buildAtlasGraph(source: KnowledgeGraph, filters: AtlasFilters): 
   for (const edge of source.edges) {
     if (!visible.has(edge.from) || !visible.has(edge.to)) continue
     if (graph.hasEdge(edge.from, edge.to)) continue
-    graph.addEdge(edge.from, edge.to, { size: 0.6, color: EDGE_COLOR })
+    graph.addEdge(edge.from, edge.to, { size: 0.6, color: OBSERVATORY.edge })
   }
 
   if (graph.order > 1) {
@@ -131,4 +108,93 @@ export function neighborhoodPaths(source: KnowledgeGraph, origin: string, depth:
     if (frontier.length === 0) break
   }
   return seen
+}
+
+export type ZoomBand = 'far' | 'mid' | 'near'
+
+/**
+ * What each band draws.
+ *
+ * `minDegree` gates which nodes exist on screen; `labelMinDegree` gates which
+ * of those get a name, and `null` means none. Labels stop colliding because
+ * each band renders only as many as fit, the way a map shows countries before
+ * cities before streets.
+ *
+ * Tuned against the real store — 163 documents, median degree 2, maximum 103 —
+ * so `far` resolves to roughly eighteen hubs.
+ */
+export const BAND_RULES: Record<ZoomBand, { minDegree: number; labelMinDegree: number | null; regionLabels: boolean }> = {
+  far: { minDegree: 8, labelMinDegree: null, regionLabels: true },
+  mid: { minDegree: 2, labelMinDegree: 6, regionLabels: false },
+  near: { minDegree: 0, labelMinDegree: 0, regionLabels: false },
+}
+
+/**
+ * Sigma's camera ratio grows as you zoom out, so the thresholds read backwards
+ * from how it feels: a big ratio is far away.
+ *
+ * A ratio that is not a number falls to `mid` rather than throwing — a camera
+ * mid-animation has produced one, and the middle band is the safe answer.
+ */
+export function bandForRatio(ratio: number): ZoomBand {
+  if (!Number.isFinite(ratio)) return 'mid'
+  if (ratio > 1.6) return 'far'
+  if (ratio >= 0.6) return 'mid'
+  return 'near'
+}
+
+export interface AtlasRegion {
+  name: string
+  x: number
+  y: number
+  count: number
+}
+
+/**
+ * The part of the map a document belongs to.
+ *
+ * Two segments, because one is too coarse — the real store keeps 106 of its
+ * 163 documents under `wiki/`, so a one-segment region would be the whole map.
+ * `wiki` is dropped as a root for the same reason: it is where everything
+ * lives, so it distinguishes nothing.
+ */
+export function regionOf(path: string): string {
+  const segments = path.replaceAll('\\', '/').split('/').filter(Boolean)
+  const hadWiki = segments[0] === 'wiki'
+  const meaningful = hadWiki ? segments.slice(1) : segments
+  // Only the last segment left is the filename, so there is no directory to
+  // name: the document sits at the root of the vault.
+  if (meaningful.length <= 1) return 'loose'
+  // Remove the filename (last segment) to get just directories
+  const directories = meaningful.slice(0, -1)
+  // For wiki paths, take 1 segment (the region); for others, take up to 2
+  const maxSegments = hadWiki ? 1 : 2
+  return directories.slice(0, maxSegments).join('/')
+}
+
+/**
+ * Where to write each region's name, and how big it is.
+ *
+ * Drawn only at the far band, where node labels are off, so this is what tells
+ * you which part of the map you are looking at. A region holding one document
+ * is skipped: its own label says more than the region's name would.
+ *
+ * Largest first, so a caller that has to drop some keeps the ones that matter.
+ */
+export function regionCentroids(graph: Graph): AtlasRegion[] {
+  const members = new Map<string, { x: number; y: number; count: number }>()
+  graph.forEachNode((path, attributes) => {
+    const name = regionOf(path)
+    const current = members.get(name) ?? { x: 0, y: 0, count: 0 }
+    members.set(name, {
+      x: current.x + Number(attributes.x ?? 0),
+      y: current.y + Number(attributes.y ?? 0),
+      count: current.count + 1,
+    })
+  })
+
+  return [...members]
+    .filter(([, total]) => total.count > 1)
+    .map(([name, total]) => ({ name, x: total.x / total.count, y: total.y / total.count, count: total.count }))
+    .sort((left, right) => right.count - left.count)
 }
