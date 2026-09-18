@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type { BrainDatabase } from './database'
 import type { ArtifactStore } from './artifactStore'
-import { capabilityResultSchema, type BrainCapabilityExecutor } from './capabilityProtocol'
+import { capabilityResultSchema, type BrainCapabilityExecutor, type BrainCapabilityResult } from './capabilityProtocol'
 import { RecipeStepError, RecipeStepHandlers, socialRecipeDefinitions } from './recipeDefinitions'
+import type { CandidateStore } from './knowledge/candidates'
 
 const retries = [5_000, 30_000, 120_000]
 
@@ -13,8 +14,8 @@ export class BrainJobRunner {
   private heartbeat: ReturnType<typeof setInterval> | null = null
   private readonly handlers: RecipeStepHandlers
 
-  constructor(private readonly database: BrainDatabase, artifacts: ArtifactStore, brainRoot: string, private readonly execute: BrainCapabilityExecutor) {
-    this.handlers = new RecipeStepHandlers(artifacts, brainRoot, database)
+  constructor(private readonly database: BrainDatabase, artifacts: ArtifactStore, brainRoot: string, candidates: CandidateStore, private readonly execute: BrainCapabilityExecutor) {
+    this.handlers = new RecipeStepHandlers(artifacts, brainRoot, database, candidates)
   }
 
   start() {
@@ -42,7 +43,7 @@ export class BrainJobRunner {
   async runOnce(): Promise<boolean> {
     if (this.stopped || this.active) return false
     this.database.recoverExpiredLeases()
-    const step = this.database.claimNextJob(undefined, undefined, socialRecipeDefinitions.map(recipe => recipe.id))
+    const step = this.database.claimNextJob(undefined, undefined, socialRecipeDefinitions.map(recipe => ({ id: recipe.id, version: recipe.version })))
     if (!step) return false
     this.active = true
     const owns = () => !this.stopped && this.database.ownsJobStep(step.jobId, step.id, step.attempts)
@@ -64,15 +65,29 @@ export class BrainJobRunner {
       const prior = checkpoints.find(row => (JSON.parse(String(row.checkpoint_json)) as { stage?: unknown }).stage === definition.steps[step.stepIndex - 1])
       let checkpoint: Record<string, unknown>
       if (saved) checkpoint = JSON.parse(String(saved.checkpoint_json)) as Record<string, unknown>
-      else if (step.name === 'capture') {
-        const result = capabilityResultSchema.parse(await this.execute({
-          type: 'capability:request', jobId: job.id, scopeId: job.scopeId, recipeId: job.recipeId, accountId: job.accountId,
-          request: this.handlers.captureRequest(job, randomUUID()),
-        }).catch(() => { throw new RecipeStepError('transient') }))
-        if (!owns()) return true
-        if (!this.database.hasConsent(job.scopeId, job.recipeId, 'local-brain')) throw new RecipeStepError('approval_required')
-        checkpoint = this.handlers.capture(job, step.id, result)
-      } else checkpoint = this.handlers.execute(job, step.name, prior ? JSON.parse(String(prior.checkpoint_json)) as Record<string, unknown> : undefined)
+      else {
+        const priorCheckpoint = prior ? JSON.parse(String(prior.checkpoint_json)) as Record<string, unknown> : undefined
+        // Two steps reach outside this process: `capture` for the connector
+        // and `digest` for the model. Both re-check consent after the call —
+        // it can be revoked while a capability is in flight.
+        const request = this.handlers.capabilityRequestFor(job, step.name, randomUUID())
+        let result: BrainCapabilityResult | null = null
+        if (request) {
+          result = capabilityResultSchema.parse(await this.execute({
+            type: 'capability:request', jobId: job.id, scopeId: job.scopeId, recipeId: job.recipeId, accountId: job.accountId,
+            request,
+          }).catch(() => { throw new RecipeStepError('transient') }))
+          if (!owns()) return true
+          if (!this.database.hasConsent(job.scopeId, job.recipeId, 'local-brain')) throw new RecipeStepError('approval_required')
+        }
+        if (step.name === 'capture') {
+          // A capture with no request to make is a programming error, not a
+          // quiet scan: the connector read is what the whole job is for.
+          if (!result) throw new RecipeStepError('permanent')
+          checkpoint = this.handlers.capture(job, step.id, result)
+        } else if (step.name === 'digest') checkpoint = this.handlers.digest(job, result, priorCheckpoint)
+        else checkpoint = this.handlers.execute(job, step.name, priorCheckpoint)
+      }
       if (!owns()) return true
       if (step.name === 'summarize') {
         // If interrupted between these writes the running lease is reclaimed, and

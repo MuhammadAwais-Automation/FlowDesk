@@ -3,10 +3,28 @@ import { recordsFromConnectorResult } from './socialRecipes'
 
 const id = z.string().min(1).max(200)
 const limit = z.number().int().min(1).max(500)
+/**
+ * One chat handed to the digest model.
+ *
+ * Bounded here rather than trusted from the caller: this is the one capability
+ * that spends model tokens, so the ceiling on what a background job can spend
+ * belongs in the contract, not in the recipe that asks.
+ */
+export const digestChatSchema = z.object({
+  chatId: z.string().min(1).max(200),
+  name: z.string().max(200),
+  transcript: z.string().min(1).max(4000),
+}).strict()
+
 export const capabilityRequestSchema = z.discriminatedUnion('capability', [
   z.object({ id, capability: z.literal('whatsapp.list_unread'), input: z.object({ limit }).strict() }).strict(),
   z.object({ id, capability: z.literal('linkedin.feed'), input: z.object({ limit, sort: z.literal('RECENT') }).strict() }).strict(),
   z.object({ id, capability: z.literal('linkedin.search'), input: z.object({ query: z.string().trim().min(1).max(500), limit }).strict() }).strict(),
+  // The only capability that is not a connector read. Electron main owns the
+  // prompt and the model choice; the utility process supplies transcripts and
+  // gets prose back, exactly as it supplies nothing and gets records back from
+  // a connector.
+  z.object({ id, capability: z.literal('model.digest_chats'), input: z.object({ chats: z.array(digestChatSchema).min(1).max(10) }).strict() }).strict(),
 ])
 
 export const capabilityResultSchema = z.discriminatedUnion('ok', [
@@ -84,10 +102,16 @@ export function capabilityFailure(id: string, code: BrainCapabilityErrorCode): B
   return { id, ok: false, error: { code, message: messages[code] } }
 }
 
-const recipeCapabilities: Record<string, BrainCapabilityRequest['capability']> = {
-  'whatsapp.unread_intelligence': 'whatsapp.list_unread',
-  'linkedin.community_scan': 'linkedin.feed',
-  'linkedin.opportunity_scan': 'linkedin.search',
+/**
+ * Which capabilities each recipe may ask for. A recipe asking for anything
+ * outside its own list is refused as `permanent` — the guard that keeps a
+ * recipe from reaching a connector, or the model, that its consent never
+ * covered.
+ */
+const recipeCapabilities: Record<string, Array<BrainCapabilityRequest['capability']>> = {
+  'whatsapp.unread_intelligence': ['whatsapp.list_unread', 'model.digest_chats'],
+  'linkedin.community_scan': ['linkedin.feed'],
+  'linkedin.opportunity_scan': ['linkedin.search'],
 }
 
 // Only Electron main supplies read(). Neither commands nor executable code are accepted.
@@ -99,7 +123,7 @@ export async function executeBrainCapability(input: unknown, gateway: {
   const { request } = envelope
   // Current connectors address the existing single social session. Never silently use
   // that session for a job that explicitly requested another account.
-  if (envelope.accountId !== null || recipeCapabilities[envelope.recipeId] !== request.capability) return capabilityFailure(request.id, 'permanent')
+  if (envelope.accountId !== null || !recipeCapabilities[envelope.recipeId]?.includes(request.capability)) return capabilityFailure(request.id, 'permanent')
   try {
     if (!await gateway.hasConsent(envelope.scopeId, envelope.recipeId, 'local-brain')) return capabilityFailure(request.id, 'approval_required')
     const result = z.object({ ok: z.boolean(), error: z.string().optional() }).passthrough().parse(await gateway.read(request))
@@ -109,7 +133,8 @@ export async function executeBrainCapability(input: unknown, gateway: {
         : /unsupported|invalid|forbidden|\b40[034]\b/i.test(error) ? 'permanent' : 'transient'
       return capabilityFailure(request.id, code)
     }
-    const records = recordsFromConnectorResult(result).slice(0, request.input.limit)
+    const ceiling = 'limit' in request.input ? request.input.limit : request.input.chats.length
+    const records = recordsFromConnectorResult(result).slice(0, ceiling)
     if (JSON.stringify(records).length > 5_000_000) return capabilityFailure(request.id, 'permanent')
     return capabilityResultSchema.parse({ id: request.id, ok: true, records })
   } catch {

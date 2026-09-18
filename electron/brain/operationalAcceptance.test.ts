@@ -69,7 +69,7 @@ describe('Brain operational acceptance: capture to cited Agent action', () => {
     //    the job instead of calling the connector.
     const withoutConsent = service.database.enqueueJob({ recipeId, recipeVersion: 1, scopeId: scope.id, parameters: { query: 'developer' } })
     const blocked = fixtureConnector(() => leadRecords('acme.test', 'blocked'))
-    const blockedRunner = new BrainJobRunner(service.database, service.artifacts, root, blocked.execute)
+    const blockedRunner = new BrainJobRunner(service.database, service.artifacts, root, service.candidates, blocked.execute)
     cleanups.push(() => blockedRunner.stop())
     await blockedRunner.runOnce()
     expect(service.database.getJob(withoutConsent.id)?.status).toBe('waiting_for_approval')
@@ -85,7 +85,7 @@ describe('Brain operational acceptance: capture to cited Agent action', () => {
 
     // 3. Run capture and normalize, then kill the process mid-job.
     const before = fixtureConnector(() => leadRecords('acme.test', 'loop'))
-    const firstRunner = new BrainJobRunner(service.database, service.artifacts, root, before.execute)
+    const firstRunner = new BrainJobRunner(service.database, service.artifacts, root, service.candidates, before.execute)
     await firstRunner.runOnce()
     await firstRunner.runOnce()
     firstRunner.stop()
@@ -96,7 +96,7 @@ describe('Brain operational acceptance: capture to cited Agent action', () => {
     await vi.advanceTimersByTimeAsync(31_000)
     service = openService(root)
     const after = fixtureConnector(() => leadRecords('acme.test', 'loop'))
-    const secondRunner = new BrainJobRunner(service.database, service.artifacts, root, after.execute)
+    const secondRunner = new BrainJobRunner(service.database, service.artifacts, root, service.candidates, after.execute)
     cleanups.push(() => secondRunner.stop())
     for (let index = 0; index < 5; index += 1) await secondRunner.runOnce()
     expect(after.calls).toEqual([])
@@ -174,7 +174,7 @@ describe('Brain operational acceptance: privacy and scope isolation', () => {
     const connector = fixtureConnector(envelope => envelope.scopeId === clientA.id
       ? [{ id: 'alpha', text: 'Alpharetta Labs needs a React developer for their support backlog.', url: 'https://alpha-secret.test/posts/alpha', createdAt: '2026-09-05T09:00:00.000Z', reactions: 30 }]
       : [{ id: 'beta', text: 'Betagrid needs a React developer for their support backlog.', url: 'https://beta-open.test/posts/beta', createdAt: '2026-09-05T09:00:00.000Z', reactions: 30 }])
-    const runner = new BrainJobRunner(service.database, service.artifacts, root, connector.execute)
+    const runner = new BrainJobRunner(service.database, service.artifacts, root, service.candidates, connector.execute)
     cleanups.push(() => runner.stop())
     for (let index = 0; index < 10; index += 1) await runner.runOnce()
     expect(service.database.getJob(jobA.id)?.status).toBe('completed')
@@ -248,7 +248,7 @@ describe('Brain operational acceptance: retention and deletion', () => {
     service.database.grantConsent({ scopeId: scope.id, recipeId, provider: 'local-brain', fields: ['post_text'] })
     const job = service.database.enqueueJob({ recipeId, recipeVersion: 1, scopeId: scope.id, parameters: { query: 'developer' } })
     const connector = fixtureConnector(() => leadRecords('retention.test', 'keep'))
-    const runner = new BrainJobRunner(service.database, service.artifacts, root, connector.execute)
+    const runner = new BrainJobRunner(service.database, service.artifacts, root, service.candidates, connector.execute)
     cleanups.push(() => runner.stop())
     for (let index = 0; index < 5; index += 1) await runner.runOnce()
 

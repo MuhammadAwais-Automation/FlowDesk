@@ -6,12 +6,19 @@ import { z } from 'zod'
 import type { BrainJob } from '../../src/types/brain'
 import type { ArtifactStore } from './artifactStore'
 import type { BrainDatabase } from './database'
+import type { CandidateStore } from './knowledge/candidates'
 import { parseIntelligenceResult, persistIntelligence, persistIntelligenceEntities, processIntelligence, type IntelligenceRecord } from './intelligenceProcessor'
 import { socialRecipeRequestSchema } from './socialRecipes'
 import { capabilityFailure, type BrainCapabilityErrorCode, type BrainCapabilityRequest, type BrainCapabilityResult } from './capabilityProtocol'
 
 export const socialRecipeDefinitions = [
-  { id: 'whatsapp.unread_intelligence', version: 1, title: 'WhatsApp Unread Intelligence', steps: ['capture', 'normalize', 'classify', 'score', 'summarize'] },
+  // v2 adds `digest`: the first five steps mine a capture for opportunities and
+  // then drop the words, which left everything the chats actually said outside
+  // the knowledge store and invisible to retrieval. `digest` turns each thread
+  // into one short note and proposes it for review.
+  // `digest` sits before `summarize` because `summarize` is the step that
+  // completes the job — anything after it would never be claimed.
+  { id: 'whatsapp.unread_intelligence', version: 2, title: 'WhatsApp Unread Intelligence', steps: ['capture', 'normalize', 'classify', 'score', 'digest', 'summarize'] },
   { id: 'linkedin.community_scan', version: 1, title: 'LinkedIn Community Scan', steps: ['capture', 'normalize', 'classify', 'score', 'summarize'] },
   { id: 'linkedin.opportunity_scan', version: 1, title: 'LinkedIn Opportunity Scan', steps: ['capture', 'normalize', 'classify', 'score', 'summarize'] },
 ]
@@ -37,6 +44,49 @@ function numberField(record: Record<string, unknown>, keys: string[]) {
   return 0
 }
 
+/** Text budget for one normalized record, matching the slice below. */
+const TEXT_LIMIT = 4000
+
+/**
+ * How many chats one scan may spend a model call on.
+ *
+ * Matches the capability contract's own ceiling. This is the one step in the
+ * Brain that costs tokens, so the bound is fixed rather than parameterised:
+ * a recipe run should never be able to grow its own budget.
+ */
+const MAX_DIGEST_CHATS = 10
+
+/**
+ * A chat's recent messages folded into one readable transcript.
+ *
+ * `whatsapp.list_unread` now answers with each chat's messages rather than a
+ * single preview line, and that preview was null whenever the newest event
+ * was a protocol message — in a real capture, six of eight unread chats had
+ * no readable text at all. Everything downstream reads `text`, so this is
+ * where a chat stops being a row and becomes a conversation.
+ *
+ * Separated by ` | ` rather than newlines because the caller collapses all
+ * whitespace; the structured messages survive intact in the raw artifact,
+ * which is what the digest step reads.
+ *
+ * Truncates from the front: when a thread is longer than the budget the
+ * recent end is the part worth keeping.
+ */
+export function conversationText(record: Record<string, unknown>): string {
+  if (!Array.isArray(record.messages)) return ''
+  const lines: string[] = []
+  for (const entry of record.messages) {
+    if (!entry || typeof entry !== 'object') continue
+    const message = entry as Record<string, unknown>
+    const body = field(message, ['body', 'caption'])
+    if (!body) continue
+    const sender = field(message, ['sender']) || (message.fromMe === true ? 'You' : 'Unknown')
+    lines.push(`${sender}: ${body}`)
+  }
+  const transcript = lines.join(' | ')
+  return transcript.length > TEXT_LIMIT ? transcript.slice(-TEXT_LIMIT) : transcript
+}
+
 function observedAt(record: Record<string, unknown>) {
   for (const key of ['createdAt', 'observedAt', 'timestamp', 'sentAt']) {
     const value = record[key]
@@ -49,7 +99,12 @@ function observedAt(record: Record<string, unknown>) {
 // Checkpoints contain counts and local references. Text remains in utility-owned
 // artifacts; Task 5 can consume these deterministic per-stage artifacts directly.
 export class RecipeStepHandlers {
-  constructor(private readonly artifacts: ArtifactStore, private readonly brainRoot: string, private readonly database: BrainDatabase) {}
+  constructor(
+    private readonly artifacts: ArtifactStore,
+    private readonly brainRoot: string,
+    private readonly database: BrainDatabase,
+    private readonly candidates: CandidateStore,
+  ) {}
 
   private write(job: BrainJob, stage: string, items: unknown) {
     const directory = join(this.brainRoot, 'artifacts', job.id, 'derived')
@@ -78,6 +133,64 @@ export class RecipeStepHandlers {
     return content ? content.split('\n').map(line => z.record(z.string(), z.unknown()).parse(JSON.parse(line) as unknown)) : []
   }
 
+  /**
+   * The capture step's own checkpoint, whatever step is asking.
+   *
+   * `digest` runs fifth, so the `prior` the runner hands it is `score` — but
+   * what it needs is the raw transcripts, which only the capture checkpoint
+   * points at.
+   */
+  private captureCheckpoint(job: BrainJob): Record<string, unknown> | undefined {
+    for (const row of this.database.listCheckpoints(job.id)) {
+      const checkpoint = JSON.parse(String(row.checkpoint_json)) as Record<string, unknown>
+      if (checkpoint.stage === 'capture') return checkpoint
+    }
+    return undefined
+  }
+
+  /**
+   * The capability a step needs before it can run, or null when it needs none.
+   *
+   * Two steps reach outside the utility process now: `capture` for the
+   * connector read, and `digest` for the model. Everything between them is
+   * deterministic and runs on what those two brought back.
+   */
+  capabilityRequestFor(job: BrainJob, stepName: string, id: string): BrainCapabilityRequest | null {
+    if (stepName === 'capture') return this.captureRequest(job, id)
+    if (stepName !== 'digest') return null
+
+    const chats = this.digestInput(job)
+    // Nothing readable in this capture — no model call, and the step still
+    // succeeds. A quiet scan is a normal outcome, not a failure.
+    return chats.length === 0 ? null : { id, capability: 'model.digest_chats', input: { chats } }
+  }
+
+  /**
+   * Chats worth spending a model call on: those with an actual transcript.
+   *
+   * Capped at the capability's own ceiling so the request cannot be rejected
+   * for being too large, and sorted by transcript length so that when a scan
+   * returns more chats than the ceiling the substantial threads win over a
+   * one-line exchange.
+   */
+  private digestInput(job: BrainJob): Array<{ chatId: string; name: string; transcript: string }> {
+    let records: Array<Record<string, unknown>>
+    try {
+      records = this.readCapture(job, this.captureCheckpoint(job))
+    } catch {
+      return []
+    }
+    return records
+      .map(record => ({
+        chatId: field(record, ['id', 'chatId', 'externalId']),
+        name: field(record, ['name', 'title']),
+        transcript: conversationText(record),
+      }))
+      .filter(chat => chat.chatId !== '' && chat.transcript !== '')
+      .sort((left, right) => right.transcript.length - left.transcript.length)
+      .slice(0, MAX_DIGEST_CHATS)
+  }
+
   captureRequest(job: BrainJob, id: string): BrainCapabilityRequest {
     const parsed = socialRecipeRequestSchema.parse({ recipeId: job.recipeId, scopeId: job.scopeId, accountId: job.accountId, parameters: job.parameters })
     const limit = parsed.parameters.limit ?? 50
@@ -96,13 +209,69 @@ export class RecipeStepHandlers {
     return { stage: 'capture', count: result.records.length, dataRef: manifest.artifactRefs[0], sourceRef: manifest.rawPayloadRef, manifestJobId: manifest.jobId }
   }
 
+  /**
+   * Writes each digested thread into the Review Inbox.
+   *
+   * Proposed, never written straight through: a chat digest is external
+   * material read by a model, which the memory policy puts behind the human
+   * gate. Accepting one runs the same `supersede()` an explicit user note
+   * would, just after somebody agreed to it.
+   *
+   * Passes the intelligence `dataRef` through unchanged so `summarize`, which
+   * runs next and reads its predecessor's artifact, still finds the scored
+   * result rather than this step's bookkeeping.
+   */
+  digest(job: BrainJob, result: BrainCapabilityResult | null, prior: Record<string, unknown> | undefined): Record<string, unknown> {
+    const passthrough = { stage: 'digest', dataRef: prior?.dataRef }
+    if (result === null) return { ...passthrough, considered: 0, proposed: 0, skipped: 0 }
+    if (!result.ok) throw new RecipeStepError(result.error.code)
+
+    const day = new Date(job.createdAt).toISOString().slice(0, 10)
+    const existing = new Set(this.candidates.list(job.scopeId).map(candidate => candidate.targetPath))
+    let proposed = 0
+    let skipped = 0
+    for (const record of result.records) {
+      const prose = field(record, ['prose']).trim()
+      const chatId = field(record, ['chatId'])
+      if (!prose || !chatId) {
+        skipped += 1
+        continue
+      }
+      const name = field(record, ['name']).trim() || chatId
+      // One note per chat per day. A retry that lands before the checkpoint
+      // saves would otherwise queue the same thread twice.
+      const targetPath = `captures/whatsapp/${day}-${chatId.replace(/[^a-z0-9@._-]/gi, '-')}.md`
+      if (existing.has(targetPath)) {
+        skipped += 1
+        continue
+      }
+      const title = `${name} — ${day}`
+      this.candidates.propose({
+        scopeId: job.scopeId,
+        targetPath,
+        type: 'note',
+        title,
+        summary: prose.split(/(?<=[.!?])\s/)[0].slice(0, 300),
+        // The provenance line is written here, not by the model: where a note
+        // came from is a fact the code knows and the model would only guess.
+        body: `${prose}\n\nSource: WhatsApp chat \`${chatId}\`, captured ${day}.`,
+        origin: 'machine-inferred',
+        sessionRef: `job:${job.id}`,
+      })
+      existing.add(targetPath)
+      proposed += 1
+    }
+    return { ...passthrough, considered: result.records.length, proposed, skipped }
+  }
+
   execute(job: BrainJob, stage: string, prior: Record<string, unknown> | undefined): Record<string, unknown> {
     if (stage === 'normalize') {
       const records = z.array(z.record(z.string(), z.unknown())).max(500).parse(this.readCapture(job, prior))
       const source = job.recipeId.startsWith('whatsapp') ? 'whatsapp' : 'linkedin'
       const intelligenceRecords: IntelligenceRecord[] = records.map((record, index) => {
         const last = record.last && typeof record.last === 'object' && !Array.isArray(record.last) ? record.last as Record<string, unknown> : {}
-        const text = (field(record, ['text', 'body', 'lastMessage', 'title']) || field(last, ['body', 'caption'])).replace(/\s+/g, ' ').trim().slice(0, 4000)
+        const text = (conversationText(record) || field(record, ['text', 'body', 'lastMessage', 'title']) || field(last, ['body', 'caption']))
+          .replace(/\s+/g, ' ').trim().slice(0, TEXT_LIMIT)
         const externalId = field(record, ['id', 'urn', 'externalId', 'messageId', 'chatId']) || String(index)
         const canonicalUrl = field(record, ['url', 'canonicalUrl', 'permalink']) || null
         return {

@@ -46,7 +46,14 @@ import { getClaudeExecutablePath } from './claudeExecutable'
  * Throws on failure (CLI missing, not logged in, no result) — the caller
  * (electron/main.ts) converts that into a capture:complete error event.
  */
-export async function askClaudeSdk(prompt: string): Promise<string> {
+export async function askClaudeSdk(
+  prompt: string,
+  // Callers that are not Universal Chat supply their own instructions and a
+  // model to match the job. The Brain's chat digest is the first: it runs
+  // unattended in the background, so it asks for the cheapest model that can
+  // write two honest sentences rather than the session's default.
+  overrides: { systemPrompt?: string; model?: string } = {},
+): Promise<string> {
   const query = await getQuery()
   let finalText = ''
   const binaryPath = getClaudeExecutablePath()
@@ -54,10 +61,11 @@ export async function askClaudeSdk(prompt: string): Promise<string> {
   for await (const message of query({
     prompt: singleUserMessage(prompt),
     options: {
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: UNIVERSAL_CHAT_SYSTEM_PROMPT },
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: overrides.systemPrompt ?? UNIVERSAL_CHAT_SYSTEM_PROMPT },
       tools: [],
       maxTurns: 1,
       persistSession: false,
+      ...(overrides.model ? { model: overrides.model } : {}),
       ...(binaryPath ? { pathToClaudeCodeExecutable: binaryPath } : {})
     }
   })) {

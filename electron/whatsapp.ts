@@ -55,6 +55,55 @@ export function waListMessages(chatId: string, limit?: number): Promise<WhatsApp
   return call(`window.__fdWaListMessages(${JSON.stringify(chatId)}, ${JSON.stringify(limit ?? 20)})`)
 }
 
+/**
+ * How many unread chats get their messages fetched.
+ *
+ * Each expansion is its own executeJavaScript round trip that may page
+ * history in through WAWebChatLoadMessages, and the Brain's capability bridge
+ * gives the whole call 60 seconds. Ten leaves room for slow chats; the rest
+ * are still listed, just without a transcript.
+ */
+export const WA_MAX_EXPANDED_CHATS = 10
+
+/**
+ * Unread chats, each with its recent messages.
+ *
+ * `waListChats` alone answers with one preview line per chat — `last.body` —
+ * which is null whenever the newest event was a protocol message. A real
+ * capture of eight unread chats carried text for two of them, so everything
+ * downstream (classification, and the digest that will write these into the
+ * knowledge store) was reading a chat list rather than a conversation.
+ *
+ * The fan-out lives here because Electron main is the only process that may
+ * touch a connector: the Brain's utility process asks for one capability and
+ * gets whole threads back, without learning how to drive WhatsApp itself.
+ *
+ * Sequential on purpose. Every call evaluates inside the same live page and
+ * loads into the same message store, so parallel requests contend.
+ */
+export async function waUnreadWithMessages(limit: number, messagesPerChat = 20): Promise<WhatsAppResult> {
+  const listed = await waListChats(limit, true)
+  if (!listed.ok || !Array.isArray(listed.chats)) return listed
+
+  const chats: Array<Record<string, unknown>> = []
+  for (const entry of listed.chats as unknown[]) {
+    const chat = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>
+    const chatId = typeof chat.id === 'string' ? chat.id : null
+    if (!chatId || chats.length >= WA_MAX_EXPANDED_CHATS) {
+      chats.push(chat)
+      continue
+    }
+    // A chat that fails to load is kept with an empty transcript rather than
+    // dropped: its unread count and name are still a real signal, and losing
+    // the whole chat would make one unreadable thread look like no thread.
+    const thread = await waListMessages(chatId, messagesPerChat)
+    chats.push(Array.isArray(thread.messages)
+      ? { ...chat, messages: thread.messages }
+      : { ...chat, messages: [], messagesError: String(thread.error ?? 'unavailable') })
+  }
+  return { ...listed, chats }
+}
+
 export function waSearchContacts(query: string): Promise<WhatsAppResult> {
   return call(`window.__fdWaChats(${JSON.stringify(query ?? '')})`)
 }

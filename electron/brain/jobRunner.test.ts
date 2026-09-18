@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BrainService } from './service'
 import { BrainJobRunner } from './jobRunner'
 import type { BrainCapabilityEnvelope, BrainCapabilityResult } from './capabilityProtocol'
+import { socialRecipeDefinitions } from './recipeDefinitions'
 
 const cleanups: Array<() => void> = []
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); vi.useRealTimers() })
@@ -16,8 +17,10 @@ function setup(execute: (request: BrainCapabilityEnvelope) => Promise<BrainCapab
   cleanups.push(() => { service.close(); rmSync(root, { recursive: true, force: true }) })
   const scope = service.database.ensureScope({ type: 'client', externalRef: 'a', name: 'A' })
   service.database.grantConsent({ scopeId: scope.id, recipeId, provider: 'local-brain', fields: ['post_text'] })
-  const job = service.database.enqueueJob({ recipeId, recipeVersion: 1, scopeId: scope.id, parameters: {} })
-  const runner = new BrainJobRunner(service.database, service.artifacts, root, execute)
+  // WhatsApp is on v2 (it grew a `digest` step); the LinkedIn recipes are still v1.
+  const recipeVersion = socialRecipeDefinitions.find(recipe => recipe.id === recipeId)!.version
+  const job = service.database.enqueueJob({ recipeId, recipeVersion, scopeId: scope.id, parameters: {} })
+  const runner = new BrainJobRunner(service.database, service.artifacts, root, service.candidates, execute)
   cleanups.push(() => runner.stop())
   return { root, service, db: service.database, job, runner }
 }
@@ -30,10 +33,11 @@ const success = async ({ request }: BrainCapabilityEnvelope): Promise<BrainCapab
 describe('BrainJobRunner', () => {
   it.each(['linkedin.opportunity_scan', 'whatsapp.unread_intelligence', 'linkedin.community_scan'])('executes %s with compact checkpoints and metadata-only completion', async recipeId => {
     const { runner, db, job } = setup(success, recipeId)
-    for (let i = 0; i < 5; i++) expect(await runner.runOnce()).toBe(true)
+    const stages = socialRecipeDefinitions.find(recipe => recipe.id === recipeId)!.steps
+    for (let i = 0; i < stages.length; i++) expect(await runner.runOnce()).toBe(true)
     expect(db.getJob(job.id)).toMatchObject({ status: 'completed', result: { recordCount: 2, actionableCount: 1, actionable: true } })
     const checkpoints = db.listCheckpoints(job.id)
-    expect(checkpoints.map(row => JSON.parse(String(row.checkpoint_json)).stage)).toEqual(['capture', 'normalize', 'classify', 'score', 'summarize'])
+    expect(checkpoints.map(row => JSON.parse(String(row.checkpoint_json)).stage)).toEqual(stages)
     expect(JSON.stringify(checkpoints)).not.toContain('Hiring a developer')
     expect(JSON.stringify(db.getJob(job.id))).not.toContain('Hiring a developer')
     expect(await runner.runOnce()).toBe(false)
@@ -61,7 +65,7 @@ describe('BrainJobRunner', () => {
     const checkpoint = { stage: 'normalize', count: 2, dataRef: String(JSON.parse(String(db.listCheckpoints(job.id)[0].checkpoint_json)).dataRef) }
     expect(db.saveCheckpoint(job.id, claimed.id, checkpoint)).toBe(db.saveCheckpoint(job.id, claimed.id, checkpoint))
     await vi.advanceTimersByTimeAsync(31_000)
-    const restarted = new BrainJobRunner(db, service.artifacts, root, async request => { reads++; return success(request) })
+    const restarted = new BrainJobRunner(db, service.artifacts, root, service.candidates, async request => { reads++; return success(request) })
     cleanups.push(() => restarted.stop())
     expect(await restarted.runOnce()).toBe(true)
     expect(reads).toBe(1)
@@ -73,7 +77,7 @@ describe('BrainJobRunner', () => {
     const { runner, db, job, service, root } = setup(async ({ request }) => ({ id: request.id, ok: false, error: { code: 'transient', message: 'Retry' } }))
     await runner.runOnce()
     expect(db.getJob(job.id)?.status).toBe('retry_scheduled')
-    const restarted = new BrainJobRunner(db, service.artifacts, root, async ({ request }) => ({ id: request.id, ok: false, error: { code: 'transient', message: 'Retry' } }))
+    const restarted = new BrainJobRunner(db, service.artifacts, root, service.candidates, async ({ request }) => ({ id: request.id, ok: false, error: { code: 'transient', message: 'Retry' } }))
     cleanups.push(() => restarted.stop())
     for (const delay of [5_000, 30_000, 120_000]) {
       await vi.advanceTimersByTimeAsync(delay - 1)
@@ -125,7 +129,7 @@ describe('BrainJobRunner', () => {
     db.cancelJob(job.id)
     db.retryJob(job.id)
     let finishCurrent!: (value: BrainCapabilityResult) => void
-    const current = new BrainJobRunner(db, service.artifacts, root, () => new Promise(resolve => { finishCurrent = resolve }))
+    const current = new BrainJobRunner(db, service.artifacts, root, service.candidates, () => new Promise(resolve => { finishCurrent = resolve }))
     cleanups.push(() => current.stop())
     const currentPending = current.runOnce()
     finish({ id: 'ignored', ok: true, records: [] })
@@ -191,7 +195,7 @@ describe('BrainJobRunner', () => {
     const { runner, db, job, root } = setup(async ({ request }) => ({ id: request.id, ok: true, records: [
       { id: 'chat', name: 'Client', unread: 2, last: { body: ' Hiring   a developer ', type: 'chat' } },
     ] }), 'whatsapp.unread_intelligence')
-    for (let i = 0; i < 5; i++) await runner.runOnce()
+    for (let i = 0; i < 6; i++) await runner.runOnce()
     const normalize = JSON.parse(String(db.listCheckpoints(job.id)[1].checkpoint_json))
     expect(JSON.parse(gunzipSync(readFileSync(normalize.dataRef)).toString())).toMatchObject({
       records: 1,
@@ -234,9 +238,10 @@ describe('BrainJobRunner', () => {
     const scope = service.database.ensureScope({ type: 'client', externalRef: 'correlation', name: 'Correlation' })
     for (const recipeId of ['linkedin.opportunity_scan', 'whatsapp.unread_intelligence']) {
       service.database.grantConsent({ scopeId: scope.id, recipeId, provider: 'local-brain', fields: ['message_text'] })
-      service.database.enqueueJob({ recipeId, recipeVersion: 1, scopeId: scope.id, parameters: { query: recipeId } })
+      const version = socialRecipeDefinitions.find(recipe => recipe.id === recipeId)!.version
+      service.database.enqueueJob({ recipeId, recipeVersion: version, scopeId: scope.id, parameters: { query: recipeId } })
     }
-    const runner = new BrainJobRunner(service.database, service.artifacts, root, async envelope => ({
+    const runner = new BrainJobRunner(service.database, service.artifacts, root, service.candidates, async envelope => ({
       id: envelope.request.id, ok: true, records: [{
         id: envelope.recipeId, text: envelope.recipeId.startsWith('linkedin')
           ? 'Our support backlog is blocking the team.'
@@ -245,7 +250,8 @@ describe('BrainJobRunner', () => {
       }],
     }))
     cleanups.push(() => runner.stop())
-    for (let i = 0; i < 10; i++) await runner.runOnce()
+    // Five LinkedIn steps plus six WhatsApp ones, drained one claim at a time.
+    for (let i = 0; i < 11; i++) await runner.runOnce()
     const opportunities = service.database.listOpportunities({ scopeId: scope.id })
     expect(opportunities).toHaveLength(1)
     expect(opportunities[0].evidenceCount).toBe(2)
@@ -270,7 +276,7 @@ describe('BrainJobRunner', () => {
     const recipeId = 'linkedin.opportunity_scan'
     service.database.grantConsent({ scopeId: scope.id, recipeId, provider: 'local-brain', fields: ['post_text'] })
     const job = service.database.enqueueJob({ scopeId: scope.id, recipeId, recipeVersion: 1, parameters: {} })
-    const first = new BrainJobRunner(service.database, service.artifacts, root, success)
+    const first = new BrainJobRunner(service.database, service.artifacts, root, service.candidates, success)
     await first.runOnce()
     service.database.claimNextJob()
     first.stop()
@@ -278,7 +284,7 @@ describe('BrainJobRunner', () => {
     await vi.advanceTimersByTimeAsync(31_000)
     service = new BrainService(path)
     let reads = 0
-    const second = new BrainJobRunner(service.database, service.artifacts, root, async request => { reads++; return success(request) })
+    const second = new BrainJobRunner(service.database, service.artifacts, root, service.candidates, async request => { reads++; return success(request) })
     cleanups.push(() => second.stop())
     for (let i = 0; i < 4; i++) await second.runOnce()
     expect(service.database.getJob(job.id)?.status).toBe('completed')

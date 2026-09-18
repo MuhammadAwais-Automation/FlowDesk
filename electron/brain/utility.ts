@@ -17,7 +17,7 @@ if (!databasePath) throw new Error('Brain utility requires a database path')
 
 const service = new BrainService(databasePath)
 const capabilities = new BrainCapabilityBridge(message => parentPort.postMessage(message))
-const runner = new BrainJobRunner(service.database, service.artifacts, dirname(databasePath), request => capabilities.request(request))
+const runner = new BrainJobRunner(service.database, service.artifacts, dirname(databasePath), service.candidates, request => capabilities.request(request))
 runner.start()
 
 parentPort.on('message', async event => {
