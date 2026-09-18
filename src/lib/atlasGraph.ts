@@ -1,30 +1,7 @@
 import Graph from 'graphology'
 import forceAtlas2 from 'graphology-layout-forceatlas2'
 import type { KnowledgeDocType, KnowledgeGraph } from '@/types/brainKnowledge'
-
-/**
- * One colour per document type.
- *
- * Nine types is at the edge of what a categorical palette can keep apart, so
- * these are spread around the wheel rather than chosen to look pleasant
- * together, and `note` — by far the most common — is deliberately the quiet
- * grey so the meaningful types read as figure against it.
- */
-export const TYPE_COLOR: Record<KnowledgeDocType, string> = {
-  me: '#f59e0b',
-  client: '#e11d48',
-  project: '#7c3aed',
-  person: '#0284c7',
-  skill: '#059669',
-  research: '#4f46e5',
-  decision: '#ea580c',
-  source: '#0d9488',
-  note: '#a8a29e',
-}
-
-export const DIMMED_NODE = '#e7e5e4'
-export const DIMMED_EDGE = '#f5f5f4'
-export const EDGE_COLOR = '#d6d3d1'
+import { OBSERVATORY, TYPE_COLOR } from './atlasTheme'
 
 /**
  * Node radius from link count.
@@ -72,7 +49,7 @@ export function buildAtlasGraph(source: KnowledgeGraph, filters: AtlasFilters): 
     graph.addNode(path, {
       label: node.title,
       size: nodeSize(node.degree),
-      color: TYPE_COLOR[node.type] ?? TYPE_COLOR.note,
+      color: TYPE_COLOR[node.type] ?? OBSERVATORY.nodeDim,
       docType: node.type,
       degree: node.degree,
       updatedAt: node.updatedAt,
@@ -84,7 +61,7 @@ export function buildAtlasGraph(source: KnowledgeGraph, filters: AtlasFilters): 
   for (const edge of source.edges) {
     if (!visible.has(edge.from) || !visible.has(edge.to)) continue
     if (graph.hasEdge(edge.from, edge.to)) continue
-    graph.addEdge(edge.from, edge.to, { size: 0.6, color: EDGE_COLOR })
+    graph.addEdge(edge.from, edge.to, { size: 0.6, color: OBSERVATORY.edge })
   }
 
   if (graph.order > 1) {

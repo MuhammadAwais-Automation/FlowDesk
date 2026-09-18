@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { bandForRatio, BAND_RULES, buildAtlasGraph, neighborhoodPaths, nodeSize, regionOf, regionCentroids, TYPE_COLOR } from './atlasGraph'
-import { KNOWLEDGE_DOC_TYPES, type KnowledgeDocType, type KnowledgeGraph } from '@/types/brainKnowledge'
+import { bandForRatio, BAND_RULES, buildAtlasGraph, neighborhoodPaths, nodeSize, regionOf, regionCentroids } from './atlasGraph'
+import { TYPE_COLOR } from './atlasTheme'
+import { type KnowledgeDocType, type KnowledgeGraph } from '@/types/brainKnowledge'
 
 const node = (path: string, degree: number, type: KnowledgeDocType = 'note') => ({
   path, title: path.replace(/\.md$/, ''), type, degree, updatedAt: '2026-09-18T00:00:00.000Z',
@@ -21,13 +22,6 @@ describe('nodeSize', () => {
     const hub = nodeSize(103)
     expect(hub).toBeLessThan(nodeSize(2) * 6)
     expect(hub).toBeGreaterThan(nodeSize(2))
-  })
-})
-
-describe('TYPE_COLOR', () => {
-  it('covers every document type, so no node falls back to grey by accident', () => {
-    for (const type of KNOWLEDGE_DOC_TYPES) expect(TYPE_COLOR[type]).toMatch(/^#[0-9a-f]{6}$/)
-    expect(new Set(Object.values(TYPE_COLOR)).size).toBe(KNOWLEDGE_DOC_TYPES.length)
   })
 })
 

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Sigma from 'sigma'
 import { Search } from 'lucide-react'
-import { buildAtlasGraph, neighborhoodPaths, DIMMED_EDGE, DIMMED_NODE, TYPE_COLOR } from '@/lib/atlasGraph'
+import { buildAtlasGraph, neighborhoodPaths } from '@/lib/atlasGraph'
+import { OBSERVATORY, TYPE_COLOR } from '@/lib/atlasTheme'
 import { KNOWLEDGE_DOC_TYPES, type KnowledgeDocType, type KnowledgeGraph } from '@/types/brainKnowledge'
 
 /**
@@ -55,7 +56,7 @@ export function Atlas({ graph, selectedPath, onSelect }: {
     if (!container.current || !built) return
     const instance = new Sigma(built, container.current, {
       renderEdgeLabels: false,
-      defaultEdgeColor: DIMMED_EDGE,
+      defaultEdgeColor: OBSERVATORY.edgeDim,
       labelFont: 'Inter, system-ui, sans-serif',
       labelSize: 11,
       labelColor: { color: '#57534e' },
@@ -69,14 +70,14 @@ export function Atlas({ graph, selectedPath, onSelect }: {
         const dimmed = (found !== null && !found.has(path))
           || (over !== null && over !== path && !built.areNeighbors(over, path))
         if (path === selectedPath) return { ...data, highlighted: true, zIndex: 2 }
-        return dimmed ? { ...data, color: DIMMED_NODE, label: '', zIndex: 0 } : { ...data, zIndex: 1 }
+        return dimmed ? { ...data, color: OBSERVATORY.nodeDim, label: '', zIndex: 0 } : { ...data, zIndex: 1 }
       },
       edgeReducer: (edge, data) => {
         const { hovered: over, matches: found } = highlight.current
         const [from, to] = built.extremities(edge)
         const touchesHover = over === null || over === from || over === to
         const touchesMatch = found === null || found.has(from) || found.has(to)
-        return touchesHover && touchesMatch ? data : { ...data, color: DIMMED_EDGE, hidden: found !== null }
+        return touchesHover && touchesMatch ? data : { ...data, color: OBSERVATORY.edgeDim, hidden: found !== null }
       },
     })
     instance.on('clickNode', ({ node }) => onSelect(node))
