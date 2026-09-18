@@ -407,9 +407,9 @@ describe('BrainService', () => {
 
         // The wiki link the renderer wrote resolves, so the note joins the graph.
         const links = service.database.handle
-          .prepare('SELECT target_path, resolved FROM knowledge_links WHERE target_path = ?')
+          .prepare('SELECT target_path FROM knowledge_links WHERE target_path = ?')
           .all('wiki/clients/yasir-bhai.md')
-        expect(links).toContainEqual({ target_path: 'wiki/clients/yasir-bhai.md', resolved: 1 })
+        expect(links).toContainEqual({ target_path: 'wiki/clients/yasir-bhai.md' })
 
         // Re-running the same day must not create a second version.
         service.handle({ id: '5', method: 'knowledge.dailyNote', payload: { scopeId: scope.id } })

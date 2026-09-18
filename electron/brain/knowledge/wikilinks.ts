@@ -9,7 +9,7 @@
  * when a caller does not supply them.
  */
 
-import { basename, dirname, extname } from 'node:path'
+import { dirname, extname } from 'node:path'
 
 const WIKILINK = /(?<!!)\[\[([^\]]+)\]\]/g
 
@@ -33,23 +33,29 @@ function addToIndex(index: Map<string, string[]>, key: string, path: string): vo
 }
 
 /**
- * Lowercased lookup from every way a link might name a file (full path, path
- * without extension, filename, filename without extension) to the real paths
+ * Lowercased lookup from every way a link might name a file to the real paths
  * that match it. A key with more than one path is ambiguous and resolves to
  * nothing, which is why the values are arrays.
+ *
+ * Every *trailing* run of segments is a key, with and without the extension:
+ * `wiki/me/profile.md` is findable as `wiki/me/profile.md`, `wiki/me/profile`,
+ * `me/profile.md`, `me/profile`, `profile.md` and `profile`. Obsidian resolves
+ * by shortest unique suffix, so a vault written against it is full of
+ * `[[me/profile]]` for a file two directories deeper. Indexing only the four
+ * endpoints -- full path, full path minus extension, filename, filename minus
+ * extension -- missed every link that named more than the file but less than
+ * the whole path, which in the real store was 1,033 links of 1,104. An
+ * unresolved link is an edge the graph never draws.
  */
 export function buildPathIndex(paths: string[]): Map<string, string[]> {
   const index = new Map<string, string[]>()
   for (const path of paths) {
-    const extension = extname(path)
-    const filename = basename(path).toLowerCase()
-    for (const key of [
-      path.toLowerCase(),
-      path.slice(0, -extension.length).toLowerCase(),
-      filename,
-      filename.slice(0, -extname(filename).length),
-    ]) {
-      addToIndex(index, key, path)
+    const normalized = path.replaceAll('\\', '/')
+    const withExtension = normalized.split('/')
+    const withoutExtension = normalized.slice(0, normalized.length - extname(normalized).length).split('/')
+    for (let start = 0; start < withExtension.length; start += 1) {
+      addToIndex(index, withExtension.slice(start).join('/').toLowerCase(), path)
+      addToIndex(index, withoutExtension.slice(start).join('/').toLowerCase(), path)
     }
   }
   return index

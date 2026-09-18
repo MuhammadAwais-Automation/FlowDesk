@@ -11,7 +11,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { blobToVector, cosineSimilarity, EMBEDDING_MODEL, embedPassage, embedQuery, vectorToBlob } from './embeddings'
 import { splitSections } from './sectioning'
 import { buildPathIndex, extractWikiLinkTargets, resolveWikiLink } from './wikilinks'
-import type { DocumentNeighborhood, DocumentNeighborhoodNode, DocumentSearchHit, KnowledgeDocument, KnowledgeDocType, UnresolvedLink, VectorIndexReport, VectorSearchHit } from '../../../src/types/brainKnowledge'
+import type { DocumentNeighborhood, DocumentNeighborhoodNode, DocumentSearchHit, KnowledgeDocument, KnowledgeDocType, KnowledgeGraph, UnresolvedLink, VectorIndexReport, VectorSearchHit } from '../../../src/types/brainKnowledge'
 import type {
   DocumentStorePort,
   ListDocumentsInput,
@@ -165,6 +165,7 @@ export class DocumentStore implements DocumentStorePort {
 
       this.db.prepare('DELETE FROM knowledge_links WHERE document_id = ?').run(documentId)
       this.writeLinks(documentId, input)
+      this.resolveDanglingLinksTo(input.scopeId, input.path)
 
       const row = this.db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(documentId) as SqlRow
       this.db.exec('COMMIT')
@@ -210,18 +211,71 @@ export class DocumentStore implements DocumentStorePort {
    * links at all, which left the retrieval ladder with nothing to follow.
    *
    * `links: []` still means "explicitly none" — only `undefined` derives.
+   *
+   * Whether a target *exists* is deliberately not stored. It used to be, as a
+   * `resolved` column written once at insert time, which made every forward
+   * reference permanently wrong: an import walks files in sorted order, so a
+   * link to a document that sorts later was recorded as unresolved and stayed
+   * that way after its target arrived. Resolution is a fact about the store
+   * right now — a join, not a column.
    */
   private writeLinks(documentId: string, input: UpsertDocumentInput): void {
     const targets = input.links ?? this.deriveLinks(input.scopeId, input.body)
-    const targetExists = this.db.prepare(
-      'SELECT 1 FROM knowledge_documents WHERE scope_id = ? AND path = ? AND valid_to IS NULL',
-    )
     const insertLink = this.db.prepare(
-      'INSERT INTO knowledge_links(id, document_id, target_path, resolved) VALUES (?, ?, ?, ?)',
+      'INSERT INTO knowledge_links(id, document_id, target_path) VALUES (?, ?, ?)',
     )
     for (const targetPath of new Set(targets)) {
-      const resolved = targetExists.get(input.scopeId, targetPath) ? 1 : 0
-      insertLink.run(randomUUID(), documentId, targetPath, resolved)
+      insertLink.run(randomUUID(), documentId, targetPath)
+    }
+  }
+
+  /**
+   * Points existing dangling links at a document that has just arrived.
+   *
+   * A link is resolved when it was written, against whatever existed then — so
+   * a note naming `[[projects/zapzone]]` before that page is created stores the
+   * raw target and stays a loose end forever, even after the page shows up. The
+   * vault importer does not hit this, because it indexes every file before
+   * writing any of them; every other writer — the candidate gate, the
+   * compactor, the digest step — writes one document at a time and does.
+   *
+   * Only links that already have no document behind them are considered, so a
+   * link that resolved correctly is never repointed, and the work is bounded by
+   * the number of loose ends rather than the size of the store.
+   */
+  private resolveDanglingLinksTo(scopeId: string, path: string): void {
+    const dangling = this.db.prepare(`
+      SELECT l.id AS id, l.document_id AS document_id, l.target_path AS target_path
+      FROM knowledge_links l
+      JOIN knowledge_documents d ON d.id = l.document_id AND d.scope_id = ? AND d.valid_to IS NULL
+      WHERE NOT EXISTS (
+        SELECT 1 FROM knowledge_documents t
+        WHERE t.path = l.target_path AND t.scope_id = ? AND t.valid_to IS NULL
+      )
+    `).all(scopeId, scopeId) as SqlRow[]
+    if (dangling.length === 0) return
+
+    const activePaths = (this.db.prepare(
+      'SELECT path FROM knowledge_documents WHERE scope_id = ? AND valid_to IS NULL',
+    ).all(scopeId) as SqlRow[]).map(row => String(row.path))
+    const pathIndex = buildPathIndex(activePaths)
+    // A link resolves relative to the document it sits in, so each loose end
+    // needs its own source path.
+    const pathById = new Map((this.db.prepare(
+      'SELECT id, path FROM knowledge_documents WHERE scope_id = ? AND valid_to IS NULL',
+    ).all(scopeId) as SqlRow[]).map(row => [String(row.id), String(row.path)]))
+    const update = this.db.prepare('UPDATE knowledge_links SET target_path = ? WHERE id = ?')
+    const remove = this.db.prepare('DELETE FROM knowledge_links WHERE id = ?')
+    for (const row of dangling) {
+      const from = pathById.get(String(row.document_id)) ?? ''
+      if (resolveWikiLink(String(row.target_path), from, pathIndex) !== path) continue
+      // UNIQUE(document_id, target_path): the document may already link to this
+      // path under its resolved name, in which case the loose end is a duplicate.
+      try {
+        update.run(path, String(row.id))
+      } catch {
+        remove.run(String(row.id))
+      }
     }
   }
 
@@ -268,6 +322,7 @@ export class DocumentStore implements DocumentStorePort {
       this.writeSections(documentId, input.body)
 
       this.writeLinks(documentId, input)
+      this.resolveDanglingLinksTo(input.scopeId, input.path)
 
       const nextRow = this.db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(documentId) as SqlRow
       this.db.exec('COMMIT')
@@ -548,6 +603,72 @@ export class DocumentStore implements DocumentStorePort {
     return { origin: String(origin.path), nodes: [...nodes.values()], edges: [...edges.values()] }
   }
 
+  /**
+   * The whole scope chain as one graph: every active document, and every link
+   * whose target is also one.
+   *
+   * Two statements rather than a join per node, because the renderer wants
+   * flat arrays and the whole store is a few hundred rows — the cost is in
+   * shipping it to the renderer, not in reading it.
+   *
+   * Resolution is a join here too, never a stored flag: an edge exists when a
+   * document sits at that path right now.
+   */
+  graph(scopeIds: string[]): KnowledgeGraph {
+    if (scopeIds.length === 0) return { nodes: [], edges: [], unresolvedCount: 0 }
+    const scopePlaceholders = scopeIds.map(() => '?').join(', ')
+
+    const documentRows = this.db.prepare(`
+      SELECT id, path, title, type, scope_id, updated_at
+      FROM knowledge_documents
+      WHERE scope_id IN (${scopePlaceholders}) AND valid_to IS NULL
+    `).all(...scopeIds) as SqlRow[]
+    const visible = shadowByNearestScope(documentRows, scopeIds)
+    const paths = new Set(visible.map(row => String(row.path)))
+
+    const linkRows = this.db.prepare(`
+      SELECT source.path AS from_path, link.target_path AS to_path
+      FROM knowledge_links link
+      JOIN knowledge_documents source ON source.id = link.document_id AND source.valid_to IS NULL
+      WHERE source.scope_id IN (${scopePlaceholders})
+    `).all(...scopeIds) as SqlRow[]
+
+    const degree = new Map<string, number>()
+    const edges: Array<{ from: string; to: string }> = []
+    const seen = new Set<string>()
+    let unresolvedCount = 0
+    for (const row of linkRows) {
+      const from = String(row.from_path)
+      const to = String(row.to_path)
+      // A link out of a document shadowed by a nearer scope is not on screen,
+      // so it is neither an edge nor a loose end.
+      if (!paths.has(from)) continue
+      if (!paths.has(to)) {
+        unresolvedCount += 1
+        continue
+      }
+      // A pair that links both ways is one line, not two.
+      const key = from < to ? `${from} ${to}` : `${to} ${from}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      edges.push({ from, to })
+      degree.set(from, (degree.get(from) ?? 0) + 1)
+      degree.set(to, (degree.get(to) ?? 0) + 1)
+    }
+
+    return {
+      nodes: visible.map(row => ({
+        path: String(row.path),
+        title: String(row.title),
+        type: String(row.type) as KnowledgeDocType,
+        degree: degree.get(String(row.path)) ?? 0,
+        updatedAt: String(row.updated_at),
+      })),
+      edges,
+      unresolvedCount,
+    }
+  }
+
   listUnresolvedLinks(scopeIds: string[]): UnresolvedLink[] {
     if (scopeIds.length === 0) return []
     const scopePlaceholders = scopeIds.map(() => '?').join(', ')
@@ -555,9 +676,13 @@ export class DocumentStore implements DocumentStorePort {
       SELECT d.path AS document_path, d.title AS document_title, l.target_path
       FROM knowledge_links l
       JOIN knowledge_documents d ON d.id = l.document_id
-      WHERE l.resolved = 0 AND d.scope_id IN (${scopePlaceholders}) AND d.valid_to IS NULL
+      WHERE d.scope_id IN (${scopePlaceholders}) AND d.valid_to IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM knowledge_documents t
+          WHERE t.path = l.target_path AND t.scope_id IN (${scopePlaceholders}) AND t.valid_to IS NULL
+        )
       ORDER BY d.updated_at DESC, d.path, l.target_path
-    `).all(...scopeIds) as SqlRow[]
+    `).all(...scopeIds, ...scopeIds) as SqlRow[]
     return rows.map(row => ({
       documentPath: String(row.document_path),
       documentTitle: String(row.document_title),

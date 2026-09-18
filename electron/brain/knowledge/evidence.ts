@@ -399,7 +399,7 @@ export class EvidenceRetriever {
     const row = this.db.prepare(`
       SELECT target.id AS id, target.path AS path, target.title AS title
       FROM knowledge_documents source
-      JOIN knowledge_links link ON link.document_id = source.id AND link.resolved = 1
+      JOIN knowledge_links link ON link.document_id = source.id
       JOIN knowledge_documents target
         ON target.path = link.target_path AND target.scope_id = source.scope_id AND target.valid_to IS NULL
       WHERE source.path = ? AND source.scope_id IN (${placeholders}) AND source.valid_to IS NULL

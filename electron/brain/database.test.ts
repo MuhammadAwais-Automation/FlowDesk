@@ -19,9 +19,9 @@ afterEach(() => {
 })
 
 describe('BrainDatabase', () => {
-  it('creates the complete v7 schema from an empty database', () => {
+  it('creates the complete v8 schema from an empty database', () => {
     const brain = createBrain()
-    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 7 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 8 })
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
       'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
       'knowledge_documents', 'knowledge_fts', 'knowledge_links', 'knowledge_candidates',
@@ -71,7 +71,7 @@ describe('BrainDatabase', () => {
     legacy.close()
 
     const migrated = new BrainDatabase(path)
-    expect(migrated.getStatus().schemaVersion).toBe(7)
+    expect(migrated.getStatus().schemaVersion).toBe(8)
     expect(migrated.listSchemaTables()).toEqual(expect.arrayContaining(['knowledge_candidates']))
 
     // The v3 row survived the rebuild with its id, and its link too.
@@ -106,7 +106,7 @@ describe('BrainDatabase', () => {
 
     // Idempotent: reopening an already-v4 database changes nothing.
     const reopened = new BrainDatabase(path)
-    expect(reopened.getStatus().schemaVersion).toBe(7)
+    expect(reopened.getStatus().schemaVersion).toBe(8)
     expect(reopened.handle.prepare('SELECT count(*) AS total FROM knowledge_documents').get()).toMatchObject({ total: 2 })
     reopened.close()
   })
@@ -143,7 +143,7 @@ describe('BrainDatabase', () => {
     downgrade.close()
 
     const migrated = new BrainDatabase(path)
-    expect(migrated.getStatus().schemaVersion).toBe(7)
+    expect(migrated.getStatus().schemaVersion).toBe(8)
     const sections = migrated.handle
       .prepare('SELECT heading, heading_path, start_line, end_line FROM knowledge_sections ORDER BY ordinal')
       .all()
@@ -184,7 +184,7 @@ describe('BrainDatabase', () => {
     downgrade.close()
 
     const migrated = new BrainDatabase(path)
-    expect(migrated.getStatus().schemaVersion).toBe(7)
+    expect(migrated.getStatus().schemaVersion).toBe(8)
     expect(migrated.listSchemaTables()).toEqual(expect.arrayContaining([
       'knowledge_documents', 'knowledge_fts', 'knowledge_links',
     ]))
@@ -193,7 +193,7 @@ describe('BrainDatabase', () => {
 
     // Idempotent: reopening an already-v3 database changes nothing.
     const reopened = new BrainDatabase(path)
-    expect(reopened.getStatus().schemaVersion).toBe(7)
+    expect(reopened.getStatus().schemaVersion).toBe(8)
     expect(reopened.listOpportunities({ scopeId: scope.id })).toHaveLength(1)
     reopened.close()
   })
@@ -216,7 +216,7 @@ describe('BrainDatabase', () => {
     legacy.close()
 
     const brain = new BrainDatabase(path)
-    expect(brain.getStatus().schemaVersion).toBe(7)
+    expect(brain.getStatus().schemaVersion).toBe(8)
     expect(brain.listScopes(['client'])).toMatchObject([{ id: 'client-a', name: 'Legacy A' }])
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
       'opportunities', 'opportunity_evidence', 'monitors', 'source_metrics',
@@ -247,14 +247,14 @@ describe('BrainDatabase', () => {
     partial.close()
 
     const first = new BrainDatabase(path)
-    expect(first.getStatus().schemaVersion).toBe(7)
+    expect(first.getStatus().schemaVersion).toBe(8)
     expect(first.listSchemaTables()).toEqual(expect.arrayContaining(['opportunity_evidence', 'monitors', 'source_metrics']))
     first.close()
     const versionCheck = new DatabaseSync(path)
-    expect((versionCheck.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7)
+    expect((versionCheck.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(8)
     versionCheck.close()
     const reopened = new BrainDatabase(path)
-    expect(reopened.getStatus().schemaVersion).toBe(7)
+    expect(reopened.getStatus().schemaVersion).toBe(8)
     reopened.close()
   })
 
@@ -475,7 +475,7 @@ describe('BrainDatabase', () => {
 
   it('creates the complete v2 schema with WAL, foreign keys and FTS5', () => {
     const brain = createBrain()
-    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 7 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, fts5: true, schemaVersion: 8 })
     expect(brain.getJournalMode()).toBe('wal')
     expect(brain.getForeignKeysEnabled()).toBe(true)
     expect(brain.listSchemaTables()).toEqual(expect.arrayContaining([
@@ -497,7 +497,7 @@ describe('BrainDatabase', () => {
     partial.exec('CREATE TABLE scopes (id TEXT PRIMARY KEY, type TEXT NOT NULL, external_ref TEXT NOT NULL, name TEXT NOT NULL, parent_id TEXT REFERENCES scopes(id), created_at TEXT NOT NULL, UNIQUE(type, external_ref))')
     partial.close()
     const brain = new BrainDatabase(path)
-    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 7 })
+    expect(brain.getStatus()).toMatchObject({ ready: true, schemaVersion: 8 })
     expect(brain.listSchemaTables()).toContain('jobs')
     brain.close()
   })

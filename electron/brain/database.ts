@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { buildPathIndex, extractWikiLinks } from './knowledge/wikilinks'
 import { splitSections } from './knowledge/sectioning'
 import type { BrainEvent, BrainEventAction } from '../../src/types/brainKnowledge'
 import {
@@ -30,7 +31,7 @@ import type {
 } from '../../src/types/brain'
 
 /** SQLite schema version (`PRAGMA user_version`), not the backup archive's. */
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 const TABLES = [
   'scopes', 'scope_links', 'memories', 'memory_revisions', 'memory_candidates',
@@ -380,7 +381,7 @@ export class BrainDatabase {
         CREATE TABLE IF NOT EXISTS knowledge_links (
           id TEXT PRIMARY KEY,
           document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
-          target_path TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0,
+          target_path TEXT NOT NULL,
           UNIQUE(document_id, target_path)
         );
         CREATE INDEX IF NOT EXISTS idx_knowledge_documents_scope_type ON knowledge_documents(scope_id, type, updated_at DESC);
@@ -439,6 +440,7 @@ export class BrainDatabase {
         );
       `)
       this.backfillKnowledgeSections()
+      this.rebuildKnowledgeLinks()
       this.db.prepare('INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, now())
       this.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`)
       this.db.exec('COMMIT')
@@ -482,6 +484,88 @@ export class BrainDatabase {
           randomUUID(), documentId, section.ordinal, section.level,
           section.heading, section.headingPath, section.startLine, section.endLine, section.text,
         )
+      }
+    }
+  }
+
+  /**
+   * v8: re-derives every `knowledge_links` row from the document bodies.
+   *
+   * Two defects made the stored links wrong, and both are fixed upstream of
+   * here — but neither fix reaches rows already written, and an import cannot
+   * rewrite them either: unchanged content short-circuits `upsert` before it
+   * touches links, so a re-import of an untouched vault is a no-op.
+   *
+   * 1. `buildPathIndex` indexed only whole paths and bare filenames, so an
+   *    Obsidian-style `[[me/profile]]` never found `wiki/me/profile.md` and was
+   *    stored as the raw target. Nothing joins on that, so the edge did not
+   *    exist. 1,033 links of 1,104 in the real store.
+   * 2. `resolved` was written once, at insert time, against the documents that
+   *    happened to exist already — so every forward reference was frozen as
+   *    unresolved. The column is gone; resolution is a join now.
+   *
+   * Follows `backfillKnowledgeSections`: inside `migrate()`'s transaction,
+   * after the CREATE block and before the version stamp. Bodies come from
+   * `knowledge_fts`, the only place they are stored. Superseded rows are
+   * re-derived too, against the paths that were active when they were, which
+   * is the same approximation `deriveLinks` makes for a live write.
+   */
+  private rebuildKnowledgeLinks() {
+    const hasResolvedColumn = (this.db.prepare(
+      "SELECT 1 FROM pragma_table_info('knowledge_links') WHERE name = 'resolved'",
+    ).get() as SqlRow | undefined) !== undefined
+    if (hasResolvedColumn) {
+      // Rebuilt rather than ALTER ... DROP COLUMN: the UNIQUE(document_id,
+      // target_path) constraint has to survive, and the table is small. Rows
+      // are carried across rather than dropped, so a document with no body in
+      // `knowledge_fts` -- which cannot be re-derived below -- keeps the links
+      // it already had.
+      this.db.exec(`
+        ALTER TABLE knowledge_links RENAME TO knowledge_links_v7;
+        CREATE TABLE knowledge_links (
+          id TEXT PRIMARY KEY,
+          document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+          target_path TEXT NOT NULL,
+          UNIQUE(document_id, target_path)
+        );
+        INSERT INTO knowledge_links(id, document_id, target_path)
+          SELECT id, document_id, target_path FROM knowledge_links_v7;
+        DROP TABLE knowledge_links_v7;
+      `)
+    }
+
+    const documents = this.db.prepare(`
+      SELECT d.id AS id, d.path AS path, d.scope_id AS scope_id, f.body AS body
+      FROM knowledge_documents d
+      JOIN knowledge_fts f ON f.document_id = d.id
+    `).all() as SqlRow[]
+    if (documents.length === 0) return
+
+    const pathsByScope = new Map<string, string[]>()
+    for (const row of this.db.prepare(
+      'SELECT scope_id, path FROM knowledge_documents WHERE valid_to IS NULL',
+    ).all() as SqlRow[]) {
+      const scopeId = String(row.scope_id)
+      pathsByScope.set(scopeId, [...(pathsByScope.get(scopeId) ?? []), String(row.path)])
+    }
+    const indexByScope = new Map<string, ReturnType<typeof buildPathIndex>>()
+
+    const clear = this.db.prepare('DELETE FROM knowledge_links WHERE document_id = ?')
+    const insert = this.db.prepare(
+      'INSERT OR IGNORE INTO knowledge_links(id, document_id, target_path) VALUES (?, ?, ?)',
+    )
+    for (const row of documents) {
+      const scopeId = String(row.scope_id)
+      let pathIndex = indexByScope.get(scopeId)
+      if (!pathIndex) {
+        pathIndex = buildPathIndex(pathsByScope.get(scopeId) ?? [])
+        indexByScope.set(scopeId, pathIndex)
+      }
+      const documentId = String(row.id)
+      clear.run(documentId)
+      const targets = extractWikiLinks(String(row.body ?? ''), String(row.path), pathIndex)
+      for (const targetPath of new Set(targets)) {
+        insert.run(randomUUID(), documentId, targetPath)
       }
     }
   }
@@ -1157,7 +1241,16 @@ export class BrainDatabase {
     return (this.db.prepare('SELECT * FROM jobs ORDER BY created_at DESC').all() as SqlRow[]).map(mapJob)
   }
 
-  claimNextJob(at = now(), leaseSeconds = 30, recipeIds?: string[]) {
+  /**
+   * `recipes` restricts the claim to the (id, version) pairs the caller can
+   * actually run. The version half matters: the social runner executes the
+   * step list compiled into `socialRecipeDefinitions`, and a job enqueued
+   * against a different version of the same recipe has a different step list —
+   * claiming it would fail on the layout check every time. This used to be a
+   * hardcoded `recipe_version = 1`, which silently stopped claiming a recipe
+   * the moment one grew a step.
+   */
+  claimNextJob(at = now(), leaseSeconds = 30, recipes?: Array<{ id: string; version: number }>) {
     const leaseExpiresAt = new Date(new Date(at).getTime() + leaseSeconds * 1000).toISOString()
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -1166,10 +1259,10 @@ export class BrainDatabase {
         FROM jobs j JOIN job_steps s ON s.job_id = j.id
         WHERE j.status IN ('queued', 'retry_scheduled') AND s.status IN ('queued', 'retry_scheduled')
           AND (j.lease_expires_at IS NULL OR j.lease_expires_at <= ?)
-          ${recipeIds ? `AND j.recipe_id IN (${recipeIds.map(() => '?').join(',')}) AND j.recipe_version = 1` : ''}
+          ${recipes ? `AND (${recipes.map(() => '(j.recipe_id = ? AND j.recipe_version = ?)').join(' OR ')})` : ''}
           AND NOT EXISTS (SELECT 1 FROM job_steps earlier WHERE earlier.job_id = j.id AND earlier.step_index < s.step_index AND earlier.status != 'completed')
         ORDER BY j.created_at, s.step_index LIMIT 1
-      `).get(at, ...(recipeIds ?? [])) as SqlRow | undefined
+      `).get(at, ...(recipes ?? []).flatMap(recipe => [recipe.id, recipe.version])) as SqlRow | undefined
       if (!row) {
         this.db.exec('COMMIT')
         return null

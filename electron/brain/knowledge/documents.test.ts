@@ -185,11 +185,14 @@ describe('DocumentStore', () => {
       links: ['people/existing.md', 'people/missing.md'],
     }))
 
-    const firstLinks = brain.handle.prepare('SELECT target_path, resolved FROM knowledge_links WHERE document_id = ? ORDER BY target_path').all(source.id)
+    const firstLinks = brain.handle.prepare('SELECT target_path FROM knowledge_links WHERE document_id = ? ORDER BY target_path').all(source.id)
     expect(firstLinks).toEqual([
-      { target_path: 'people/existing.md', resolved: 1 },
-      { target_path: 'people/missing.md', resolved: 0 },
+      { target_path: 'people/existing.md' },
+      { target_path: 'people/missing.md' },
     ])
+    // Resolution is not a stored flag -- it is whether a document sits at that
+    // path right now, which is what listUnresolvedLinks asks.
+    expect(store.listUnresolvedLinks([scope.id]).map(link => link.targetPath)).toEqual(['people/missing.md'])
 
     store.upsert(documentInput(scope.id, {
       path: 'projects/source.md',
@@ -197,8 +200,26 @@ describe('DocumentStore', () => {
       contentHash: 'source-2',
       links: ['people/existing.md'],
     }))
-    expect(brain.handle.prepare('SELECT target_path, resolved FROM knowledge_links WHERE document_id = ?').all(source.id))
-      .toEqual([{ target_path: 'people/existing.md', resolved: 1 }])
+    expect(brain.handle.prepare('SELECT target_path FROM knowledge_links WHERE document_id = ?').all(source.id))
+      .toEqual([{ target_path: 'people/existing.md' }])
+    expect(store.listUnresolvedLinks([scope.id])).toEqual([])
+  })
+
+  // A link written before its target exists is resolved the moment the target
+  // arrives. It used to be frozen as unresolved at insert time, which made
+  // every forward reference in a sorted vault import permanently dead.
+  it('resolves a link whose target is written after it', () => {
+    const { scope, store } = createStore()
+    store.upsert(documentInput(scope.id, {
+      path: 'projects/source.md',
+      type: 'project',
+      contentHash: 'source-1',
+      links: ['people/later.md'],
+    }))
+    expect(store.listUnresolvedLinks([scope.id]).map(link => link.targetPath)).toEqual(['people/later.md'])
+
+    store.upsert(documentInput(scope.id, { path: 'people/later.md', title: 'Later', contentHash: 'later' }))
+    expect(store.listUnresolvedLinks([scope.id])).toEqual([])
   })
 
   it('derives links from the body when the caller supplies none', () => {
@@ -212,11 +233,28 @@ describe('DocumentStore', () => {
       body: 'Owner is [[yasir-bhai]]. See also [[nothing-here]] and ![[embedded.png]].',
     }))
 
-    expect(brain.handle.prepare('SELECT target_path, resolved FROM knowledge_links WHERE document_id = ? ORDER BY target_path').all(source.id))
+    expect(brain.handle.prepare('SELECT target_path FROM knowledge_links WHERE document_id = ? ORDER BY target_path').all(source.id))
       .toEqual([
-        { target_path: 'nothing-here', resolved: 0 },
-        { target_path: 'wiki/clients/yasir-bhai.md', resolved: 1 },
+        { target_path: 'nothing-here' },
+        { target_path: 'wiki/clients/yasir-bhai.md' },
       ])
+  })
+
+  // The shape a real Obsidian vault is full of: a link that names more than
+  // the filename but less than the path.
+  it('derives a link written as a partial path', () => {
+    const { brain, scope, store } = createStore()
+    store.upsert(documentInput(scope.id, { path: 'wiki/me/profile.md', title: 'Profile', contentHash: 'target' }))
+    const source = store.upsert(documentInput(scope.id, {
+      path: 'wiki/ai-tooling/agents/ai-workflow.md',
+      type: 'note',
+      contentHash: 'source-1',
+      body: 'Routing depends on [[me/profile]].',
+    }))
+
+    expect(brain.handle.prepare('SELECT target_path FROM knowledge_links WHERE document_id = ?').all(source.id))
+      .toEqual([{ target_path: 'wiki/me/profile.md' }])
+    expect(store.listUnresolvedLinks([scope.id])).toEqual([])
   })
 
   it('treats an explicit empty link list as "no links", not as "derive them"', () => {
@@ -241,8 +279,8 @@ describe('DocumentStore', () => {
       body: 'Discussed pricing with [[yasir-bhai]].',
     }))
 
-    expect(brain.handle.prepare('SELECT target_path, resolved FROM knowledge_links WHERE document_id = ?').all(next.id))
-      .toEqual([{ target_path: 'wiki/clients/yasir-bhai.md', resolved: 1 }])
+    expect(brain.handle.prepare('SELECT target_path FROM knowledge_links WHERE document_id = ?').all(next.id))
+      .toEqual([{ target_path: 'wiki/clients/yasir-bhai.md' }])
   })
 
   it('walks links in both directions out to the requested depth', () => {
