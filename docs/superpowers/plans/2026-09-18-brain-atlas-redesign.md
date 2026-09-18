@@ -1895,7 +1895,9 @@ const LOOSE = { documentPath: 'wiki/me/profile.md', documentTitle: 'Profile', ta
 describe('Review', () => {
   it('says the queue is clear when there is nothing to decide', () => {
     setup()
-    expect(screen.getByText(/kuch pending nahi/)).toBeTruthy()
+    // The rendered text is "Kuch pending nahi hai." (sentence-case, matching
+    // every other Roman-Urdu string in this codebase) -- the regex needs `i`.
+    expect(screen.getByText(/kuch pending nahi/i)).toBeTruthy()
   })
 
   it('accepts a knowledge candidate', async () => {
