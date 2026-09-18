@@ -132,3 +132,36 @@ export function neighborhoodPaths(source: KnowledgeGraph, origin: string, depth:
   }
   return seen
 }
+
+export type ZoomBand = 'far' | 'mid' | 'near'
+
+/**
+ * What each band draws.
+ *
+ * `minDegree` gates which nodes exist on screen; `labelMinDegree` gates which
+ * of those get a name, and `null` means none. Labels stop colliding because
+ * each band renders only as many as fit, the way a map shows countries before
+ * cities before streets.
+ *
+ * Tuned against the real store — 163 documents, median degree 2, maximum 103 —
+ * so `far` resolves to roughly eighteen hubs.
+ */
+export const BAND_RULES: Record<ZoomBand, { minDegree: number; labelMinDegree: number | null; regionLabels: boolean }> = {
+  far: { minDegree: 8, labelMinDegree: null, regionLabels: true },
+  mid: { minDegree: 2, labelMinDegree: 6, regionLabels: false },
+  near: { minDegree: 0, labelMinDegree: 0, regionLabels: false },
+}
+
+/**
+ * Sigma's camera ratio grows as you zoom out, so the thresholds read backwards
+ * from how it feels: a big ratio is far away.
+ *
+ * A ratio that is not a number falls to `mid` rather than throwing — a camera
+ * mid-animation has produced one, and the middle band is the safe answer.
+ */
+export function bandForRatio(ratio: number): ZoomBand {
+  if (!Number.isFinite(ratio)) return 'mid'
+  if (ratio > 1.6) return 'far'
+  if (ratio >= 0.6) return 'mid'
+  return 'near'
+}

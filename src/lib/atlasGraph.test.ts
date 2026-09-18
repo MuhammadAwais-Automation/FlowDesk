@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAtlasGraph, neighborhoodPaths, nodeSize, TYPE_COLOR } from './atlasGraph'
+import { bandForRatio, BAND_RULES, buildAtlasGraph, neighborhoodPaths, nodeSize, TYPE_COLOR } from './atlasGraph'
 import { KNOWLEDGE_DOC_TYPES, type KnowledgeDocType, type KnowledgeGraph } from '@/types/brainKnowledge'
 
 const node = (path: string, degree: number, type: KnowledgeDocType = 'note') => ({
@@ -115,5 +115,41 @@ describe('buildAtlasGraph', () => {
   it('handles an empty store without throwing', () => {
     const graph = buildAtlasGraph({ nodes: [], edges: [], unresolvedCount: 0 }, { minDegree: 0, types: [] })
     expect(graph.order).toBe(0)
+  })
+})
+
+describe('zoom bands', () => {
+  // Thresholds are tuned against the real store: 163 documents, median degree
+  // 2, maximum 103. Far shows the ~18 documents with 8 or more links.
+  it('maps the camera ratio to a band', () => {
+    expect(bandForRatio(3)).toBe('far')
+    expect(bandForRatio(1.61)).toBe('far')
+    expect(bandForRatio(1.6)).toBe('mid')
+    expect(bandForRatio(0.6)).toBe('mid')
+    expect(bandForRatio(0.59)).toBe('near')
+    expect(bandForRatio(0.1)).toBe('near')
+  })
+
+  it('shows fewer nodes the further out you are', () => {
+    expect(BAND_RULES.far.minDegree).toBeGreaterThan(BAND_RULES.mid.minDegree)
+    expect(BAND_RULES.mid.minDegree).toBeGreaterThan(BAND_RULES.near.minDegree)
+    expect(BAND_RULES.near.minDegree).toBe(0)
+  })
+
+  // Far draws region names instead of node names, so node labels are off.
+  it('draws region names only at the furthest band', () => {
+    expect(BAND_RULES.far.regionLabels).toBe(true)
+    expect(BAND_RULES.far.labelMinDegree).toBeNull()
+    expect(BAND_RULES.mid.regionLabels).toBe(false)
+    expect(BAND_RULES.near.regionLabels).toBe(false)
+  })
+
+  it('labels everything that is drawn at the nearest band', () => {
+    expect(BAND_RULES.near.labelMinDegree).toBe(0)
+    expect(BAND_RULES.mid.labelMinDegree).toBe(6)
+  })
+
+  it('treats a ratio that is not a number as the middle band', () => {
+    expect(bandForRatio(Number.NaN)).toBe('mid')
   })
 })
