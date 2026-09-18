@@ -165,3 +165,59 @@ export function bandForRatio(ratio: number): ZoomBand {
   if (ratio >= 0.6) return 'mid'
   return 'near'
 }
+
+export interface AtlasRegion {
+  name: string
+  x: number
+  y: number
+  count: number
+}
+
+/**
+ * The part of the map a document belongs to.
+ *
+ * Two segments, because one is too coarse — the real store keeps 106 of its
+ * 163 documents under `wiki/`, so a one-segment region would be the whole map.
+ * `wiki` is dropped as a root for the same reason: it is where everything
+ * lives, so it distinguishes nothing.
+ */
+export function regionOf(path: string): string {
+  const segments = path.replaceAll('\\', '/').split('/').filter(Boolean)
+  const hadWiki = segments[0] === 'wiki'
+  const meaningful = hadWiki ? segments.slice(1) : segments
+  // Only the last segment left is the filename, so there is no directory to
+  // name: the document sits at the root of the vault.
+  if (meaningful.length <= 1) return 'loose'
+  // Remove the filename (last segment) to get just directories
+  const directories = meaningful.slice(0, -1)
+  // For wiki paths, take 1 segment (the region); for others, take up to 2
+  const maxSegments = hadWiki ? 1 : 2
+  return directories.slice(0, maxSegments).join('/')
+}
+
+/**
+ * Where to write each region's name, and how big it is.
+ *
+ * Drawn only at the far band, where node labels are off, so this is what tells
+ * you which part of the map you are looking at. A region holding one document
+ * is skipped: its own label says more than the region's name would.
+ *
+ * Largest first, so a caller that has to drop some keeps the ones that matter.
+ */
+export function regionCentroids(graph: Graph): AtlasRegion[] {
+  const members = new Map<string, { x: number; y: number; count: number }>()
+  graph.forEachNode((path, attributes) => {
+    const name = regionOf(path)
+    const current = members.get(name) ?? { x: 0, y: 0, count: 0 }
+    members.set(name, {
+      x: current.x + Number(attributes.x ?? 0),
+      y: current.y + Number(attributes.y ?? 0),
+      count: current.count + 1,
+    })
+  })
+
+  return [...members]
+    .filter(([, total]) => total.count > 1)
+    .map(([name, total]) => ({ name, x: total.x / total.count, y: total.y / total.count, count: total.count }))
+    .sort((left, right) => right.count - left.count)
+}

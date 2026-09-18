@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bandForRatio, BAND_RULES, buildAtlasGraph, neighborhoodPaths, nodeSize, TYPE_COLOR } from './atlasGraph'
+import { bandForRatio, BAND_RULES, buildAtlasGraph, neighborhoodPaths, nodeSize, regionOf, regionCentroids, TYPE_COLOR } from './atlasGraph'
 import { KNOWLEDGE_DOC_TYPES, type KnowledgeDocType, type KnowledgeGraph } from '@/types/brainKnowledge'
 
 const node = (path: string, degree: number, type: KnowledgeDocType = 'note') => ({
@@ -151,5 +151,64 @@ describe('zoom bands', () => {
 
   it('treats a ratio that is not a number as the middle band', () => {
     expect(bandForRatio(Number.NaN)).toBe('mid')
+  })
+})
+
+describe('regionOf', () => {
+  // The real store's paths: wiki/ai-tooling/agents/..., wiki/me/profile.md,
+  // toolkits/nextjs/index.md, daily/2026-09-18.md, AGENTS.md.
+  it('names the region from the first two segments, skipping a wiki root', () => {
+    expect(regionOf('wiki/ai-tooling/agents/ai-workflow.md')).toBe('ai-tooling')
+    expect(regionOf('wiki/me/profile.md')).toBe('me')
+    expect(regionOf('toolkits/nextjs/index.md')).toBe('toolkits/nextjs')
+    expect(regionOf('daily/2026-09-18.md')).toBe('daily')
+  })
+
+  it('calls a document at the root loose', () => {
+    expect(regionOf('AGENTS.md')).toBe('loose')
+    expect(regionOf('index.md')).toBe('loose')
+  })
+
+  it('does not fall over on an empty path', () => {
+    expect(regionOf('')).toBe('loose')
+  })
+})
+
+describe('regionCentroids', () => {
+  it('places each region at the middle of its members, largest first', () => {
+    const graph = buildAtlasGraph({
+      nodes: [
+        node('wiki/me/a.md', 1), node('wiki/me/b.md', 1),
+        node('toolkits/nextjs/x.md', 1), node('toolkits/nextjs/y.md', 1), node('toolkits/nextjs/z.md', 1),
+      ],
+      edges: [],
+      unresolvedCount: 0,
+    }, { minDegree: 0, types: [] })
+    graph.setNodeAttribute('wiki/me/a.md', 'x', 0)
+    graph.setNodeAttribute('wiki/me/a.md', 'y', 0)
+    graph.setNodeAttribute('wiki/me/b.md', 'x', 10)
+    graph.setNodeAttribute('wiki/me/b.md', 'y', 20)
+    for (const path of ['toolkits/nextjs/x.md', 'toolkits/nextjs/y.md', 'toolkits/nextjs/z.md']) {
+      graph.setNodeAttribute(path, 'x', 100)
+      graph.setNodeAttribute(path, 'y', 100)
+    }
+
+    const regions = regionCentroids(graph)
+
+    expect(regions.map(region => region.name)).toEqual(['toolkits/nextjs', 'me'])
+    expect(regions[1]).toMatchObject({ name: 'me', x: 5, y: 10, count: 2 })
+  })
+
+  it('ignores a region with only one document, which a node label covers better', () => {
+    const graph = buildAtlasGraph({
+      nodes: [node('wiki/me/only.md', 1)], edges: [], unresolvedCount: 0,
+    }, { minDegree: 0, types: [] })
+
+    expect(regionCentroids(graph)).toEqual([])
+  })
+
+  it('returns nothing for an empty graph', () => {
+    const graph = buildAtlasGraph({ nodes: [], edges: [], unresolvedCount: 0 }, { minDegree: 0, types: [] })
+    expect(regionCentroids(graph)).toEqual([])
   })
 })
