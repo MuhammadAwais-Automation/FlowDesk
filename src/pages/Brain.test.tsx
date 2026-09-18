@@ -6,6 +6,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { BrainScope } from '@/types/brain'
 import type { BrainEvent, DocumentReadResult, KnowledgeDocument } from '@/types/brainKnowledge'
 
+// sigma's entry module reads `WebGL2RenderingContext` at evaluation time, which
+// jsdom does not define -- importing the canvas at all kills the test file. The
+// shell under test only passes props down to it, so a stub is the whole of it.
+vi.mock('@/components/brain/atlas/AtlasCanvas', () => ({ AtlasCanvas: () => null }))
+
 const NL = String.fromCharCode(10)
 
 const scopes: BrainScope[] = ['global', 'a', 'b'].map(id => ({
@@ -74,7 +79,13 @@ beforeEach(() => {
   api.onBrainEvent.mockReturnValue(() => undefined)
   api.agentSessionTurns.mockResolvedValue([])
   api.brainEntityList.mockResolvedValue([])
-  api.brainKnowledgeGraph.mockResolvedValue({ nodes: [], edges: [], unresolvedCount: 0 })
+  // The graph is what the map -- and so the command bar's result list -- is
+  // built from, so the one document has to be in it for anything to be
+  // openable at all now that the Library list is gone.
+  api.brainKnowledgeGraph.mockResolvedValue({
+    nodes: [{ path: document.path, title: document.title, type: document.type, degree: 7, updatedAt: document.updatedAt }],
+    edges: [], unresolvedCount: 0,
+  })
 })
 
 afterEach(cleanup)
@@ -84,52 +95,75 @@ async function mount() {
   await waitFor(() => expect(screen.getByText('Client · A')).toBeTruthy())
 }
 
-const nav = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}`) })
 const detail = () => screen.getByRole('complementary', { name: 'Detail' })
 
-describe('Brain three-column layout', () => {
-  it('keeps the active nav item when a library row is selected', async () => {
-    await mount()
-    fireEvent.click(nav('Library'))
-    fireEvent.click(await screen.findByRole('button', { name: /Yasir Bhai/ }))
+/** The map is the only way in now: type, then open the hit. */
+async function openFromMap(term: string, name: RegExp) {
+  fireEvent.change(await screen.findByRole('searchbox'), { target: { value: term } })
+  fireEvent.click(await screen.findByRole('button', { name }))
+}
 
-    await waitFor(() => expect(within(detail()).getByText('Yasir Bhai')).toBeTruthy())
-    // The complaint this closes: selecting a document used to call setTab.
-    expect(nav('Library').getAttribute('aria-current')).toBe('page')
+describe('Brain shell', () => {
+  it('has no tabs — the map is the page', async () => {
+    await mount()
+    expect(screen.queryByRole('navigation', { name: 'Brain sections' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Library' })).toBeNull()
   })
 
-  it('keeps the selection when the nav item changes', async () => {
+  it('names the scope once, not twice', async () => {
     await mount()
-    fireEvent.click(nav('Library'))
-    fireEvent.click(await screen.findByRole('button', { name: /Yasir Bhai/ }))
-    await waitFor(() => expect(within(detail()).getByText('Yasir Bhai')).toBeTruthy())
-
-    fireEvent.click(nav('Today'))
-
-    expect(nav('Today').getAttribute('aria-current')).toBe('page')
-    expect(within(detail()).getByText('Yasir Bhai')).toBeTruthy()
+    expect(screen.getAllByText(/Global/)).toHaveLength(1)
   })
 
-  it('clears the detail pane when the scope changes', async () => {
+  it('opens a panel from the status strip and closes it again', async () => {
+    // `mount` first on purpose: the page is keyed by scope, so anything
+    // clicked before the scope resolves is thrown away by the remount.
     await mount()
-    fireEvent.click(nav('Library'))
-    fireEvent.click(await screen.findByRole('button', { name: /Yasir Bhai/ }))
-    await waitFor(() => expect(within(detail()).getByText('Yasir Bhai')).toBeTruthy())
+    const pill = screen.getByRole('button', { name: /review/ })
+    fireEvent.click(pill)
+    expect(screen.getByRole('complementary', { name: 'Review' })).toBeTruthy()
+    fireEvent.click(pill)
+    expect(screen.queryByRole('complementary', { name: 'Review' })).toBeNull()
+  })
 
-    // A document belonging to one client must never stay on screen under
-    // another -- the pane surviving nav changes must not mean surviving this.
+  // `panel` lives above the scope-keyed remount for this reason: which surface
+  // you are looking at is not scope data, and the old design kept `tab` across
+  // a scope switch too. The drawer is the deliberate opposite -- see below.
+  it('keeps the open panel across a scope change', async () => {
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: /review/ }))
+    expect(screen.getByRole('complementary', { name: 'Review' })).toBeTruthy()
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Brain scope' }), { target: { value: 'b' } })
+
+    expect(screen.getByRole('complementary', { name: 'Review' })).toBeTruthy()
+  })
+
+  it('shows no drawer until something is selected', async () => {
+    await mount()
+    expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull()
+  })
+
+  // The one behaviour worth carrying over from the describe block this
+  // replaces: a document belonging to one client must never stay on screen
+  // under another. The other three tests in that block existed only to prove
+  // the old tab nav preserved a selection across a tab switch -- a nav that
+  // no longer exists -- so they have no equivalent here.
+  it('clears the drawer when the scope changes', async () => {
+    await mount()
+    await openFromMap('Yasir', /Yasir Bhai/)
+    await waitFor(() => expect(screen.getByRole('complementary', { name: 'Detail' })).toBeTruthy())
+
     fireEvent.change(screen.getByRole('combobox', { name: 'Brain scope' }), { target: { value: 'b' } })
 
     await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull())
-    expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull()
   })
 })
 
 describe('Brain document reader', () => {
   async function openDocument() {
     await mount()
-    fireEvent.click(nav('Library'))
-    fireEvent.click(await screen.findByRole('button', { name: /Yasir Bhai/ }))
+    await openFromMap('Yasir', /Yasir Bhai/)
     await waitFor(() => expect(within(detail()).getByText('Yasir Bhai')).toBeTruthy())
   }
 
@@ -161,8 +195,15 @@ describe('Brain turn reader', () => {
     { id: 'turn-2', role: 'assistant' as const, content: 'Yasir aur Bilal.', toolCalls: [], createdAt: turnEvent.createdAt },
   ]
 
-  async function openTurn() {
+  /** The timeline is a panel now, so it has to be opened before a turn is. */
+  async function openTimeline() {
     await mount()
+    fireEvent.click(await screen.findByRole('button', { name: /documents$/ }))
+    return screen.getByRole('complementary', { name: 'Timeline' })
+  }
+
+  async function openTurn() {
+    await openTimeline()
     fireEvent.click(await screen.findByRole('button', { name: /mere clients kaun hain/ }))
   }
 
@@ -186,7 +227,7 @@ describe('Brain turn reader', () => {
       ...turnEvent,
       metadata: { sessionId: 's1', totalCostUsd: 0.002, durationMs: 1000 },
     }])
-    await mount()
+    await openTimeline()
     fireEvent.click(await screen.findByRole('button', { name: /Agent turn/ }))
     await waitFor(() => expect(within(detail()).getByText(/Temporary mode/)).toBeTruthy())
     // The session store must not even be asked for a turn that was never kept.
@@ -208,8 +249,8 @@ describe('Brain Ask', () => {
   it('answers from the retrieval ladder and shows how it found the answer', async () => {
     api.brainKnowledgeAnswerPack.mockResolvedValue(pack)
     await mount()
-    fireEvent.click(nav('Ask'))
-    const box = screen.getByPlaceholderText(/poochein/)
+    // Asking is the same one box that searches the map -- Enter is the ask.
+    const box = await screen.findByPlaceholderText(/poochein/)
     fireEvent.change(box, { target: { value: 'Yasir ka rate kya hai' } })
     fireEvent.keyDown(box, { key: 'Enter' })
 
@@ -229,7 +270,7 @@ describe('Brain Health entities', () => {
   it('finds the people and projects in the Library and reports what it did', async () => {
     api.brainEntityBackfill.mockResolvedValue({ scanned: 157, created: 24, linked: 24 })
     await mount()
-    fireEvent.click(nav('Health'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Health' }))
 
     expect(screen.getByText('0 pehchani hui cheezein')).toBeTruthy()
     api.brainEntityList.mockResolvedValue([
@@ -247,7 +288,7 @@ describe('Brain Health entities', () => {
   it('says plainly when a second run found nothing new', async () => {
     api.brainEntityBackfill.mockResolvedValue({ scanned: 157, created: 0, linked: 0 })
     await mount()
-    fireEvent.click(nav('Health'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Health' }))
     fireEvent.click(screen.getByRole('button', { name: 'Log dhoondein' }))
 
     await waitFor(() => expect(screen.getByText(/sab pehle se maujood tha/)).toBeTruthy())
