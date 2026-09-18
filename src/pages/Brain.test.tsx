@@ -139,6 +139,29 @@ describe('Brain shell', () => {
     expect(screen.getByRole('complementary', { name: 'Review' })).toBeTruthy()
   })
 
+  // The same bug class as the panel above, with a worse failure mode: the
+  // storeGet/storeSet effect's cleanup fires on every unmount, so from inside
+  // the scope-keyed view a single scope switch would write `now()` and then
+  // read it straight back, leaving the "Naya" overlay nothing to compare
+  // against for the rest of the session.
+  it('does not stamp the last visit when the scope changes', async () => {
+    const visitWrites = () => api.storeSet.mock.calls.filter(([key]) => key === 'brain.lastVisit')
+    const visitReads = () => api.storeGet.mock.calls.filter(([key]) => key === 'brain.lastVisit')
+
+    await mount()
+    expect(visitWrites()).toHaveLength(0)
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Brain scope' }), { target: { value: 'b' } })
+    await waitFor(() => expect(screen.getByText('Client · B')).toBeTruthy())
+    fireEvent.change(screen.getByRole('combobox', { name: 'Brain scope' }), { target: { value: 'a' } })
+    await waitFor(() => expect(screen.getByText('Client · A')).toBeTruthy())
+
+    // Written on the way out of the page, not on the way out of a scope.
+    expect(visitWrites()).toHaveLength(0)
+    // And read once, when the page itself mounted -- not once per scope.
+    expect(visitReads()).toHaveLength(1)
+  })
+
   it('shows no drawer until something is selected', async () => {
     await mount()
     expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull()

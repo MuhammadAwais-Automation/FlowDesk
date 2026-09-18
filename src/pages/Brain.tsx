@@ -38,16 +38,38 @@ const AtlasCanvas = lazy(() => import('@/components/brain/atlas/AtlasCanvas').th
 export default function Brain() {
   const scopeState = useBrainScope()
   const [panel, setPanel] = useState<AtlasPanel | null>(null)
+  const [lastVisit, setLastVisit] = useState<string | null>(null)
+
+  // Read once on the way in and written on the way out, so the "new" overlay
+  // means "since you last looked" rather than "since this render". This lives
+  // above the remount below on purpose: the cleanup fires on every unmount, so
+  // from inside `BrainScopeView` a single scope switch would write `now()` and
+  // then read it straight back, leaving the overlay nothing to compare against
+  // for the rest of the session.
+  useEffect(() => {
+    void api.storeGet(LAST_VISIT_KEY).then(value => setLastVisit(typeof value === 'string' ? value : null))
+    return () => { void api.storeSet(LAST_VISIT_KEY, new Date().toISOString()) }
+  }, [])
+
   // Scope-owned state is discarded synchronously, including when the next load fails.
-  // `panel` is the one exception, same as `tab` was in the design this replaces: which
-  // surface you're looking at is not scope data, and switching scope should not silently
-  // close whatever you had open.
-  return <BrainScopeView key={scopeState.scope?.id ?? 'loading'} {...scopeState} panel={panel} setPanel={setPanel} />
+  // `panel` and `lastVisit` are the exceptions, same as `tab` was in the design this
+  // replaces: which surface you're looking at, and when you last visited, are not scope
+  // data, and switching scope should not silently close what you had open or forget it.
+  return (
+    <BrainScopeView
+      key={scopeState.scope?.id ?? 'loading'}
+      {...scopeState}
+      panel={panel}
+      setPanel={setPanel}
+      lastVisit={lastVisit}
+    />
+  )
 }
 
-function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, error: scopeError, panel, setPanel }: ReturnType<typeof useBrainScope> & {
+function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, error: scopeError, panel, setPanel, lastVisit }: ReturnType<typeof useBrainScope> & {
   panel: AtlasPanel | null
   setPanel: (panel: AtlasPanel | null) => void
+  lastVisit: string | null
 }) {
   const [status, setStatus] = useState<BrainStatus | null>(null)
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null)
@@ -62,7 +84,6 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const [asking, setAsking] = useState(false)
   const [askPack, setAskPack] = useState<AnswerPack | null>(null)
   const [fitTo, setFitTo] = useState<Set<string> | null>(null)
-  const [lastVisit, setLastVisit] = useState<string | null>(null)
 
   const [stack, setStack] = useState(EMPTY_SELECTION)
   const [selectedDocument, setSelectedDocument] = useState<DocumentReadResult | null>(null)
@@ -130,13 +151,6 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
       unsubscribe()
     }
   }, [refresh, scope])
-
-  // Read once on the way in and written on the way out, so the "new" overlay
-  // means "since you last looked" rather than "since this render".
-  useEffect(() => {
-    void api.storeGet(LAST_VISIT_KEY).then(value => setLastVisit(typeof value === 'string' ? value : null))
-    return () => { void api.storeSet(LAST_VISIT_KEY, new Date().toISOString()) }
-  }, [])
 
   useEffect(() => {
     void api.brainGetVaultRoot().then(setKnowledgeVaultRoot)
