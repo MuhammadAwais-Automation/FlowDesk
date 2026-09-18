@@ -15,11 +15,23 @@ Raw social messages are never mirrored into the Markdown vault. Credentials, coo
 
 ## Atlas
 
-Brain → Atlas draws the scope chain as a graph: every active document a point sized by its link count, every resolved wikilink a line, coloured by document type. `knowledge.graph` builds it in the utility process as two flat arrays; resolution is a join there, as everywhere else, so an edge exists when a document sits at that path right now.
+Brain is a full-screen map: every active document in the scope chain a point sized by its link count, every resolved wikilink a line, coloured by document type. `CommandBar`, `StatusStrip`, `DetailDrawer` and three panels (Timeline, Review, Health) float over the canvas rather than replacing it — there are no tabs. `knowledge.graph` builds the graph in the utility process as two flat arrays; resolution is a join there, as everywhere else, so an edge exists when a document sits at that path right now.
 
-It opens **local** — two hops around the selected document — and is never global by default. A whole-store graph is legible under about fifty notes and a hairball past a couple of hundred, and this store passed that already. Global is a deliberate click, and opens with a minimum-link floor and type filters to hand.
+Readability comes from map-like zoom bands, not from local-vs-global scoping or clustering. The layout runs once, when the graph is built; a camera move only changes what sigma's reducers return, never the layout itself. Three bands (`src/lib/atlasGraph.ts`, `BAND_RULES`/`bandForRatio`, tuned against a 163-document store with median degree 2 and maximum 103):
 
-Rendering is [sigma.js](https://www.sigmajs.org/) over graphology, both MIT. Cosmograph was rejected on its licence (CC-BY-NC, incompatible with this MIT project) and its engine, `cosmos.gl`, on capability: it renders points and lines but has no built-in labels, and a graph of unnamed dots answers nothing. Sigma renders labels through a density-controlled grid, which is the feature this view is for. The renderer is loaded lazily, so the several megabytes of WebGL cost only a visit to Atlas — and no other surface needs a WebGL context.
+| Band | Camera ratio | Nodes shown | Labels |
+|---|---|---|---|
+| Far | `> 1.6` | `degree ≥ 8` (~18 hubs) | Region names only |
+| Mid | `0.6 – 1.6` | `degree ≥ 2` | Nodes with `degree ≥ 6` |
+| Near | `< 0.6` | all | all in view |
+
+Region names (`AreaLabels.tsx`) are derived from a path's segments — `wiki/ai-tooling/...` → `ai-tooling`, dropping a `wiki/` root since most of the store lives under it — placed at the centroid of their members and drawn as an HTML overlay, only at the far band, where node labels are off.
+
+The palette (`src/lib/atlasTheme.ts`) is inverted from a naive per-type scheme: `skill` is 106 of 163 documents in the real store, so it is the desaturated floor the map sits on rather than the loudest colour, and the types that actually distinguish something — `client`, `project`, `me` — carry the accents.
+
+Typing in the command bar filters the loaded graph client-side (no round trip) and dims everything else; Enter calls `brainKnowledgeAnswerPack` and opens the answer in the detail drawer, whose cited documents highlight on the map. `StatusStrip`'s pills are doors — clicking one opens its panel or toggles its overlay (new documents, the agent's reading trail, orphans, loose ends) and closes it again on a second click. Which panel is open, and the last-visit timestamp the "new" overlay compares against, both live above the scope-keyed remount boundary in `Brain.tsx` — switching scope must not silently close what you had open or corrupt what "since you last looked" means, the way the document reader and its selection deliberately do reset on a scope switch.
+
+Rendering is [sigma.js](https://www.sigmajs.org/) over graphology, both MIT. Cosmograph was rejected on its licence (CC-BY-NC, incompatible with this MIT project) and its engine, `cosmos.gl`, on capability: it renders points and lines but has no built-in labels, and a graph of unnamed dots answers nothing. Sigma renders labels through a density-controlled grid, which is what the zoom bands build on. The renderer is loaded lazily, so the several megabytes of WebGL cost only a visit to Brain — and no other surface needs a WebGL context, which is also why none of it can be exercised by an automated test; every decision about what to draw lives in a pure function in `src/lib/` instead, and sigma only paints the result.
 
 ## Memory and scope policy
 
