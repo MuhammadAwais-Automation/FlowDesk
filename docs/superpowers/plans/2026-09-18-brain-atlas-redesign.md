@@ -244,11 +244,14 @@ export interface AtlasRegion {
  */
 export function regionOf(path: string): string {
   const segments = path.replaceAll('\\', '/').split('/').filter(Boolean)
-  const meaningful = segments[0] === 'wiki' ? segments.slice(1) : segments
+  const hadWiki = segments[0] === 'wiki'
+  const meaningful = hadWiki ? segments.slice(1) : segments
   // Only the last segment left is the filename, so there is no directory to
   // name: the document sits at the root of the vault.
   if (meaningful.length <= 1) return 'loose'
-  return meaningful.slice(0, meaningful.length > 2 ? 2 : 1).join('/')
+  // The filename itself is not a directory to name the region after.
+  const directories = meaningful.slice(0, -1)
+  return directories.slice(0, hadWiki ? 1 : 2).join('/')
 }
 
 /**
