@@ -1561,9 +1561,18 @@ describe('DetailDrawer', () => {
   it('shows an answer when one is selected', () => {
     setup({
       stack: { current: { kind: 'answer', question: 'scope kya tha' }, history: [] },
-      pack: { question: 'scope kya tha', sections: [], estimatedTokens: 0, truncated: false },
+      // AnswerPack has no `truncated` field; its required fields are question,
+      // evidence, sections, pointerFollowed, strategy, estimatedTokens and
+      // candidatesConsidered (src/types/brainKnowledge.ts).
+      pack: {
+        question: 'scope kya tha', evidence: 'kuch nahi mila', sections: [],
+        pointerFollowed: null, strategy: 'none', estimatedTokens: 0, candidatesConsidered: 0,
+      },
     })
-    expect(screen.getByText('scope kya tha')).toBeTruthy()
+    // Not getByText: AnswerDetail renders the same question in its own <h2>,
+    // so the plain text matches twice (the drawer's header span, and that
+    // heading). The heading role is what proves AnswerDetail rendered at all.
+    expect(screen.getByRole('heading', { name: 'scope kya tha' })).toBeTruthy()
   })
 })
 ```
