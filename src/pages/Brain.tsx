@@ -44,7 +44,7 @@ const ATLAS_TAB = 'Atlas'
  * Brain surface is text. Importing them eagerly would cost every visit to
  * Today or Ask, and would need a WebGL context in environments that have none.
  */
-const Atlas = lazy(() => import('@/components/brain/Atlas').then(module => ({ default: module.Atlas })))
+const Atlas = lazy(() => import('@/components/brain/atlas/AtlasCanvas').then(module => ({ default: module.AtlasCanvas })))
 
 export default function Brain() {
   const [tab, setTab] = useState<(typeof BRAIN_TABS)[number]>('Today')
@@ -349,6 +349,9 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
             <Atlas
               graph={graph}
               selectedPath={selection?.kind === 'document' ? selection.path : null}
+              matches={null}
+              highlighted={null}
+              fitTo={null}
               onSelect={path => select({ kind: 'document', path })}
             />
           </Suspense>
