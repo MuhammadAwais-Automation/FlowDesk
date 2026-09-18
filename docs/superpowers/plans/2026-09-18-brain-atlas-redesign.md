@@ -1670,6 +1670,23 @@ In `src/pages/Brain.tsx`, replace the `DetailPane` import and its JSX with `Deta
 git rm src/components/brain/detail/DetailPane.tsx
 ```
 
+Ruling: `src/pages/Brain.test.tsx` has one existing test that depends on the
+exact behaviour this task removes -- `DetailPane` used to show a counters
+panel (`Documents` / `Review inbox` / `Unresolved links`) when nothing was
+selected, and `DetailDrawer` renders nothing at all in that case. Left
+unchanged, this task's own Step 5 verification would fail. Fix both spots now
+rather than leaving the suite red for Task 11 to find:
+
+1. Delete the whole `it('shows the counters in the detail pane when nothing
+   is selected', ...)` test. Task 11 replaces it with an equivalent case
+   ("shows no drawer until something is selected") when it rewrites this
+   describe block.
+2. In `it('clears the detail pane when the scope changes', ...)`, replace the
+   final line --
+   `expect(within(detail()).getByText('Documents')).toBeTruthy()` -- with
+   `expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull()`,
+   since `detail()` itself throws once nothing renders.
+
 - [ ] **Step 5: Verify**
 
 Run: `npm run typecheck && npx vitest run src`
@@ -1693,9 +1710,14 @@ Three panels that replace four list components. Each loads nothing itself; the s
 - Create: `src/components/brain/atlas/panels/Timeline.test.tsx`
 - Create: `src/components/brain/atlas/panels/Review.tsx`
 - Create: `src/components/brain/atlas/panels/Review.test.tsx`
-- Create: `src/components/brain/atlas/panels/Health.tsx` (move `src/components/brain/HealthPanel.tsx`, restyle to `OBSERVATORY`)
-- Delete: `src/components/brain/lists/AskList.tsx`, `LibraryList.tsx`, `ReviewList.tsx`, `TodayList.tsx`, `src/components/brain/Card.tsx`, `src/components/brain/DocumentRow.tsx`, `src/components/brain/HealthPanel.tsx`
-- Delete: `src/components/brain/ScopePicker.test.tsx` is kept; `src/components/brain/lists/` is removed whole
+- Create: `src/components/brain/atlas/panels/Health.tsx` (new file with `HealthPanel.tsx`'s content, restyled to `OBSERVATORY`; the old file is deleted in Task 11, not here — see Step 5)
+
+Ruling: `src/components/brain/lists/AskList.tsx`, `LibraryList.tsx`, `ReviewList.tsx`,
+`TodayList.tsx`, `src/components/brain/Card.tsx`, `src/components/brain/DocumentRow.tsx`
+and `src/components/brain/HealthPanel.tsx` are **not** touched by this task. The
+current `src/pages/Brain.tsx` still imports all of them; deleting them here would
+break the build until Task 11's rewrite lands. Task 11 deletes them in the same
+commit that stops importing them.
 
 **Interfaces:**
 - Consumes: `describeEvent`, `eventTime`, `documentsRead`, `isOpenableEvent` from `src/lib/brainFormat.ts`; `OBSERVATORY` (Task 3); `Selection` from `src/lib/brainSelection.ts`.
@@ -1996,14 +2018,17 @@ export function Review({ candidates, knowledgeCandidates, unresolvedLinks, onRev
 Run: `npx vitest run src/components/brain/atlas/panels/Review.test.tsx`
 Expected: PASS — 4 tests.
 
-- [ ] **Step 5: Move HealthPanel and remove the list components**
+- [ ] **Step 5: Create Health.tsx from HealthPanel.tsx's content**
 
-```bash
-git mv src/components/brain/HealthPanel.tsx src/components/brain/atlas/panels/Health.tsx
-git rm src/components/brain/lists/AskList.tsx src/components/brain/lists/LibraryList.tsx src/components/brain/lists/ReviewList.tsx src/components/brain/lists/TodayList.tsx src/components/brain/Card.tsx src/components/brain/DocumentRow.tsx
-```
-
-In `Health.tsx`: rename the exported component from `HealthPanel` to `Health`, replace the `Card` import with a local card in the same file (`rounded-xl border p-4` with `background: OBSERVATORY.canvas, borderColor: OBSERVATORY.border`), swap `text-stone-*` for `OBSERVATORY` values, and keep every button, report line and prop exactly as they are — the operations are unchanged.
+Read `src/components/brain/HealthPanel.tsx`, then create
+`src/components/brain/atlas/panels/Health.tsx` as a new file (the old one stays
+in place — Task 11 removes it once nothing imports it) with the same content:
+rename the exported component from `HealthPanel` to `Health`, replace the
+`Card` import with a local card defined in the same file (`rounded-xl border
+p-4` with `background: OBSERVATORY.canvas, borderColor: OBSERVATORY.border`),
+swap `text-stone-*` for `OBSERVATORY` values, and keep every button, report
+line and prop exactly as they are — the operations are unchanged, only the
+frame changes.
 
 - [ ] **Step 6: Commit**
 
@@ -2051,9 +2076,9 @@ describe('Brain shell', () => {
   it('opens a panel from the status strip and closes it again', async () => {
     render(<Brain />)
     const pill = await screen.findByRole('button', { name: /review/ })
-    await userEvent.click(pill)
+    fireEvent.click(pill)
     expect(screen.getByRole('complementary', { name: 'Review' })).toBeTruthy()
-    await userEvent.click(pill)
+    fireEvent.click(pill)
     expect(screen.queryByRole('complementary', { name: 'Review' })).toBeNull()
   })
 
@@ -2062,10 +2087,30 @@ describe('Brain shell', () => {
     await screen.findByRole('searchbox')
     expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull()
   })
+
+  // The one behaviour worth carrying over from the describe block this
+  // replaces: a document belonging to one client must never stay on screen
+  // under another. The other three tests in that block existed only to prove
+  // the old tab nav preserved a selection across a tab switch -- a nav that
+  // no longer exists -- so they have no equivalent here.
+  it('clears the drawer when the scope changes', async () => {
+    api.brainKnowledgeGraph.mockResolvedValue({
+      nodes: [{ path: document.path, title: document.title, type: document.type, degree: 7, updatedAt: document.updatedAt }],
+      edges: [], unresolvedCount: 0,
+    })
+    render(<Brain />)
+    fireEvent.change(await screen.findByRole('searchbox'), { target: { value: 'Yasir' } })
+    fireEvent.click(await screen.findByRole('button', { name: /Yasir Bhai/ }))
+    await waitFor(() => expect(screen.getByRole('complementary', { name: 'Detail' })).toBeTruthy())
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Brain scope' }), { target: { value: 'b' } })
+
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull())
+  })
 })
 ```
 
-Keep every other `describe` in the file as it is. They cover the drawer, the document reader and the scope behaviour, and they are the regression guard for this rewrite.
+Keep every other `describe` in the file as it is (`Brain document reader`, `Brain turn reader`, `Brain Ask`, `Brain Health entities`) -- they are the regression guard for this rewrite and do not reference the removed nav.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -2092,8 +2137,8 @@ import { OBSERVATORY } from '@/lib/atlasTheme'
 import { EMPTY_SELECTION, popSelection, pushSelection, type Selection } from '@/lib/brainSelection'
 import type { BrainCandidate, BrainScope, BrainStatus } from '@/types/brain'
 import type {
-  AnswerPack, BrainEvent, DocumentNeighborhood, DocumentReadResult,
-  KnowledgeCandidate, KnowledgeGraph, UnresolvedLink,
+  AnswerPack, BrainEntity, BrainEvent, CompactionReport, DocumentNeighborhood, DocumentReadResult,
+  KnowledgeCandidate, KnowledgeGraph, ManifestRender, UnresolvedLink, VaultImportReport, VectorIndexReport,
 } from '@/types/brainKnowledge'
 
 const api = window.electronAPI
@@ -2141,23 +2186,49 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const [selectedDocument, setSelectedDocument] = useState<DocumentReadResult | null>(null)
   const [neighborhood, setNeighborhood] = useState<DocumentNeighborhood | null>(null)
 
+  // Health panel state, carried across from the Brain.tsx this replaces
+  // (git show HEAD~1:src/pages/Brain.tsx) rather than retyped -- each of
+  // these carries a stale-response guard that is easy to lose on the way.
+  const [knowledgeVaultRoot, setKnowledgeVaultRoot] = useState<string | null>(null)
+  const [knowledgeImportReport, setKnowledgeImportReport] = useState<VaultImportReport | null>(null)
+  const [knowledgeImporting, setKnowledgeImporting] = useState(false)
+  const [knowledgeManifest, setKnowledgeManifest] = useState<ManifestRender | null>(null)
+  const [knowledgeCompactReport, setKnowledgeCompactReport] = useState<CompactionReport | null>(null)
+  const [knowledgeCompacting, setKnowledgeCompacting] = useState(false)
+  const [migrateReport, setMigrateReport] = useState<{ scanned: number; migrated: number; unchanged: number; dryRun: boolean } | null>(null)
+  const [migrating, setMigrating] = useState(false)
+  const [vectorStatus, setVectorStatus] = useState<{ documents: number; vectors: number; model: string; failed: boolean } | null>(null)
+  const [vectorBuilding, setVectorBuilding] = useState(false)
+  const [vectorReport, setVectorReport] = useState<VectorIndexReport | null>(null)
+  const [entities, setEntities] = useState<BrainEntity[]>([])
+  const [entityBackfilling, setEntityBackfilling] = useState(false)
+  const [entityReport, setEntityReport] = useState<{ scanned: number; created: number; linked: number } | null>(null)
+
   const selectedScopeId = useRef<string | null>(null)
   selectedScopeId.current = scope?.id ?? null
   const readRequest = useRef(0)
   const askRequest = useRef(0)
+  const manifestRequest = useRef(0)
+  const importRequest = useRef(0)
+  const compactRequest = useRef(0)
+  const migrateRequest = useRef(0)
 
   const refresh = useCallback(async (activeScope: BrainScope) => {
-    const [nextStatus, nextGraph, nextCandidates, nextKnowledgeCandidates, nextUnresolved, nextEvents] = await Promise.all([
+    const [nextStatus, nextGraph, nextCandidates, nextKnowledgeCandidates, nextUnresolved, nextEvents, nextVectorStatus, nextEntities] = await Promise.all([
       api.brainGetStatus(),
       api.brainKnowledgeGraph({ scopeId: activeScope.id }).catch(() => null),
       api.brainListCandidates(activeScope.id),
       api.brainKnowledgeListCandidates({ scopeId: activeScope.id }),
       api.brainKnowledgeListUnresolvedLinks({ scopeId: activeScope.id }),
       api.brainListEvents({ scopeId: activeScope.id, ...weekBounds() }).catch(() => [] as BrainEvent[]),
+      api.brainKnowledgeVectorStatus({ scopeId: activeScope.id }).catch(() => null),
+      api.brainEntityList({ scopeId: activeScope.id }).catch(() => [] as BrainEntity[]),
     ])
     if (selectedScopeId.current !== activeScope.id) return
     setStatus(nextStatus)
     setGraph(nextGraph)
+    setVectorStatus(nextVectorStatus)
+    setEntities(nextEntities)
     setCandidates(nextCandidates)
     setKnowledgeCandidates(nextKnowledgeCandidates)
     setUnresolvedLinks(nextUnresolved)
@@ -2183,6 +2254,10 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   useEffect(() => {
     void api.storeGet(LAST_VISIT_KEY).then(value => setLastVisit(typeof value === 'string' ? value : null))
     return () => { void api.storeSet(LAST_VISIT_KEY, new Date().toISOString()) }
+  }, [])
+
+  useEffect(() => {
+    void api.brainGetVaultRoot().then(setKnowledgeVaultRoot)
   }, [])
 
   const selection = stack.current
@@ -2255,6 +2330,86 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
       if (askRequest.current === request) setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       if (askRequest.current === request) setAsking(false)
+    }
+  }
+
+  async function chooseVaultFolder() {
+    try {
+      const chosen = await api.brainChooseVaultFolder()
+      if (chosen) setKnowledgeVaultRoot(chosen)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  async function importVault() {
+    if (!scope || !knowledgeVaultRoot || selectedScopeId.current !== scope.id) return
+    const request = ++importRequest.current
+    const isCurrent = () => selectedScopeId.current === scope.id && request === importRequest.current
+    setKnowledgeImporting(true)
+    try {
+      const report = await api.brainKnowledgeImportVault({ scopeId: scope.id, vaultRoot: knowledgeVaultRoot })
+      if (isCurrent()) setKnowledgeImportReport(report)
+      await refresh(scope)
+    } finally {
+      if (isCurrent()) setKnowledgeImporting(false)
+    }
+  }
+
+  async function loadManifest() {
+    if (!scope) return
+    const request = ++manifestRequest.current
+    const manifest = await api.brainKnowledgeManifest({ scopeId: scope.id })
+    if (selectedScopeId.current === scope.id && request === manifestRequest.current) setKnowledgeManifest(manifest)
+  }
+
+  async function runCompaction() {
+    if (!scope || selectedScopeId.current !== scope.id) return
+    const request = ++compactRequest.current
+    const isCurrent = () => selectedScopeId.current === scope.id && request === compactRequest.current
+    setKnowledgeCompacting(true)
+    try {
+      const report = await api.brainKnowledgeCompact({ scopeId: scope.id })
+      if (isCurrent()) setKnowledgeCompactReport(report)
+      await refresh(scope)
+    } finally {
+      if (isCurrent()) setKnowledgeCompacting(false)
+    }
+  }
+
+  async function buildVectors() {
+    if (!scope) return
+    setVectorBuilding(true)
+    try {
+      const report = await api.brainKnowledgeBuildVectors({ scopeId: scope.id })
+      if (selectedScopeId.current === scope.id) setVectorReport(report)
+      await refresh(scope)
+    } finally {
+      if (selectedScopeId.current === scope.id) setVectorBuilding(false)
+    }
+  }
+
+  async function runEntityBackfill() {
+    if (!scope) return
+    setEntityBackfilling(true)
+    try {
+      const report = await api.brainEntityBackfill({ scopeId: scope.id })
+      if (selectedScopeId.current === scope.id) setEntityReport(report)
+      await refresh(scope)
+    } finally {
+      if (selectedScopeId.current === scope.id) setEntityBackfilling(false)
+    }
+  }
+
+  async function runMigration(dryRun: boolean) {
+    const request = ++migrateRequest.current
+    setMigrating(true)
+    try {
+      const report = await api.brainKnowledgeMigrateMemories({ dryRun })
+      if (request === migrateRequest.current) setMigrateReport(report)
+      if (!dryRun && scope) await refresh(scope)
+    } finally {
+      if (request === migrateRequest.current) setMigrating(false)
     }
   }
 
@@ -2353,7 +2508,31 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
                     onSelect={select}
                   />
                 )}
-                {panel === 'health' && <Health />}
+                {panel === 'health' && (
+                  <Health
+                    knowledgeVaultRoot={knowledgeVaultRoot}
+                    knowledgeImporting={knowledgeImporting}
+                    knowledgeImportReport={knowledgeImportReport}
+                    knowledgeManifest={knowledgeManifest}
+                    knowledgeCompacting={knowledgeCompacting}
+                    knowledgeCompactReport={knowledgeCompactReport}
+                    migrating={migrating}
+                    migrateReport={migrateReport}
+                    vectorStatus={vectorStatus}
+                    vectorBuilding={vectorBuilding}
+                    vectorReport={vectorReport}
+                    chooseVaultFolder={() => void chooseVaultFolder()}
+                    importVault={() => void importVault()}
+                    loadManifest={() => void loadManifest()}
+                    runCompaction={() => void runCompaction()}
+                    runMigration={dryRun => void runMigration(dryRun)}
+                    buildVectors={() => void buildVectors()}
+                    entityCount={entities.length}
+                    entityBackfilling={entityBackfilling}
+                    entityReport={entityReport}
+                    runEntityBackfill={() => void runEntityBackfill()}
+                  />
+                )}
               </aside>
             )}
 
@@ -2392,36 +2571,23 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
 }
 ```
 
-`Health` keeps `HealthPanel`'s twenty props exactly:
+`Health` keeps `HealthPanel`'s twenty props exactly, and the code above
+already declares every hook, ref and handler that feeds them, copied verbatim
+from the `Brain.tsx` this replaces (each carries a stale-response guard that
+is easy to lose retyping from memory) -- there is nothing left to move across.
 
-```
-knowledgeVaultRoot, knowledgeImporting, knowledgeImportReport, knowledgeManifest,
-knowledgeCompacting, knowledgeCompactReport, migrating, migrateReport,
-vectorStatus, vectorBuilding, vectorReport,
-entityCount, entityBackfilling, entityReport, runEntityBackfill,
-chooseVaultFolder, importVault, loadManifest, runCompaction, runMigration, buildVectors
-```
+- [ ] **Step 4: Remove the old list surfaces and BRAIN_TABS**
 
-Every one is fed by state and a handler that already exists in the `Brain.tsx`
-being replaced: the `knowledgeVaultRoot` / `knowledgeImporting` /
-`knowledgeImportReport` / `knowledgeManifest` / `knowledgeCompactReport` /
-`knowledgeCompacting` / `migrateReport` / `migrating` / `vectorStatus` /
-`vectorBuilding` / `vectorReport` / `entities` / `entityBackfilling` /
-`entityReport` hooks, the `importRequest` / `manifestRequest` /
-`compactRequest` / `migrateRequest` refs, and the `chooseVaultFolder`,
-`importVault`, `loadManifest`, `runCompaction`, `buildVectors`,
-`runEntityBackfill` and `runMigration` functions. Recover them verbatim rather
-than retyping — each carries a stale-response guard that is easy to lose:
+Task 10 created `Timeline.tsx`, `Review.tsx` and `Health.tsx` as new files and
+deliberately left the components they replace in place, because deleting them
+before this task would break the build: the `Brain.tsx` being replaced here is
+the only thing that still imports `AskList`, `LibraryList`, `ReviewList`,
+`TodayList`, `Card`, `DocumentRow` and the old `HealthPanel`. Now that this
+task's rewrite stops importing all of them, remove them in this commit:
 
 ```bash
-git show HEAD~1:src/pages/Brain.tsx > /tmp/previous-brain.tsx
+git rm src/components/brain/lists/AskList.tsx src/components/brain/lists/LibraryList.tsx src/components/brain/lists/ReviewList.tsx src/components/brain/lists/TodayList.tsx src/components/brain/Card.tsx src/components/brain/DocumentRow.tsx src/components/brain/HealthPanel.tsx
 ```
-
-Then move `api.brainKnowledgeVectorStatus`, `api.brainEntityList` and
-`api.brainGetVaultRoot` back into `refresh` and the mount effect, since the new
-`refresh` above does not fetch them.
-
-- [ ] **Step 4: Remove BRAIN_TABS**
 
 In `src/lib/brainUi.ts`, delete the `BRAIN_TABS` export and the doc comment above it that describes the five surfaces. Leave `INTELLIGENCE_TABS`, `MONITORABLE_RECIPE_IDS`, `MONITORABLE_RECIPE_CONTROLS` and `INTELLIGENCE_SOURCES` untouched.
 
@@ -2435,7 +2601,7 @@ Expected: PASS. `src/pages/brainScopeIsolation.test.tsx` must pass untouched —
 - [ ] **Step 6: Commit**
 
 ```bash
-git add -A src/pages src/lib/brainUi.ts src/lib/brainUi.test.ts
+git add -A src/pages src/components/brain src/lib/brainUi.ts src/lib/brainUi.test.ts
 git commit -m "feat: the Brain page is the map, and the panels float over it"
 ```
 
