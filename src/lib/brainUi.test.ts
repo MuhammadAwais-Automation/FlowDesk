@@ -3,7 +3,7 @@ import { BRAIN_TABS, INTELLIGENCE_TABS, INTELLIGENCE_SOURCES, MONITORABLE_RECIPE
 
 describe('Brain UI registry', () => {
   it('keeps Brain and Intelligence as separate complete surfaces', () => {
-    expect(BRAIN_TABS).toEqual(['Today', 'Review', 'Library', 'Ask', 'Health'])
+    expect(BRAIN_TABS).toEqual(['Today', 'Review', 'Library', 'Ask', 'Atlas', 'Health'])
     expect(INTELLIGENCE_TABS).toEqual(['Overview', 'Sources', 'Monitors', 'Pain Points', 'Trends', 'Opportunities', 'Decision Briefs'])
   })
 

@@ -18,10 +18,13 @@
  * - Ask: a question against the same documents, answered with citations
  *   that open the source at the passage — what NotebookLM/Notion AI/Reflect
  *   actually ship for "what does it know", not a standing inventory browser.
+ * - Atlas: the same documents as a map — every note a point, every resolved
+ *   wikilink a line. Opens local (two hops around one document) and never
+ *   global by default, for the reason above.
  * - Health: vault import, manifest preview, compaction, the memories
  *   migration, backup — the honesty console.
  */
-export const BRAIN_TABS = ['Today', 'Review', 'Library', 'Ask', 'Health'] as const
+export const BRAIN_TABS = ['Today', 'Review', 'Library', 'Ask', 'Atlas', 'Health'] as const
 export const INTELLIGENCE_TABS = ['Overview', 'Sources', 'Monitors', 'Pain Points', 'Trends', 'Opportunities', 'Decision Briefs'] as const
 
 /**

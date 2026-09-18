@@ -133,6 +133,9 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
     path: knowledgePath,
     depth: z.number().int().min(1).max(2).optional(),
   }).strict() }),
+  z.object({ ...requestBase, method: z.literal('knowledge.graph'), payload: z.object({
+    scopeId: id,
+  }).strict() }),
   z.object({ ...requestBase, method: z.literal('entity.list'), payload: z.object({
     scopeId: id,
     type: z.enum(['person', 'org', 'project', 'opportunity', 'topic']).optional(),

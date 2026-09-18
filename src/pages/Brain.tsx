@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { BrainCircuit } from 'lucide-react'
 import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
 import { HealthPanel } from '@/components/brain/HealthPanel'
@@ -19,6 +19,7 @@ import type {
   DocumentNeighborhood,
   DocumentReadResult,
   DocumentSearchHit,
+  KnowledgeGraph,
   KnowledgeCandidate,
   KnowledgeDocType,
   KnowledgeDocument,
@@ -32,6 +33,18 @@ const api = window.electronAPI
 
 /** Maintenance, not reading — so it sits below a divider and takes the full width. */
 const MAINTENANCE_TAB = 'Health'
+
+/** Full width, no list column: the map is the view, not a detail of one. */
+const ATLAS_TAB = 'Atlas'
+
+/**
+ * Loaded only when the tab is opened.
+ *
+ * Sigma and graphology are a few megabytes of WebGL renderer, and every other
+ * Brain surface is text. Importing them eagerly would cost every visit to
+ * Today or Ask, and would need a WebGL context in environments that have none.
+ */
+const Atlas = lazy(() => import('@/components/brain/Atlas').then(module => ({ default: module.Atlas })))
 
 export default function Brain() {
   const [tab, setTab] = useState<(typeof BRAIN_TABS)[number]>('Today')
@@ -80,6 +93,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const [entityBackfilling, setEntityBackfilling] = useState(false)
   const [entityReport, setEntityReport] = useState<{ scanned: number; created: number; linked: number } | null>(null)
 
+  const [graph, setGraph] = useState<KnowledgeGraph | null>(null)
   const [events, setEvents] = useState<BrainEvent[]>([])
   const [dailyNotePath, setDailyNotePath] = useState<string | null>(null)
 
@@ -99,7 +113,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     // shows a note that is one refresh stale.
     const daily = await api.brainKnowledgeDailyNote({ scopeId: activeScope.id })
       .catch(() => ({ written: false, path: '' }))
-    const [nextStatus, nextCandidates, nextKnowledgeCandidates, nextUnresolvedLinks, nextKnowledgeList, nextEvents, nextVectorStatus, nextEntities] = await Promise.all([
+    const [nextStatus, nextCandidates, nextKnowledgeCandidates, nextUnresolvedLinks, nextKnowledgeList, nextEvents, nextVectorStatus, nextEntities, nextGraph] = await Promise.all([
       api.brainGetStatus(), api.brainListCandidates(activeScope.id),
       api.brainKnowledgeListCandidates({ scopeId: activeScope.id }),
       api.brainKnowledgeListUnresolvedLinks({ scopeId: activeScope.id }),
@@ -107,6 +121,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
       api.brainListEvents({ scopeId: activeScope.id, ...todayBounds() }).catch(() => [] as BrainEvent[]),
       api.brainKnowledgeVectorStatus({ scopeId: activeScope.id }).catch(() => null),
       api.brainEntityList({ scopeId: activeScope.id }).catch(() => [] as BrainEntity[]),
+      api.brainKnowledgeGraph({ scopeId: activeScope.id }).catch(() => null),
     ])
     if (selectedScopeId.current !== activeScope.id) return
     setStatus(nextStatus)
@@ -118,6 +133,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     setDailyNotePath(daily.written ? daily.path : null)
     setVectorStatus(nextVectorStatus)
     setEntities(nextEntities)
+    setGraph(nextGraph)
   }, [])
 
   useEffect(() => {
@@ -328,7 +344,15 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
           <NavButton item={MAINTENANCE_TAB} active={tab === MAINTENANCE_TAB} count={0} onClick={() => setTab(MAINTENANCE_TAB)} />
         </nav>
 
-        {tab === MAINTENANCE_TAB ? (
+        {tab === ATLAS_TAB ? (
+          <Suspense fallback={<div className="flex flex-1 items-center justify-center text-sm text-stone-500">Atlas load ho raha hai…</div>}>
+            <Atlas
+              graph={graph}
+              selectedPath={selection?.kind === 'document' ? selection.path : null}
+              onSelect={path => select({ kind: 'document', path })}
+            />
+          </Suspense>
+        ) : tab === MAINTENANCE_TAB ? (
           <HealthPanel
             knowledgeVaultRoot={knowledgeVaultRoot}
             knowledgeImporting={knowledgeImporting}

@@ -226,6 +226,29 @@ export interface DocumentNeighborhood {
   edges: { from: string; to: string }[]
 }
 
+export interface KnowledgeGraphNode {
+  path: string
+  title: string
+  type: KnowledgeDocType
+  /** Links in and out. Drives node size — a hub is a document others rely on. */
+  degree: number
+  updatedAt: string
+}
+
+/**
+ * Every document in the scope chain and every link between two of them.
+ *
+ * Whole-scope, unlike `DocumentNeighborhood`, which walks out from one
+ * document. Both exist because they answer different questions: the
+ * neighbourhood is for reading, this is for seeing the shape of the store.
+ */
+export interface KnowledgeGraph {
+  nodes: KnowledgeGraphNode[]
+  edges: { from: string; to: string }[]
+  /** Links whose target is not a document here — drawn as loose ends, or not at all. */
+  unresolvedCount: number
+}
+
 /** Progress of the embedding index. `available: false` means the model never loaded. */
 export interface VectorIndexReport {
   indexed: number

@@ -334,6 +334,8 @@ export class BrainService {
           model: EMBEDDING_MODEL,
           failed: embeddingsFailed(),
         }
+      case 'knowledge.graph':
+        return this.documents.graph(this.knowledgeScopeChain(request.payload.scopeId))
       case 'knowledge.neighbors':
         return this.documents.neighbors(
           this.knowledgeScopeChain(request.payload.scopeId),

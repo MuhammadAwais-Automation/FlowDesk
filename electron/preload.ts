@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   brainKnowledgeSearch: (input: unknown) => ipcRenderer.invoke('brain:knowledgeSearch', input),
   brainKnowledgeDailyNote: (input: unknown) => ipcRenderer.invoke('brain:knowledgeDailyNote', input),
   brainKnowledgeNeighbors: (input: unknown) => ipcRenderer.invoke('brain:knowledgeNeighbors', input),
+  brainKnowledgeGraph: (input: unknown) => ipcRenderer.invoke('brain:knowledgeGraph', input),
   brainKnowledgeAnswerPack: (input: unknown) => ipcRenderer.invoke('brain:knowledgeAnswerPack', input),
   brainEntityList: (input: unknown) => ipcRenderer.invoke('brain:entityList', input),
   brainEntityBackfill: (input: unknown) => ipcRenderer.invoke('brain:entityBackfill', input),

@@ -1,7 +1,7 @@
 import type { CustomTool } from './browser'
 import type { ProjectSessionSnapshot } from './project'
 import type { BrainCandidate, BrainContextPack, BrainDecisionBrief, BrainJob, BrainMemory, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainQuery, BrainScope, BrainScopeQuery, BrainSourceMetric, BrainStatus, MemoryKind, OpportunityEvidence } from './brain'
-import type { AnswerPack, BrainEntity, EntityMention, EntityMergeProposal, BrainEvent, CompactionReport, DocumentNeighborhood, VectorIndexReport, DecideCandidateInput, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, ProposeCandidateInput, UnresolvedLink, VaultImportReport } from './brainKnowledge'
+import type { KnowledgeGraph, AnswerPack, BrainEntity, EntityMention, EntityMergeProposal, BrainEvent, CompactionReport, DocumentNeighborhood, VectorIndexReport, DecideCandidateInput, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, ProposeCandidateInput, UnresolvedLink, VaultImportReport } from './brainKnowledge'
 
 export interface GmailSession {
   email: string
@@ -218,6 +218,7 @@ export interface ElectronAPI {
   brainKnowledgeCompact: (input: { scopeId: string }) => Promise<CompactionReport>
   brainKnowledgeMigrateMemories: (input: { dryRun?: boolean }) => Promise<{ scanned: number; migrated: number; unchanged: number; dryRun: boolean }>
   brainKnowledgeListUnresolvedLinks: (input: { scopeId: string }) => Promise<UnresolvedLink[]>
+  brainKnowledgeGraph: (input: { scopeId: string }) => Promise<KnowledgeGraph>
   /** Opens a native folder picker; null if the user cancelled. Persists the choice. */
   brainChooseVaultFolder: () => Promise<string | null>
   brainGetVaultRoot: () => Promise<string | null>

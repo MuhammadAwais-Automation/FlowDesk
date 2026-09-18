@@ -75,6 +75,7 @@ const api = {
   brainKnowledgeDailyNote: vi.fn(), brainListEvents: vi.fn(), brainKnowledgeNeighbors: vi.fn(), brainKnowledgeBuildVectors: vi.fn(), brainKnowledgeVectorStatus: vi.fn(),
   brainKnowledgeAnswerPack: vi.fn(), agentSessionTurns: vi.fn(),
   brainEntityList: vi.fn(), brainEntityBackfill: vi.fn(),
+  brainKnowledgeGraph: vi.fn(),
 }
 let Brain: ComponentType
 
@@ -110,6 +111,7 @@ beforeEach(() => {
   api.brainListSourceMetrics.mockResolvedValue([])
   api.brainGetConsent.mockResolvedValue(false)
   api.brainEntityList.mockResolvedValue([])
+  api.brainKnowledgeGraph.mockResolvedValue({ nodes: [], edges: [], unresolvedCount: 0 })
 })
 
 afterEach(cleanup)
