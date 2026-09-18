@@ -117,15 +117,26 @@ export function AtlasCanvas({ graph, selectedPath, matches, highlighted, fitTo, 
       .filter(path => built.hasNode(path))
       .map(path => ({ x: Number(built.getNodeAttribute(path, 'x')), y: Number(built.getNodeAttribute(path, 'y')) })))
     if (!box) return
-    // The camera takes normalised graph coordinates, which is what
-    // `normalizationFunction` produces from the raw layout — going through
-    // `graphToViewport` and back would return the same numbers and move
-    // nothing. The ratio is the larger side of the box over the graph's own
-    // extent, clamped so a single match does not slam to maximum zoom.
+    // The camera's own `x`/`y` are in sigma's *framed* graph space — the
+    // layout's centroid mapped to (0.5, 0.5) and its extent to a span of 1 —
+    // not in the raw ForceAtlas2 coordinates the nodes carry. Feeding raw
+    // coordinates straight in sends the camera hundreds of framed units into
+    // blank canvas. `graphToViewport` then `viewportToFramedGraph` is that
+    // normalisation and nothing else: the viewport hop cancels out, so the pair
+    // is independent of where the camera currently sits.
+    const toFramed = (point: { x: number; y: number }) =>
+      instance.viewportToFramedGraph(instance.graphToViewport(point))
+    const centre = toFramed({ x: box.x + box.width / 2, y: box.y + box.height / 2 })
+    // The ratio is a fraction of the framed extent, so the box's own framed
+    // span is the basis — its raw span would be off by the layout's scale.
+    // Clamped so a single match does not slam to maximum zoom.
+    const near = toFramed({ x: box.x, y: box.y })
+    const far = toFramed({ x: box.x + box.width, y: box.y + box.height })
+    const span = Math.max(Math.abs(far.x - near.x), Math.abs(far.y - near.y))
     void instance.getCamera().animate({
-      x: box.x + box.width / 2,
-      y: box.y + box.height / 2,
-      ratio: Math.min(1.2, Math.max(0.25, Math.max(box.width, box.height) / 400)),
+      x: centre.x,
+      y: centre.y,
+      ratio: Math.min(1.2, Math.max(0.25, span)),
     }, { duration: 350 })
   }, [fitTo, built])
 

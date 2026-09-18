@@ -1,13 +1,5 @@
 import type { BrainEvent } from '@/types/brainKnowledge'
 
-/** Local-day bounds for the events query — the day the user is having, not UTC. */
-export function todayBounds(): { from: string; to: string } {
-  const now = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-  return { from: start.toISOString(), to: end.toISOString() }
-}
-
 export function eventTime(iso: string): string {
   const at = new Date(iso)
   return `${`${at.getHours()}`.padStart(2, '0')}:${`${at.getMinutes()}`.padStart(2, '0')}`

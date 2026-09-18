@@ -84,6 +84,9 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const [asking, setAsking] = useState(false)
   const [askPack, setAskPack] = useState<AnswerPack | null>(null)
   const [fitTo, setFitTo] = useState<Set<string> | null>(null)
+  // A timeline chip highlights the document it names. That is a different thing
+  // from framing it, which `fitTo` does — a chip click asks for both.
+  const [chipHighlight, setChipHighlight] = useState<Set<string> | null>(null)
 
   const [stack, setStack] = useState(EMPTY_SELECTION)
   const [selectedDocument, setSelectedDocument] = useState<DocumentReadResult | null>(null)
@@ -207,9 +210,11 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
     const settle = setTimeout(() => { if (matches.size > 0) setFitTo(new Set(matches)) }, 350)
     return () => clearTimeout(settle)
   }, [query, matches])
+  // An overlay and a chip are two ways of asking for the same ring, and never
+  // meaningfully at once: an active overlay wins, and a chip covers the rest.
   const highlighted = useMemo(() => (
-    overlay && graph ? overlayPaths(overlay, { graph, since: lastVisit, events }) : null
-  ), [overlay, graph, lastVisit, events])
+    overlay && graph ? overlayPaths(overlay, { graph, since: lastVisit, events }) : chipHighlight
+  ), [overlay, graph, lastVisit, events, chipHighlight])
 
   async function ask(question: string) {
     if (!scope) return
@@ -392,14 +397,24 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
                 className="pointer-events-auto w-[380px] shrink-0 overflow-y-auto rounded-xl border p-4"
                 style={{ background: OBSERVATORY.raised, borderColor: OBSERVATORY.border, borderLeftColor: OBSERVATORY.accent, borderLeftWidth: 2 }}
               >
-                {panel === 'timeline' && <Timeline events={events} onSelect={select} onHighlight={paths => setFitTo(new Set(paths))} />}
+                {panel === 'timeline' && (
+                  <Timeline
+                    events={events}
+                    onSelect={select}
+                    onHighlight={paths => { setChipHighlight(new Set(paths)); setFitTo(new Set(paths)) }}
+                  />
+                )}
                 {panel === 'review' && (
                   <Review
                     candidates={candidates}
                     knowledgeCandidates={knowledgeCandidates}
                     unresolvedLinks={unresolvedLinks}
-                    onReview={(id, decision) => void api.brainDecideCandidate({ id, decision }).then(() => scope && refresh(scope))}
-                    onReviewKnowledge={(id, decision) => void api.brainKnowledgeDecideCandidate({ id, decision }).then(() => scope && refresh(scope))}
+                    onReview={(id, decision) => void api.brainDecideCandidate({ id, decision })
+                      .then(() => scope && refresh(scope))
+                      .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}
+                    onReviewKnowledge={(id, decision) => void api.brainKnowledgeDecideCandidate({ id, decision })
+                      .then(() => scope && refresh(scope))
+                      .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}
                     onCreateStub={path => void createStub(path)}
                     onSelect={select}
                   />

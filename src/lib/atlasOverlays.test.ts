@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { changedSince, looseEndCount, orphanPaths, overlayPaths, readInEvents } from './atlasOverlays'
+import { changedSince, orphanPaths, overlayPaths, readInEvents } from './atlasOverlays'
 import type { BrainEvent, KnowledgeDocType, KnowledgeGraph } from '@/types/brainKnowledge'
 
 const node = (path: string, degree: number, updatedAt: string, type: KnowledgeDocType = 'note') => ({
@@ -59,16 +59,6 @@ describe('orphanPaths', () => {
   })
 })
 
-describe('looseEndCount', () => {
-  it('counts the unresolved targets', () => {
-    expect(looseEndCount([
-      { documentPath: 'a.md', documentTitle: 'A', targetPath: 'x' },
-      { documentPath: 'b.md', documentTitle: 'B', targetPath: 'x' },
-    ])).toBe(2)
-    expect(looseEndCount([])).toBe(0)
-  })
-})
-
 describe('overlayPaths', () => {
   const input = { graph: STORE, since: '2026-09-10T00:00:00.000Z', events: [turn(['old.md'])] }
 
@@ -76,11 +66,5 @@ describe('overlayPaths', () => {
     expect([...overlayPaths('new', input)]).toEqual(['fresh.md'])
     expect([...overlayPaths('trail', input)]).toEqual(['old.md'])
     expect([...overlayPaths('orphans', input)]).toEqual(['alone.md'])
-  })
-
-  // Loose ends are drawn as their own ghost nodes, not as highlights on
-  // existing ones, so this overlay highlights no real document.
-  it('highlights no document for loose ends', () => {
-    expect(overlayPaths('loose', input).size).toBe(0)
   })
 })

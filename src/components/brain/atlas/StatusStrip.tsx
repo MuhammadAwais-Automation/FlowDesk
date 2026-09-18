@@ -7,15 +7,23 @@ const OVERLAYS: Array<{ id: AtlasOverlay; label: string }> = [
   { id: 'new', label: 'Naya' },
   { id: 'trail', label: 'Agent trail' },
   { id: 'orphans', label: 'Orphans' },
-  { id: 'loose', label: 'Loose ends' },
 ]
+
+/**
+ * Pending review reads a shade brighter than the housing's own accent, so
+ * "there is work waiting" and "this panel is open" stay distinguishable. The
+ * colour is `amber-500`, which this pill used to reach for as a Tailwind class
+ * — but a class cannot lose to the open-panel accent, and it needs to.
+ */
+const PENDING = '#f59e0b'
 
 /**
  * The store's vital signs, and the way into everything that is not the map.
  *
- * Each count is also its own door: documents opens the timeline, review opens
- * the review queue, loose ends turns on their overlay. A number you cannot act
- * on is a number that did not need a pill.
+ * Each count is also its own door: documents opens the timeline, and both
+ * review and loose ends open the review queue, which is where the unresolved
+ * links live and where one click turns a loose end into a document. A number
+ * you cannot act on is a number that did not need a pill.
  */
 export function StatusStrip({ documents, links, review, looseEnds, panel, onPanel, overlay, onOverlay }: {
   documents: number
@@ -46,24 +54,24 @@ export function StatusStrip({ documents, links, review, looseEnds, panel, onPane
       <button
         onClick={() => onPanel(panel === 'review' ? null : 'review')}
         aria-pressed={panel === 'review'}
-        className={`${pill} ${review > 0 ? 'text-amber-500' : ''}`}
-        style={{ ...surface, ...(review > 0 ? {} : { color: OBSERVATORY.muted }) }}
+        className={pill}
+        style={{ ...surface, color: panel === 'review' ? OBSERVATORY.accent : review > 0 ? PENDING : OBSERVATORY.muted }}
       >
         {review} review
       </button>
 
       <button
-        onClick={() => onOverlay(overlay === 'loose' ? null : 'loose')}
-        aria-pressed={overlay === 'loose'}
+        onClick={() => onPanel(panel === 'review' ? null : 'review')}
+        aria-pressed={panel === 'review'}
         className={pill}
-        style={{ ...surface, color: overlay === 'loose' ? OBSERVATORY.accent : OBSERVATORY.muted }}
+        style={{ ...surface, color: panel === 'review' ? OBSERVATORY.accent : OBSERVATORY.muted }}
       >
         {looseEnds} loose ends
       </button>
 
       <span className="mx-1 h-4 w-px" style={{ background: OBSERVATORY.border }} />
 
-      {OVERLAYS.filter(item => item.id !== 'loose').map(item => (
+      {OVERLAYS.map(item => (
         <button
           key={item.id}
           onClick={() => onOverlay(overlay === item.id ? null : item.id)}

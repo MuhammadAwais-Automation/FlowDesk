@@ -1,7 +1,7 @@
 import { documentsRead } from './brainFormat'
-import type { BrainEvent, KnowledgeGraph, UnresolvedLink } from '@/types/brainKnowledge'
+import type { BrainEvent, KnowledgeGraph } from '@/types/brainKnowledge'
 
-export type AtlasOverlay = 'new' | 'trail' | 'orphans' | 'loose'
+export type AtlasOverlay = 'new' | 'trail' | 'orphans'
 
 export interface OverlayInput {
   graph: KnowledgeGraph
@@ -41,20 +41,9 @@ export function orphanPaths(graph: KnowledgeGraph): Set<string> {
   return new Set(graph.nodes.filter(node => node.degree === 0).map(node => node.path))
 }
 
-export function looseEndCount(links: UnresolvedLink[]): number {
-  return links.length
-}
-
-/**
- * The documents an overlay highlights.
- *
- * `loose` highlights none: an unresolved link has no document behind it by
- * definition, so it is drawn as its own ghost node instead of as a ring on a
- * real one.
- */
+/** The documents an overlay highlights. */
 export function overlayPaths(overlay: AtlasOverlay, input: OverlayInput): Set<string> {
   if (overlay === 'new') return changedSince(input.graph, input.since)
   if (overlay === 'trail') return readInEvents(input.events)
-  if (overlay === 'orphans') return orphanPaths(input.graph)
-  return new Set()
+  return orphanPaths(input.graph)
 }

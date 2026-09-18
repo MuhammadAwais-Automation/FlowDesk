@@ -21,7 +21,11 @@ const WIKILINK = /(?<!!)\[\[([^\]]+)\]\]/g
 export function extractWikiLinkTargets(body: string): string[] {
   const targets: string[] = []
   for (const match of body.matchAll(WIKILINK)) {
-    const rawTarget = match[1].split('|', 1)[0].trim()
+    // Obsidian's own order is `[[target#anchor|alias]]`, so the alias comes off
+    // first and the anchor second. The anchor is a position inside a document,
+    // never part of its path — leaving it on produced candidate documents at
+    // paths like `me/tools#Setup.md` once Review learned to create them.
+    const rawTarget = match[1].split('|', 1)[0].split('#', 1)[0].trim()
     if (rawTarget) targets.push(rawTarget)
   }
   return targets

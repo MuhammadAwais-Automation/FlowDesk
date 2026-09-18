@@ -57,6 +57,34 @@ describe('StatusStrip', () => {
   // Zero pending work should read as quiet, not as an alert with a zero in it.
   it('does not accent the review pill when nothing is pending', () => {
     setup({ review: 0 })
-    expect(screen.getByRole('button', { name: /0 review/ }).className).not.toContain('text-amber')
+    const quiet = screen.getByRole('button', { name: /0 review/ }).style.color
+    cleanup()
+    setup({ review: 4 })
+    expect(screen.getByRole('button', { name: /4 review/ }).style.color).not.toBe(quiet)
+  })
+
+  // The pending colour must not outrank the open-panel colour: with Review
+  // open, the review pill reads as open like every other panel pill does.
+  it('accents the review pill for its open panel even with work pending', () => {
+    setup({ review: 2, panel: 'review' })
+    const open = screen.getByRole('button', { name: /2 review/ }).style.color
+    cleanup()
+    setup({ review: 2, panel: null })
+    expect(screen.getByRole('button', { name: /2 review/ }).style.color).not.toBe(open)
+  })
+
+  // An unresolved link has no document to ring, so this pill is a door into
+  // Review — where the loose ends are listed and can be turned into documents —
+  // not an overlay toggle.
+  it('opens the review panel from the loose ends pill', async () => {
+    const props = setup()
+    await userEvent.click(screen.getByRole('button', { name: /153 loose ends/ }))
+    expect(props.onPanel).toHaveBeenCalledWith('review')
+    expect(props.onOverlay).not.toHaveBeenCalled()
+  })
+
+  it('marks the loose ends pill pressed while Review is open', () => {
+    setup({ panel: 'review' })
+    expect(screen.getByRole('button', { name: /153 loose ends/ }).getAttribute('aria-pressed')).toBe('true')
   })
 })
