@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { BrainCircuit } from 'lucide-react'
 import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
 import { HealthPanel } from '@/components/brain/HealthPanel'
-import { DetailPane } from '@/components/brain/detail/DetailPane'
+import { DetailDrawer } from '@/components/brain/atlas/DetailDrawer'
 import { AskList } from '@/components/brain/lists/AskList'
 import { LibraryList } from '@/components/brain/lists/LibraryList'
 import { ReviewList } from '@/components/brain/lists/ReviewList'
@@ -420,11 +420,10 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
               />}
             </section>
 
-            <DetailPane
+            <DetailDrawer
               stack={stack}
               onBack={() => setStack(popSelection)}
               onClear={() => setStack(EMPTY_SELECTION)}
-              counters={{ documents: knowledgeList.length, review: reviewCount, unresolvedLinks: unresolvedLinks.length }}
               document={selectedDocument}
               neighborhood={neighborhood}
               events={events}

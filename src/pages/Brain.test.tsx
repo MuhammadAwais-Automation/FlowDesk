@@ -110,14 +110,6 @@ describe('Brain three-column layout', () => {
     expect(within(detail()).getByText('Yasir Bhai')).toBeTruthy()
   })
 
-  it('shows the counters in the detail pane when nothing is selected', async () => {
-    await mount()
-    const pane = detail()
-    expect(within(pane).getByText('Documents')).toBeTruthy()
-    expect(within(pane).getByText('Review inbox')).toBeTruthy()
-    expect(within(pane).getByText('Unresolved links')).toBeTruthy()
-  })
-
   it('clears the detail pane when the scope changes', async () => {
     await mount()
     fireEvent.click(nav('Library'))
@@ -128,8 +120,8 @@ describe('Brain three-column layout', () => {
     // another -- the pane surviving nav changes must not mean surviving this.
     fireEvent.change(screen.getByRole('combobox', { name: 'Brain scope' }), { target: { value: 'b' } })
 
-    await waitFor(() => expect(within(detail()).queryByText('Yasir Bhai')).toBeNull())
-    expect(within(detail()).getByText('Documents')).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull())
+    expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull()
   })
 })
 
