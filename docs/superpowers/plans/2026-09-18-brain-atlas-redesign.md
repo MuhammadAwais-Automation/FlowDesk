@@ -426,7 +426,7 @@ export const TYPE_COLOR: Record<KnowledgeDocType, string> = {
   decision: '#f97316',
   me: '#f0b429',
   project: '#8b5cf6',
-  client: '#f43f5e',
+  client: '#ff2255',
 }
 ```
 
