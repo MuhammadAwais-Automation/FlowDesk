@@ -1652,6 +1652,38 @@ server.tool(
 )
 
 server.tool(
+  'chatgpt_chats',
+  'List the latest ChatGPT chats (newest first), merged across every signed-in account or on one. Returns id, title, last update and the account each chat lives on.',
+  {
+    limit: z.number().int().min(1).max(50).optional().describe('How many chats (default 10).'),
+    account: z.string().optional().describe('Only this account (email or partition from chatgpt_image_accounts).'),
+  },
+  async (args) => textResult(await callGatewayRpc('chatgpt.chats', args))
+)
+
+server.tool(
+  'chatgpt_chat_read',
+  'Read one ChatGPT chat: what was said, in order, and the ids of images in it. Finds the owning account itself unless one is given.',
+  {
+    chatId: z.string().min(1).describe('Chat id from chatgpt_chats.'),
+    account: z.string().optional().describe('Account that owns the chat (optional).'),
+    lastN: z.number().int().min(1).max(200).optional().describe('Only the last N messages.'),
+  },
+  async (args) => textResult(await callGatewayRpc('chatgpt.chatRead', args))
+)
+
+server.tool(
+  'chatgpt_ask',
+  'Send a message to ChatGPT and return the answer. Starts a NEW chat by default; pass chatId to continue an existing chat (it runs on the account that owns it). Without account, the first signed-in account answers and a limit or sign-out moves the message to the next. Different accounts run in parallel; one at a time per account.',
+  {
+    prompt: z.string().min(1).describe('The message to send.'),
+    chatId: z.string().optional().describe('Continue this chat instead of starting a new one.'),
+    account: z.string().optional().describe('Preferred account (email or partition).'),
+  },
+  async (args) => textResult(await callGatewayRpc('chatgpt.ask', args))
+)
+
+server.tool(
   'chatgpt_image_accounts',
   'List every FlowDesk account for ChatGPT image generation: signed in or not, plan, images left today, when the limit resets, and whether it is parked after a limit refusal. Reads quota without generating anything.',
   { refresh: z.boolean().optional().describe('Re-read quota from ChatGPT (default true).') },

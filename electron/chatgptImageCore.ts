@@ -22,6 +22,8 @@ export interface ConvNode {
   ctype: string | null
   status: string | null
   endTurn: boolean | null
+  /** Epoch seconds from the message's create_time. */
+  createTime?: number | null
   text: string
   images: { fileId: string; width?: number; height?: number; generated: boolean }[]
   title?: string | null

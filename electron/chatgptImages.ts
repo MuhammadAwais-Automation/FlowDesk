@@ -70,7 +70,7 @@ export function configureChatgptImages(opts: { getAccounts: () => PoolAccount[];
   if (opts.getPreferred) getPreferred = opts.getPreferred
 }
 
-function accounts(): PoolAccount[] {
+export function poolAccounts(): PoolAccount[] {
   const list = getAccounts()
   return list.length > 0 ? list : [{ email: 'default', partition: 'default' }]
 }
@@ -97,7 +97,7 @@ async function saveQuotas() {
 
 // ── page scripts ────────────────────────────────────────────────────────────
 
-const SESSION_JS = `var __s = await fetch('/api/auth/session').then(function (r) { return r.json() }).catch(function () { return null });`
+export const SESSION_JS = `var __s = await fetch('/api/auth/session').then(function (r) { return r.json() }).catch(function () { return null });`
 
 function quotaScript(): string {
   return `(async function () {
@@ -118,7 +118,7 @@ function quotaScript(): string {
   })()`
 }
 
-function conversationScript(conversationId: string): string {
+export function conversationScript(conversationId: string): string {
   return `(async function () {
     try {
       ${SESSION_JS}
@@ -132,6 +132,7 @@ function conversationScript(conversationId: string): string {
           id: m.id, parent: n.parent || null, role: m.author && m.author.role, name: (m.author && m.author.name) || null,
           recipient: m.recipient || null, ctype: m.content && m.content.content_type, status: m.status || null,
           endTurn: m.end_turn === undefined ? null : m.end_turn,
+          createTime: m.create_time || null,
           text: parts.filter(function (p) { return typeof p === 'string' }).join('\\n'),
           images: parts.filter(function (p) { return p && p.content_type === 'image_asset_pointer' && typeof p.asset_pointer === 'string' }).map(function (p) {
             return { fileId: p.asset_pointer.replace(/^[a-z]+:\\/\\//, ''), width: p.width, height: p.height, generated: !!(p.metadata && p.metadata.generation) }
@@ -159,10 +160,10 @@ function downloadUrlScript(fileId: string, conversationId: string): string {
 
 // ── worker window + composer ────────────────────────────────────────────────
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+export const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-async function workerFor(partition: string, url: string): Promise<WebContents> {
-  const tabId = `cgimg-${partition}`
+export async function workerFor(partition: string, url: string, prefix = 'cgimg'): Promise<WebContents> {
+  const tabId = `${prefix}-${partition}`
   const { webContents } = await ensureBackgroundView(tabId, partition, url)
   if (webContents.getURL() !== url) await webContents.loadURL(url).catch(() => {})
   return webContents
@@ -184,7 +185,7 @@ const composerText = (wc: WebContents) => wc.executeJavaScript(
   `(function () { var el = document.querySelector(${JSON.stringify(COMPOSER)}); return el ? (el.value !== undefined ? el.value : el.textContent || '') : null })()`,
 ) as Promise<string | null>
 
-async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, timeoutMs: number, stepMs = 300): Promise<T | null> {
+export async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, timeoutMs: number, stepMs = 300): Promise<T | null> {
   const end = Date.now() + timeoutMs
   while (Date.now() < end) {
     const v = await fn().catch(() => null)
@@ -209,7 +210,7 @@ async function attachFiles(wc: WebContents, files: string[]): Promise<void> {
   if (!shown) throw new Error('the image did not attach to the ChatGPT message')
 }
 
-async function typeAndSend(wc: WebContents, prompt: string): Promise<void> {
+export async function typeAndSend(wc: WebContents, prompt: string): Promise<void> {
   const focused = await waitFor(() => wc.executeJavaScript(
     `(function () { var el = document.querySelector(${JSON.stringify(COMPOSER)}); if (!el) return false; el.focus(); return document.activeElement === el || el.contains(document.activeElement) })()`,
   ), 20_000)
@@ -368,13 +369,13 @@ function finish(job: ImageJob, status: 'done' | 'failed', error?: string) {
   waiters.delete(job.id)
 }
 
-function label(acc: PoolAccount): string {
+export function label(acc: PoolAccount): string {
   return maskEmail(chatgptEmail.get(acc.partition) ?? acc.email)
 }
 
 function pump() {
   const now = Date.now()
-  const all = accounts()
+  const all = poolAccounts()
   for (const job of jobs.values()) {
     if (job.status !== 'queued') continue
     let pool = all.filter(a => !job.tried.includes(a.partition))
@@ -499,7 +500,7 @@ export function listJobs(id?: string): ImageJob[] {
 /** Every account's ChatGPT sign-in and image quota. `refresh` re-reads stale ones. */
 export async function imageAccounts(refresh = true) {
   await loadQuotas()
-  const all = accounts()
+  const all = poolAccounts()
   if (refresh) {
     await Promise.all(all.filter(a => !busy.has(a.partition)).map(a => {
       const q = quotas.get(a.partition)
@@ -527,7 +528,7 @@ export async function imageAccounts(refresh = true) {
 
 /** Opens a visible window on an account's partition so the user can sign in to ChatGPT once. */
 export function openChatgptLogin(partition: string): { ok: boolean; error?: string } {
-  const acc = accounts().find(a => a.partition === partition)
+  const acc = poolAccounts().find(a => a.partition === partition)
   if (!acc) return { ok: false, error: 'unknown account partition — list them with chatgpt.imageAccounts' }
   const win = new BrowserWindow({
     width: 1000, height: 800, title: `ChatGPT sign-in — ${maskEmail(acc.email)}`,
