@@ -103,6 +103,40 @@ Found but outside Module 1: `alpha-paws-auto-short` workflow downloads with a me
 - 5 images ka batch: har ek ka status dikhe, ek account ki limit par agle par chala jaye.
 - `typecheck`, `vitest`, `build` green.
 
+## Module 2 — Social media (analysis 2026-10-04)
+
+**Live read-only smoke** (`node scripts/mcp-smoke.mjs whatsapp linkedin reddit tiktok facebook`): 47 read tools
+ok, 0 failed. Signed in: TikTok #1 (@alphapaws6), LinkedIn #1, Reddit (1 account), WhatsApp (1), Facebook (1).
+
+| Platform | MCP tools | Accounts today | `account` param |
+|---|---|---|---|
+| TikTok | 29 | 3 fixed slots (`social-tiktok`, `-2`, `-3`); only #1 signed in | yes |
+| LinkedIn | 15 + 28 agent-parity | 2 fixed slots, own JSON file; only #1 signed in | yes |
+| Reddit | 14 | 1 ("remembered view", partition per Google email) | no |
+| WhatsApp | 7 + 10 agent-parity | 1, `social-whatsapp` hardcoded | no |
+| Facebook | 7 agent-parity only | 1, `social-facebook` hardcoded | no |
+| Pinterest | 0 | — | — |
+
+**Problems**
+- P1 No shared account layer: each platform invented its own (LinkedIn JSON, TikTok id parsing, Reddit
+  remembered view, WhatsApp/Facebook hardcoded). Slot lists are hardcoded again in `src/pages/Social.tsx`.
+  → "2-3 accounts per platform" is impossible for Reddit/WhatsApp/Facebook and capped for TikTok/LinkedIn.
+- P2 Reddit, WhatsApp, Facebook tools take no `account`.
+- P3 Duplicate names for one action (e.g. `linkedin_send` / `linkedin_send_message`, `whatsapp_send` /
+  `whatsapp_send_message`); agents cannot tell which to use.
+- P4 No skills for social platforms written from verified facts (as `chatgpt` / `google-flow` are).
+- P5 Write tools (post, comment, send, delete) not re-verified in this pass — they need explicit approval per action.
+
+**Plan (in order)**
+1. One social account registry (platform → accounts {id, label, partition, signedIn}), persisted, used by
+   every platform module, the gateway and the Social page. Existing partitions kept, so nobody re-logs in.
+2. `account` on every social tool + one `<platform>_accounts` tool each; a fixed rule: social writes never fail
+   over to another account (posting from the wrong account is worse than failing).
+3. Add-account flow: new slot → visible sign-in window (user signs in) → appears in the registry.
+4. Per platform, in order WhatsApp → TikTok → LinkedIn → Reddit → Facebook: dedupe tools, live-test reads,
+   test writes only with approval on safe targets, then a verified skill.
+5. Pinterest last, capture-first.
+
 ## 5. Agle modules (sketch)
 
 - **1B** wahi pattern Gemini/Grok/Perplexity/Claude par: `*_chats`, `*_ask {account,chatId,newChat}` — pool/queue code common ho jayega.
