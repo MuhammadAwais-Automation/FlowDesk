@@ -37,8 +37,8 @@ inputs:
 - Structuring native audio and environmental soundscape directives into prompts for models that synthesize sound effects.
 
 ## When not to use
-- Executing the actual video generation or downloading files (use `flow-video-director` instead).
-- Generating static thumbnail images or uploading local graphic files (use `flow-image-artist` instead).
+- Executing the actual video generation or downloading files (use `google-flow` instead).
+- Generating static thumbnail images or uploading local graphic files (use `google-flow` instead).
 - Writing social media captions, titles, or marketing copy for publication (use `caption-hashtag-writer` instead).
 
 ## Tools
@@ -91,7 +91,7 @@ Inspects active video models registered in Google Flow to verify supported model
    - Avoid negative prompt checklists (`"no blur, no ugly, no artifacts"`). Describe what IS visible with positive, high-fidelity language.
 
 7. **Hand Off Clean Prompt**:
-   Output the completed prompt directly to `flow-video-director` (`flow_generate_video` or `flow_generate_video_from_image`).
+   Output the completed prompt directly to `google-flow` (`flow_generate_video` or `flow_generate_video_from_image`).
 
 ## Limits and safety
 - **Temporal Durations**: Generative video models are bounded to 8-second (`abra_t2v_8s`) or 10-second (`abra_t2v_10s`, `abra_r2v_10s`) generations. Prompts describing multi-minute story arcs will fail to animate properly.

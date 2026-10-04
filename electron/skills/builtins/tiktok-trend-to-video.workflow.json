@@ -10,7 +10,7 @@
   "skills": [
     "tiktok-trend-research",
     "video-prompt-writer",
-    "flow-video-director",
+    "google-flow",
     "tiktok-publisher"
   ],
   "steps": [
@@ -39,7 +39,7 @@
     {
       "id": "generate-video",
       "title": "Render 8s Video in Google Flow",
-      "skillId": "flow-video-director",
+      "skillId": "google-flow",
       "actionTool": "flow.generateVideo",
       "params": {
         "prompt": "{{craft-prompt.result.prompt}}",

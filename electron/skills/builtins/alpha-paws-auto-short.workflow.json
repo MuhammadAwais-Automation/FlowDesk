@@ -9,7 +9,7 @@
     "tiktok"
   ],
   "skills": [
-    "flow-video-director",
+    "google-flow",
     "tiktok-publisher"
   ],
   "steps": [
@@ -25,7 +25,7 @@
     {
       "id": "step2_flow_video",
       "title": "Generate Google Flow Vertical Video",
-      "skillId": "flow-video-director",
+      "skillId": "google-flow",
       "actionTool": "flow.generateVideo",
       "dependsOn": [
         "step1_brain_persona"
@@ -39,7 +39,7 @@
     {
       "id": "step3_local_download",
       "title": "Download Signed CDN Video Asset",
-      "skillId": "flow-video-director",
+      "skillId": "google-flow",
       "actionTool": "flow.downloadMedia",
       "dependsOn": [
         "step2_flow_video"

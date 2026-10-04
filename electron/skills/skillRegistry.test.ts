@@ -67,14 +67,14 @@ describe('skillRegistry', () => {
     const skills = listSkills()
     expect(skills.length).toBeGreaterThanOrEqual(4)
 
-    const flowSkill = getSkill('flow-video-director')
+    const flowSkill = getSkill('google-flow')
     expect(flowSkill).toBeDefined()
     expect(flowSkill?.domain).toBe('flow')
     expect(flowSkill?.tools).toContain('flow_generate_video')
     expect(flowSkill?.playbook).toContain('## When to use')
     expect(flowSkill?.playbook).toContain('abra_t2v_8s')
     expect(flowSkill?.source).toBe('builtin')
-    expect(flowSkill?.references).toContain('models.md')
+    expect(flowSkill?.references).toEqual([])
 
     const tiktokSkill = getSkill('tiktok-publisher')
     expect(tiktokSkill).toBeDefined()
@@ -108,7 +108,7 @@ describe('skillRegistry', () => {
   it('filters skills by domain and search query', () => {
     const flowSkills = listSkills({ domain: 'flow' })
     expect(flowSkills.every(s => s.domain === 'flow')).toBe(true)
-    expect(flowSkills.some(s => s.id === 'flow-video-director')).toBe(true)
+    expect(flowSkills.some(s => s.id === 'google-flow')).toBe(true)
 
     const searchResults = listSkills({ search: 'post-writer' })
     expect(searchResults.length).toBeGreaterThanOrEqual(1)

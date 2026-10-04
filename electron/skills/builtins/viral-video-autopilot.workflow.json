@@ -11,7 +11,7 @@
   "skills": [
     "brain-memory",
     "video-prompt-writer",
-    "flow-video-director",
+    "google-flow",
     "tiktok-publisher"
   ],
   "steps": [
@@ -42,7 +42,7 @@
     {
       "id": "render-video",
       "title": "Render 8s Video in Google Flow",
-      "skillId": "flow-video-director",
+      "skillId": "google-flow",
       "actionTool": "flow.generateVideo",
       "params": {
         "prompt": "{{prompt-generation.result.prompt}}",

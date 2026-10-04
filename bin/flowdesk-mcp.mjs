@@ -322,10 +322,21 @@ function formatBrainVisual(data) {
   return summaryWithData(md, data)
 }
 
+// Sent to every MCP client on connect (the spec's `instructions`), so any agent
+// knows where the how-to lives before it picks a tool.
+const SERVER_INSTRUCTIONS = `FlowDesk drives the user's own signed-in accounts (ChatGPT, Google Flow, TikTok, LinkedIn, Reddit, WhatsApp) through the FlowDesk desktop app, which must be running.
+
+Before using a family of tools, read its skill with flowdesk_skill_get — it says which tool fits which job, the order to call them in, timings, costs and what each error means (all verified live):
+- chatgpt_* and ask_chatgpt → flowdesk_skill_get { id: "chatgpt" }
+- flow_* (Google Flow images and video) → flowdesk_skill_get { id: "google-flow" }
+flowdesk_skills_list shows every other skill.
+
+Rules of thumb: still images and image edits → chatgpt_generate_image / chatgpt_edit_image; video → Google Flow. Long jobs return ids — poll chatgpt_image_jobs or flow_media_status instead of starting the same job again. A result with isError did not happen; read its error before retrying.`
+
 const server = new McpServer({
   name: 'flowdesk-mcp',
   version: '1.0.0',
-})
+}, { instructions: SERVER_INSTRUCTIONS })
 
 // ── MCP APP UI RESOURCES ─────────────────────────────────────────────────────
 
@@ -2178,7 +2189,7 @@ server.tool(
   'flowdesk_skill_get',
   'Fetch the complete markdown playbook, input parameter schemas, and best practices for an atomic skill or workflow.',
   {
-    id: z.string().min(1).describe('The unique skill ID or workflow ID (e.g. "flow-video-director", "flowdesk-video-creator", "marketing-campaign").'),
+    id: z.string().min(1).describe('The unique skill ID or workflow ID (e.g. "chatgpt", "google-flow", "tiktok-publisher").'),
   },
   async (args) => {
     // Check skills first
