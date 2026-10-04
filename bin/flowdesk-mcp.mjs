@@ -1706,6 +1706,18 @@ server.tool(
 )
 
 server.tool(
+  'chatgpt_chat_update',
+  'Rename and/or archive/unarchive a ChatGPT chat. Verified by reading the chat back. There is no delete.',
+  {
+    chatId: z.string().min(1).describe('Chat id from chatgpt_chats.'),
+    title: z.string().optional().describe('New title.'),
+    archived: z.boolean().optional().describe('true archives, false restores.'),
+    account: z.string().optional().describe('Account that owns the chat (optional).'),
+  },
+  async (args) => textResult(await callGatewayRpc('chatgpt.updateChat', args))
+)
+
+server.tool(
   'chatgpt_ask',
   'Send a message to ChatGPT and return the answer. Starts a NEW chat by default; pass chatId to continue an existing chat (it runs on the account that owns it). Without account, the first signed-in account answers and a limit or sign-out moves the message to the next. Different accounts run in parallel; one at a time per account.',
   {

@@ -227,6 +227,41 @@ export async function searchChats(opts: { query: string; account?: string | null
   return { ok: errors.length === 0 || per.some(p => p.length > 0), hits: per.flat().slice(0, limit), errors }
 }
 
+function patchScript(chatId: string, body: object): string {
+  return `(async function () {
+    try {
+      ${SESSION_JS}
+      if (!__s || !__s.accessToken) return { ok: false, error: 'signed out' }
+      var r = await fetch('/backend-api/conversation/' + ${JSON.stringify(chatId)}, { method: 'PATCH', headers: { Authorization: 'Bearer ' + __s.accessToken, 'Content-Type': 'application/json' }, body: ${JSON.stringify(JSON.stringify(body))} })
+      return r.ok ? { ok: true } : { ok: false, error: 'HTTP ' + r.status }
+    } catch (e) { return { ok: false, error: String(e && e.message || e) } }
+  })()`
+}
+
+/**
+ * Rename and/or archive a chat (PATCH /backend-api/conversation/{id}, captured
+ * 2026-10-04). Success is what a fresh read shows afterwards, not the 200.
+ * There is deliberately no delete.
+ */
+export async function updateChat(opts: { chatId: string; account?: string | null; title?: string; archived?: boolean }): Promise<{ ok: boolean; account?: string; title?: string; archived?: boolean; error?: string }> {
+  const body: Record<string, unknown> = {}
+  if (typeof opts.title === 'string' && opts.title.trim()) body.title = opts.title.trim().slice(0, 200)
+  if (typeof opts.archived === 'boolean') body.is_archived = opts.archived
+  if (!Object.keys(body).length) return { ok: false, error: 'nothing to change: pass title and/or archived' }
+  const found = await ownerOf(opts.chatId, opts.account)
+  if ('error' in found) return { ok: false, error: found.error }
+  const wc = await apiWorker(found.acc)
+  const res = await wc.executeJavaScript(patchScript(opts.chatId, body)).catch((e: unknown) => ({ ok: false, error: String(e) })) as { ok: boolean; error?: string }
+  if (!res.ok) return { ok: false, account: label(found.acc), error: res.error }
+  await sleep(1_000)
+  const after = await apiGet(found.acc, `/backend-api/conversation/${encodeURIComponent(opts.chatId)}`)
+  const c = (after.body ?? {}) as { title?: unknown; is_archived?: unknown }
+  const titleOk = body.title === undefined || c.title === body.title
+  const archivedOk = body.is_archived === undefined || c.is_archived === body.is_archived
+  const state = { account: label(found.acc), title: typeof c.title === 'string' ? c.title : undefined, archived: c.is_archived === true }
+  return titleOk && archivedOk ? { ok: true, ...state } : { ok: false, ...state, error: 'ChatGPT accepted the change but a fresh read does not show it' }
+}
+
 /** Save one ChatGPT image (a library `fileId`) to disk; returns a flowdesk-image:// link. */
 export async function downloadImage(opts: { fileId: string; conversationId: string; account?: string | null }): Promise<{ ok: boolean; image?: SavedImage; error?: string }> {
   const acc = oneAccount(opts.account)
