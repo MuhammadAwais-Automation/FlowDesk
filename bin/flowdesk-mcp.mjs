@@ -93,7 +93,7 @@ function findGatewayConfig() {
 // page (first background-view load alone can take 15s) or on generation
 // (ask.*, Flow video, TikTok upload) failed on the client while the app kept
 // working. The gateway itself has no shorter limit, so match the real work.
-const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(generateImage|editImage|imageAccounts)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$)/
+const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$)/
 function rpcTimeoutMs(method) {
   return LONG_RPC.test(method) ? 15 * 60_000 : 120_000
 }
@@ -129,9 +129,13 @@ async function callGatewayRpc(method, params = {}) {
   return json.result
 }
 
+// A handler that answers { ok: false, error } did not do its job: per the MCP
+// spec that is a tool execution error and must carry isError, or the calling
+// agent reads the failure as a success.
 function textResult(value) {
   const formatted = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
-  return { content: [{ type: 'text', text: formatted }] }
+  const failed = !!value && typeof value === 'object' && value.ok === false
+  return { content: [{ type: 'text', text: formatted }], ...(failed ? { isError: true } : {}) }
 }
 
 // The markdown tables are a human summary only. The agent needs the ids
@@ -1648,6 +1652,7 @@ server.tool(
   'ask_chatgpt',
   'Ask OpenAI ChatGPT via the user\'s logged-in desktop browser session in FlowDesk. Good for general coding, writing, and broad reasoning.',
   { prompt: z.string().min(1).describe('The prompt or question to send to ChatGPT.') },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('ask.chatgpt', args))
 )
 
@@ -1658,6 +1663,7 @@ server.tool(
     limit: z.number().int().min(1).max(50).optional().describe('How many chats (default 10).'),
     account: z.string().optional().describe('Only this account (email or partition from chatgpt_image_accounts).'),
   },
+  { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.chats', args))
 )
 
@@ -1669,6 +1675,7 @@ server.tool(
     account: z.string().optional().describe('Account that owns the chat (optional).'),
     lastN: z.number().int().min(1).max(200).optional().describe('Only the last N messages.'),
   },
+  { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.chatRead', args))
 )
 
@@ -1680,6 +1687,7 @@ server.tool(
     limit: z.number().int().min(1).max(100).optional().describe('Page size (default 20).'),
     cursor: z.string().optional().describe('cursor from the previous page.'),
   },
+  { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.imageLibrary', args))
 )
 
@@ -1691,6 +1699,7 @@ server.tool(
     account: z.string().optional().describe('Only this account.'),
     limit: z.number().int().min(1).max(50).optional().describe('Max hits (default 10).'),
   },
+  { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.searchChats', args))
 )
 
@@ -1702,6 +1711,7 @@ server.tool(
     conversationId: z.string().min(1).describe('Chat the image belongs to.'),
     account: z.string().optional().describe('Account that owns the chat.'),
   },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.downloadImage', args))
 )
 
@@ -1714,6 +1724,7 @@ server.tool(
     archived: z.boolean().optional().describe('true archives, false restores.'),
     account: z.string().optional().describe('Account that owns the chat (optional).'),
   },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.updateChat', args))
 )
 
@@ -1726,6 +1737,7 @@ server.tool(
     account: z.string().optional().describe('Preferred account (email or partition).'),
     model: z.string().optional().describe('Model slug from chatgpt_models (default: ChatGPT auto).'),
   },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.ask', args))
 )
 
@@ -1733,6 +1745,7 @@ server.tool(
   'chatgpt_models',
   'List the ChatGPT models an account can use (slug, title, description). Pass a slug as `model` to chatgpt_ask.',
   { account: z.string().optional().describe('Account (email or partition); default is the first account.') },
+  { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.models', args))
 )
 
@@ -1740,6 +1753,7 @@ server.tool(
   'chatgpt_image_accounts',
   'List every FlowDesk account for ChatGPT image generation: signed in or not, plan, images left today, when the limit resets, and whether it is parked after a limit refusal. Reads quota without generating anything.',
   { refresh: z.boolean().optional().describe('Re-read quota from ChatGPT (default true).') },
+  { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.imageAccounts', args))
 )
 
@@ -1752,6 +1766,7 @@ server.tool(
     account: z.string().optional().describe('Preferred account (email or partition). Others are used when it is out of quota.'),
     wait: z.boolean().optional().describe('Wait for the images (default true). false returns job ids to read with chatgpt_image_jobs.'),
   },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.generateImage', args))
 )
 
@@ -1765,6 +1780,7 @@ server.tool(
     account: z.string().optional().describe('Preferred account (email or partition).'),
     wait: z.boolean().optional().describe('Wait for the result (default true).'),
   },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.editImage', args))
 )
 
@@ -1772,6 +1788,7 @@ server.tool(
   'chatgpt_image_jobs',
   'Status of ChatGPT image jobs (queued, running, done, failed) with their saved images. Omit jobId for the 50 newest.',
   { jobId: z.string().optional().describe('One job id from chatgpt_generate_image / chatgpt_edit_image.') },
+  { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.imageJobs', args))
 )
 
@@ -1779,6 +1796,7 @@ server.tool(
   'chatgpt_open_login',
   'Open a visible ChatGPT sign-in window on one account (partition from chatgpt_image_accounts) so the user can sign in once.',
   { partition: z.string().min(1).describe('Account partition, e.g. gmail-….') },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('chatgpt.openLogin', args))
 )
 

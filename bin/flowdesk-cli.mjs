@@ -37,7 +37,7 @@ function findGatewayConfig() {
   return null
 }
 
-async function callRpc(method, params = {}) {
+async function callRpc(method, params = {}, timeoutOverrideMs) {
   const cfg = findGatewayConfig()
   if (!cfg || !cfg.port || !cfg.token) {
     console.error('\x1b[31m[FlowDesk Error]\x1b[0m FlowDesk is not running or Local Gateway is unavailable.')
@@ -46,9 +46,9 @@ async function callRpc(method, params = {}) {
   }
 
   const url = `http://127.0.0.1:${cfg.port}/rpc`
-  const timeoutMs = (params && (params.durationSeconds || params.seconds))
+  const timeoutMs = timeoutOverrideMs ?? ((params && (params.durationSeconds || params.seconds))
     ? (Number(params.durationSeconds || params.seconds) + 120) * 1000
-    : 180000
+    : 180000)
 
   let res
   try {
@@ -916,6 +916,107 @@ async function main() {
     }
   }
 
+  // ── CHATGPT (electron/chatgptChats.ts + chatgptImages.ts) ──────────────────
+  if (command === 'chatgpt') {
+    const sub = rawArgs[1]
+    const { flags, positional } = parseFlags(rawArgs.slice(2))
+    const account = typeof flags.account === 'string' ? flags.account : undefined
+    const num = (v) => (v === undefined || v === true ? undefined : Number(v))
+    const show = (v) => console.log(typeof v === 'string' ? v : JSON.stringify(v, null, 2))
+    const fail = (msg) => { console.error(`\x1b[31m${msg}\x1b[0m`); process.exitCode = 1 }
+
+    // Image jobs are queued without waiting and followed here, so the stage of
+    // each one is printed as it changes and no single call has to stay open.
+    const followJobs = async (queued) => {
+      const ids = queued.jobs.map(j => j.id)
+      const lastSeen = new Map()
+      for (;;) {
+        const all = await callRpc('chatgpt.imageJobs', {})
+        const list = (Array.isArray(all) ? all : all.jobs || []).filter(j => ids.includes(j.id))
+        for (const j of list) {
+          const line = `${j.status}${j.stage ? ` · ${j.stage}` : ''}${j.account ? ` · ${j.account}` : ''}`
+          if (lastSeen.get(j.id) !== line) { lastSeen.set(j.id, line); console.log(`[${j.id}] ${line}`) }
+        }
+        if (list.length && list.every(j => j.status === 'done' || j.status === 'failed')) {
+          for (const j of list) {
+            if (j.error) console.log(`\x1b[31m[${j.id}] ${j.error}\x1b[0m`)
+            for (const img of j.images || []) console.log(`\x1b[32m[${j.id}]\x1b[0m ${img.path}`)
+          }
+          if (list.some(j => j.status === 'failed')) process.exitCode = 1
+          return
+        }
+        await new Promise(r => setTimeout(r, 3000))
+      }
+    }
+
+    if (sub === 'accounts') {
+      const res = await callRpc('chatgpt.imageAccounts', { refresh: true })
+      for (const a of res) console.log(`${a.account.padEnd(22)} ${String(a.plan ?? '?').padEnd(5)} signedIn=${a.signedIn} imagesLeft=${a.imagesLeft ?? '?'} ${a.parkedUntil ? `parked until ${a.parkedUntil}` : a.usable ? 'usable' : 'not usable'}  partition=${a.partition}`)
+      return
+    }
+    if (sub === 'login') {
+      if (!positional[0]) return fail('Usage: flowdesk chatgpt login <partition>   (partition from: flowdesk chatgpt accounts)')
+      return show(await callRpc('chatgpt.openLogin', { partition: positional[0] }))
+    }
+    if (sub === 'models') return show(await callRpc('chatgpt.models', { account }))
+    if (sub === 'chats') {
+      const res = await callRpc('chatgpt.chats', { limit: num(flags.limit) ?? 10, account })
+      for (const c of res.chats) console.log(`${c.id}  ${(c.updatedAt || '').slice(0, 16)}  ${c.account}  ${c.title}`)
+      for (const e of res.errors || []) console.log(`\x1b[33m${e}\x1b[0m`)
+      return
+    }
+    if (sub === 'read') {
+      if (!positional[0]) return fail('Usage: flowdesk chatgpt read <chatId> [--last N]')
+      const res = await callRpc('chatgpt.chatRead', { chatId: positional[0], account, lastN: num(flags.last) })
+      if (!res.ok) return fail(res.error)
+      for (const m of res.messages) console.log(`\x1b[36m${m.role}\x1b[0m ${m.text}${m.images.length ? `  [images: ${m.images.join(', ')}]` : ''}\n`)
+      return
+    }
+    if (sub === 'search') {
+      if (!positional.length) return fail('Usage: flowdesk chatgpt search "<words>"')
+      const res = await callRpc('chatgpt.searchChats', { query: positional.join(' '), account, limit: num(flags.limit) })
+      for (const h of res.hits) console.log(`${h.chatId}  ${h.account}  ${h.title}\n   ${(h.snippet || '').replace(/\s+/g, ' ').slice(0, 160)}`)
+      return
+    }
+    if (sub === 'ask') {
+      if (!positional.length) return fail('Usage: flowdesk chatgpt ask "<prompt>" [--chat <chatId>] [--account <email>] [--model <slug>]')
+      const res = await callRpc('chatgpt.ask', { prompt: positional.join(' '), chatId: flags.chat, account, model: flags.model }, 15 * 60_000)
+      if (!res.ok) return fail(res.error)
+      console.log(`\x1b[32m=== ChatGPT (${res.account}, chat ${res.chatId}) ===\x1b[0m\n${res.text}`)
+      for (const img of res.images || []) console.log(img.path)
+      return
+    }
+    if (sub === 'image' || sub === 'edit') {
+      const edit = sub === 'edit'
+      const image = edit ? positional[0] : undefined
+      const prompt = (edit ? positional.slice(1) : positional).join(' ')
+      if (!prompt || (edit && !image)) return fail(edit ? 'Usage: flowdesk chatgpt edit <image path or flowdesk-image://…> "<change>" [--count N]' : 'Usage: flowdesk chatgpt image "<prompt>" [--count N] [--account <email>]')
+      const queued = await callRpc(edit ? 'chatgpt.editImage' : 'chatgpt.generateImage', { prompt, image, count: num(flags.count), account, wait: false })
+      return followJobs(queued)
+    }
+    if (sub === 'jobs') return show(await callRpc('chatgpt.imageJobs', positional[0] ? { jobId: positional[0] } : {}))
+    if (sub === 'library') {
+      const res = await callRpc('chatgpt.imageLibrary', { account, limit: num(flags.limit), cursor: flags.cursor })
+      if (!res.ok) return fail(res.error)
+      for (const i of res.images) console.log(`${i.fileId}  ${i.conversationId}  ${i.width}x${i.height}  ${(i.createdAt || '').slice(0, 16)}  ${i.title || ''}`)
+      if (res.cursor) console.log(`\nnext page: --cursor ${res.cursor}`)
+      return
+    }
+    if (sub === 'download') {
+      if (positional.length < 2) return fail('Usage: flowdesk chatgpt download <fileId> <chatId> [--account <email>]')
+      const res = await callRpc('chatgpt.downloadImage', { fileId: positional[0], conversationId: positional[1], account })
+      return res.ok ? console.log(res.image.path) : fail(res.error)
+    }
+    if (sub === 'rename' || sub === 'archive' || sub === 'unarchive') {
+      if (!positional[0] || (sub === 'rename' && !positional[1])) return fail('Usage: flowdesk chatgpt rename <chatId> "<title>" | archive <chatId> | unarchive <chatId>')
+      const res = await callRpc('chatgpt.updateChat', sub === 'rename'
+        ? { chatId: positional[0], title: positional.slice(1).join(' '), account }
+        : { chatId: positional[0], archived: sub === 'archive', account })
+      return res.ok ? show(res) : fail(res.error)
+    }
+    return fail('Usage: flowdesk chatgpt <accounts|login|models|chats|read|search|ask|image|edit|jobs|library|download|rename|archive|unarchive>')
+  }
+
   // ── AI BROWSER WORKERS COMMAND ─────────────────────────────────────────────
   if (command === 'ask') {
     const provider = rawArgs[1]
@@ -935,7 +1036,8 @@ async function main() {
     })
 
     try {
-      const res = await callRpc(`ask.${provider}`, { prompt })
+      // An answer that draws an image can take several minutes.
+      const res = await callRpc(`ask.${provider}`, { prompt }, 15 * 60_000)
       stopListening()
       if (sawImageProgress) {
         renderProgressBar(100, 'Image generated & ready for download/display', '')
@@ -1232,6 +1334,21 @@ Usage:
 
   flowdesk ask <chatgpt|claude|gemini|grok|perplexity> "<prompt>"
                                                      Query AI models via logged-in sessions
+
+  flowdesk chatgpt accounts                          Sign-in, plan and image quota per account
+  flowdesk chatgpt login <partition>                 Open a ChatGPT sign-in window for one account
+  flowdesk chatgpt models [--account <email>]        Models the account can use
+  flowdesk chatgpt chats [--limit N]                 Latest chats across all accounts
+  flowdesk chatgpt read <chatId> [--last N]          What was said in one chat
+  flowdesk chatgpt search "<words>"                  Full-text search over chats
+  flowdesk chatgpt ask "<prompt>" [--chat id] [--model slug] [--account email]
+                                                     New chat, or continue one
+  flowdesk chatgpt image "<prompt>" [--count N]      Generate images (routes across accounts)
+  flowdesk chatgpt edit <image> "<change>"           Edit an image (path or flowdesk-image://)
+  flowdesk chatgpt jobs [jobId]                      Image job status
+  flowdesk chatgpt library [--limit N] [--cursor c]  Every generated image, newest first
+  flowdesk chatgpt download <fileId> <chatId>        Save one image to disk
+  flowdesk chatgpt rename <chatId> "<title>"         Rename a chat (also: archive / unarchive)
 
   flowdesk brain status                              Check Brain health and vector index
   flowdesk brain search "<query>"                    Search semantic memories in Brain
