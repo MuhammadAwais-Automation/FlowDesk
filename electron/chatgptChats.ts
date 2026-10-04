@@ -16,8 +16,8 @@
  */
 import type { WebContents } from 'electron'
 import { classifyRefusal, readTurn, type ConvNode, type PoolAccount } from './chatgptImageCore'
-import { mapChatList, toMessages, type ChatMessage, type ChatSummary } from './chatgptChatCore'
-import { SESSION_JS, conversationScript, label, poolAccounts, sleep, typeAndSend, waitFor, workerFor } from './chatgptImages'
+import { mapChatList, mapChatSearch, mapImageLibrary, toMessages, type ChatHit, type ChatMessage, type ChatSummary, type LibraryImage } from './chatgptChatCore'
+import { SESSION_JS, conversationScript, label, poolAccounts, saveImage, sleep, typeAndSend, waitFor, workerFor, type SavedImage } from './chatgptImages'
 
 const HOME = 'https://chatgpt.com/'
 const API_WORKER = 'cgapi'
@@ -35,17 +35,22 @@ export function resolveAccount(ref?: string | null): PoolAccount | null {
 
 const apiWorker = (a: PoolAccount) => workerFor(a.partition, HOME, API_WORKER)
 
-function listScript(limit: number): string {
+/** A read-only GET against the account's own backend API, from inside its signed-in page. */
+function getScript(path: string): string {
   return `(async function () {
     try {
       ${SESSION_JS}
       if (!__s || !__s.accessToken) return { ok: false, error: 'signed out' }
-      var r = await fetch('/backend-api/conversations?offset=0&limit=${limit}&order=updated', { headers: { Authorization: 'Bearer ' + __s.accessToken } })
-      if (!r.ok) return { ok: false, error: 'conversations HTTP ' + r.status }
+      var r = await fetch(${JSON.stringify(path)}, { headers: { Authorization: 'Bearer ' + __s.accessToken } })
+      if (!r.ok) return { ok: false, error: 'HTTP ' + r.status }
       return { ok: true, body: await r.json() }
     } catch (e) { return { ok: false, error: String(e && e.message || e) } }
   })()`
 }
+
+type Got = { ok: boolean; body?: unknown; error?: string }
+const apiGet = async (acc: PoolAccount, path: string): Promise<Got> =>
+  (await waitFor(async () => (await apiWorker(acc)).executeJavaScript(getScript(path)) as Promise<Got>, 15_000, 1_000)) ?? { ok: false, error: 'no answer' }
 
 const SESSION_CHECK = `(async function () {
   try { ${SESSION_JS}; return !!(__s && __s.accessToken) } catch (e) { return false }
@@ -64,9 +69,8 @@ export async function listChats(opts: { account?: string | null; limit?: number 
   const errors: string[] = []
   const per = await Promise.all(targets.map(async acc => {
     try {
-      const wc = await apiWorker(acc)
-      const res = await waitFor(() => wc.executeJavaScript(listScript(limit)) as Promise<{ ok: boolean; body?: unknown; error?: string }>, 15_000, 1_000)
-      if (!res?.ok) { errors.push(`${label(acc)}: ${res?.error ?? 'no answer'}`); return [] }
+      const res = await apiGet(acc, `/backend-api/conversations?offset=0&limit=${limit}&order=updated`)
+      if (!res.ok) { errors.push(`${label(acc)}: ${res.error}`); return [] }
       return mapChatList(res.body).map(c => ({ ...c, account: label(acc), partition: acc.partition }))
     } catch (e) {
       errors.push(`${label(acc)}: ${e instanceof Error ? e.message : String(e)}`)
@@ -186,4 +190,50 @@ export async function askChat(opts: { prompt: string; account?: string | null; c
     }
   }
   return { ok: false, error: `no ChatGPT account could answer: ${[...failures, ...parked].join(', ') || 'none configured'}` }
+}
+
+// ── library, search, download ───────────────────────────────────────────────
+
+const oneAccount = (ref?: string | null): PoolAccount | { error: string } => {
+  const picked = resolveAccount(ref)
+  if (ref && !picked) return { error: `unknown account "${ref}" — list them with chatgpt_image_accounts` }
+  return picked ?? poolAccounts()[0] ?? { error: 'no ChatGPT account configured' }
+}
+
+/**
+ * Every image this account ever generated, newest first, across all chats —
+ * without opening a single chat. `cursor` from one page fetches the next.
+ */
+export async function imageLibrary(opts: { account?: string | null; limit?: number; cursor?: string | null }): Promise<{ ok: boolean; account?: string; images: LibraryImage[]; cursor: string | null; error?: string }> {
+  const acc = oneAccount(opts.account)
+  if ('error' in acc) return { ok: false, images: [], cursor: null, error: acc.error }
+  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100)
+  const res = await apiGet(acc, `/backend-api/my/recent/image_gen?limit=${limit}${opts.cursor ? `&after=${encodeURIComponent(opts.cursor)}` : ''}`)
+  if (!res.ok) return { ok: false, account: label(acc), images: [], cursor: null, error: res.error }
+  return { ok: true, account: label(acc), ...mapImageLibrary(res.body) }
+}
+
+/** Full-text search over chat titles and messages, with the matching snippet. */
+export async function searchChats(opts: { query: string; account?: string | null; limit?: number }): Promise<{ ok: boolean; hits: (ChatHit & { account: string })[]; errors: string[] }> {
+  const picked = resolveAccount(opts.account)
+  if (opts.account && !picked) return { ok: false, hits: [], errors: [`unknown account "${opts.account}"`] }
+  const limit = Math.min(Math.max(opts.limit ?? 10, 1), 50)
+  const errors: string[] = []
+  const per = await Promise.all((picked ? [picked] : poolAccounts()).map(async acc => {
+    const res = await apiGet(acc, `/backend-api/conversations/search?query=${encodeURIComponent(opts.query)}&limit=${limit}`)
+    if (!res.ok) { errors.push(`${label(acc)}: ${res.error}`); return [] }
+    return mapChatSearch(res.body).map(h => ({ ...h, account: label(acc) }))
+  }))
+  return { ok: errors.length === 0 || per.some(p => p.length > 0), hits: per.flat().slice(0, limit), errors }
+}
+
+/** Save one ChatGPT image (a library `fileId`) to disk; returns a flowdesk-image:// link. */
+export async function downloadImage(opts: { fileId: string; conversationId: string; account?: string | null }): Promise<{ ok: boolean; image?: SavedImage; error?: string }> {
+  const acc = oneAccount(opts.account)
+  if ('error' in acc) return { ok: false, error: acc.error }
+  try {
+    return { ok: true, image: await saveImage(await apiWorker(acc), acc.partition, opts.conversationId, { fileId: opts.fileId }) }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
 }

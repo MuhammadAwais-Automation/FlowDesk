@@ -42,6 +42,57 @@ export function mapChatList(body: unknown): ChatSummary[] {
   })
 }
 
+export interface LibraryImage {
+  fileId: string
+  title: string | null
+  conversationId: string | null
+  width: number | null
+  height: number | null
+  createdAt: string | null
+  archived: boolean
+}
+
+/** One page of GET /backend-api/my/recent/image_gen: every generated image across all chats. */
+export function mapImageLibrary(body: unknown): { images: LibraryImage[]; cursor: string | null } {
+  const b = (body ?? {}) as { items?: unknown; cursor?: unknown }
+  const items = Array.isArray(b.items) ? b.items : []
+  const images = items.flatMap((raw): LibraryImage[] => {
+    const i = raw as Record<string, unknown>
+    const ptr = typeof i?.asset_pointer === 'string' ? i.asset_pointer.replace(/^[a-z]+:\/\//, '') : null
+    if (!ptr) return []
+    return [{
+      fileId: ptr,
+      title: typeof i.title === 'string' ? i.title : null,
+      conversationId: typeof i.conversation_id === 'string' ? i.conversation_id : null,
+      width: typeof i.width === 'number' ? i.width : null,
+      height: typeof i.height === 'number' ? i.height : null,
+      createdAt: typeof i.created_at === 'number' ? new Date(i.created_at * 1000).toISOString() : null,
+      archived: i.is_archived === true,
+    }]
+  })
+  return { images, cursor: typeof b.cursor === 'string' && b.cursor ? b.cursor : null }
+}
+
+export interface ChatHit { chatId: string; title: string; snippet: string | null; updatedAt: string | null; archived: boolean }
+
+/** GET /backend-api/conversations/search: full-text hits with the matching message snippet. */
+export function mapChatSearch(body: unknown): ChatHit[] {
+  const items = (body as { items?: unknown } | null)?.items
+  if (!Array.isArray(items)) return []
+  return items.flatMap((raw): ChatHit[] => {
+    const i = raw as Record<string, unknown>
+    if (typeof i?.conversation_id !== 'string') return []
+    const payload = i.payload as { snippet?: unknown } | null
+    return [{
+      chatId: i.conversation_id,
+      title: typeof i.title === 'string' && i.title ? i.title : '(untitled)',
+      snippet: typeof payload?.snippet === 'string' ? payload.snippet.slice(0, 300) : null,
+      updatedAt: typeof i.update_time === 'number' ? new Date(i.update_time * 1000).toISOString() : null,
+      archived: i.is_archived === true,
+    }]
+  })
+}
+
 const iso = (t: number | null | undefined) => (typeof t === 'number' && t > 0 ? new Date(t * 1000).toISOString() : null)
 
 /**

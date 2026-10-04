@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mapChatList, toMessages } from './chatgptChatCore'
+import { mapChatList, mapChatSearch, mapImageLibrary, toMessages } from './chatgptChatCore'
 import type { ConvNode } from './chatgptImageCore'
 
 const node = (o: Partial<ConvNode> & { id: string; role: string }): ConvNode => ({
@@ -22,6 +22,36 @@ describe('mapChatList', () => {
   it('returns nothing for an unexpected body', () => {
     expect(mapChatList(null)).toEqual([])
     expect(mapChatList({ items: 'x' })).toEqual([])
+  })
+})
+
+describe('mapImageLibrary', () => {
+  const item = { asset_pointer: 'sediment://file_abc', title: 'Neon Rifle', conversation_id: 'c1', width: 1774, height: 887, created_at: 1790795529, is_archived: false }
+
+  it('strips the pointer scheme and converts the epoch time', () => {
+    const { images, cursor } = mapImageLibrary({ items: [item], cursor: 'K1' })
+    expect(images).toEqual([{ fileId: 'file_abc', title: 'Neon Rifle', conversationId: 'c1', width: 1774, height: 887, createdAt: '2026-09-30T19:12:09.000Z', archived: false }])
+    expect(cursor).toBe('K1')
+  })
+
+  it('skips items without a pointer and reports no cursor at the end', () => {
+    const { images, cursor } = mapImageLibrary({ items: [{ title: 'x' }], cursor: null })
+    expect(images).toEqual([])
+    expect(cursor).toBeNull()
+  })
+})
+
+describe('mapChatSearch', () => {
+  it('keeps the matching snippet and converts the epoch time', () => {
+    const hits = mapChatSearch({ items: [{ conversation_id: 'c1', title: 'Reply pong', update_time: 1788088215, payload: { kind: 'message', snippet: 'pong' } }, { title: 'no id' }] })
+    expect(hits).toEqual([{ chatId: 'c1', title: 'Reply pong', snippet: 'pong', updatedAt: '2026-08-30T11:10:15.000Z', archived: false }])
+  })
+})
+
+describe('mapChatSearch snippets', () => {
+  it('cuts a whole-document snippet down to 300 characters', () => {
+    const [hit] = mapChatSearch({ items: [{ conversation_id: 'c1', payload: { snippet: 'x'.repeat(14000) } }] })
+    expect(hit.snippet).toHaveLength(300)
   })
 })
 

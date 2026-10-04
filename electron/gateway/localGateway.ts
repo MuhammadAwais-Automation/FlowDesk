@@ -98,7 +98,7 @@ let guard: Guard = (_m, _p, run) => run()
 import { askBrowserProvider, workerProgress } from '../agent/browserWorkerQueue'
 import { radarCollectOnce, radarReportFor, radarStatus, startRadar, stopRadar } from '../tiktok/tiktokRadar'
 import { loadNiches, removeNiche, upsertNiche } from '../tiktok/tiktokRadarStore'
-import { askChat, listChats, readChat } from '../chatgptChats'
+import { askChat, downloadImage, imageLibrary, listChats, readChat, searchChats } from '../chatgptChats'
 import { enqueueImages, imageAccounts, listJobs, openChatgptLogin, publicJob, waitForJob, type ImageRequest } from '../chatgptImages'
 import { openHudWidget, closeHudWidget, getHudStatus } from '../hudWidget'
 import {
@@ -517,6 +517,9 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   // ChatGPT chats: list / read / send in a new or existing chat (electron/chatgptChats.ts)
   'chatgpt.chats': async (p) => listChats({ account: acct(p), limit: typeof p.limit === 'number' ? p.limit : undefined }),
   'chatgpt.chatRead': async (p) => readChat({ chatId: String(p.chatId || ''), account: acct(p), lastN: typeof p.lastN === 'number' ? p.lastN : undefined }),
+  'chatgpt.imageLibrary': async (p) => imageLibrary({ account: acct(p), limit: typeof p.limit === 'number' ? p.limit : undefined, cursor: typeof p.cursor === 'string' && p.cursor ? p.cursor : null }),
+  'chatgpt.searchChats': async (p) => searchChats({ query: String(p.query || ''), account: acct(p), limit: typeof p.limit === 'number' ? p.limit : undefined }),
+  'chatgpt.downloadImage': async (p) => downloadImage({ fileId: String(p.fileId || ''), conversationId: String(p.conversationId || ''), account: acct(p) }),
   'chatgpt.ask': async (p) => askChat({ prompt: String(p.prompt || ''), account: acct(p), chatId: typeof p.chatId === 'string' && p.chatId ? p.chatId : null }),
 
   // ChatGPT images across every signed-in account (electron/chatgptImages.ts)

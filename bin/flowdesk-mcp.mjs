@@ -1673,6 +1673,39 @@ server.tool(
 )
 
 server.tool(
+  'chatgpt_image_library',
+  'Every image an account ever generated in ChatGPT, newest first, across ALL chats at once (no chat needs opening). Each item has fileId, title, conversationId, size and time. Pass the returned cursor to get the next page. Download one with chatgpt_download_image.',
+  {
+    account: z.string().optional().describe('Account (email or partition); default is the first account.'),
+    limit: z.number().int().min(1).max(100).optional().describe('Page size (default 20).'),
+    cursor: z.string().optional().describe('cursor from the previous page.'),
+  },
+  async (args) => textResult(await callGatewayRpc('chatgpt.imageLibrary', args))
+)
+
+server.tool(
+  'chatgpt_search_chats',
+  'Full-text search over ChatGPT chat titles and messages on every account, returning chatId, title and the matching snippet. Use the chatId with chatgpt_chat_read or chatgpt_ask.',
+  {
+    query: z.string().min(1).describe('Words to look for.'),
+    account: z.string().optional().describe('Only this account.'),
+    limit: z.number().int().min(1).max(50).optional().describe('Max hits (default 10).'),
+  },
+  async (args) => textResult(await callGatewayRpc('chatgpt.searchChats', args))
+)
+
+server.tool(
+  'chatgpt_download_image',
+  'Save one ChatGPT image to disk and return its flowdesk-image:// link and file path. Use fileId and conversationId from chatgpt_image_library or chatgpt_chat_read.',
+  {
+    fileId: z.string().min(1).describe('fileId (file_… without the sediment:// prefix).'),
+    conversationId: z.string().min(1).describe('Chat the image belongs to.'),
+    account: z.string().optional().describe('Account that owns the chat.'),
+  },
+  async (args) => textResult(await callGatewayRpc('chatgpt.downloadImage', args))
+)
+
+server.tool(
   'chatgpt_ask',
   'Send a message to ChatGPT and return the answer. Starts a NEW chat by default; pass chatId to continue an existing chat (it runs on the account that owns it). Without account, the first signed-in account answers and a limit or sign-out moves the message to the next. Different accounts run in parallel; one at a time per account.',
   {

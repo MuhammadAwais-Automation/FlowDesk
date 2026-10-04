@@ -245,7 +245,7 @@ export async function typeAndSend(wc: WebContents, prompt: string): Promise<void
 
 const originsFile = () => join(generatedImagesDir(), '_chatgpt-origins.jsonl')
 
-async function saveImage(wc: WebContents, partition: string, conversationId: string, img: { fileId: string; width?: number; height?: number; title?: string | null }): Promise<SavedImage> {
+export async function saveImage(wc: WebContents, partition: string, conversationId: string, img: { fileId: string; width?: number; height?: number; title?: string | null }): Promise<SavedImage> {
   // The signed link has answered 500 right after a turn ends (live, 2026-09-28)
   // while working a few seconds later, so ask for a fresh link and retry.
   let res: Response | null = null
