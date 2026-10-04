@@ -1724,8 +1724,16 @@ server.tool(
     prompt: z.string().min(1).describe('The message to send.'),
     chatId: z.string().optional().describe('Continue this chat instead of starting a new one.'),
     account: z.string().optional().describe('Preferred account (email or partition).'),
+    model: z.string().optional().describe('Model slug from chatgpt_models (default: ChatGPT auto).'),
   },
   async (args) => textResult(await callGatewayRpc('chatgpt.ask', args))
+)
+
+server.tool(
+  'chatgpt_models',
+  'List the ChatGPT models an account can use (slug, title, description). Pass a slug as `model` to chatgpt_ask.',
+  { account: z.string().optional().describe('Account (email or partition); default is the first account.') },
+  async (args) => textResult(await callGatewayRpc('chatgpt.models', args))
 )
 
 server.tool(

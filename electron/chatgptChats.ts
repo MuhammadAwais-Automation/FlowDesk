@@ -17,7 +17,7 @@
 import type { WebContents } from 'electron'
 import { classifyRefusal, readTurn, type ConvNode, type PoolAccount } from './chatgptImageCore'
 import { mapChatList, mapChatSearch, mapImageLibrary, planAsk, toMessages, type ChatHit, type ChatMessage, type ChatSummary, type LibraryImage } from './chatgptChatCore'
-import { SESSION_JS, conversationScript, label, poolAccounts, saveImage, sleep, typeAndSend, waitFor, workerFor, type SavedImage } from './chatgptImages'
+import { SESSION_JS, conversationScript, label, poolAccounts, saveImage, setSendOverrides, sleep, typeAndSend, waitFor, workerFor, type SavedImage } from './chatgptImages'
 
 const HOME = 'https://chatgpt.com/'
 const API_WORKER = 'cgapi'
@@ -129,22 +129,35 @@ export interface AskResult {
   error?: string
 }
 
-async function sendOn(acc: PoolAccount, prompt: string, chatId: string | null): Promise<{ chatId: string; text: string; images: SavedImage[] }> {
+async function sendOn(acc: PoolAccount, prompt: string, chatId: string | null, model: string | null): Promise<{ chatId: string; text: string; images: SavedImage[] }> {
   const wc = await workerFor(acc.partition, chatId ? `${HOME}c/${chatId}` : HOME, CHAT_WORKER)
   const signedIn = await waitFor(() => wc.executeJavaScript(SESSION_CHECK) as Promise<boolean>, 15_000, 1_000)
   if (!signedIn) throw new Refused('login', 'not signed in to ChatGPT')
 
+  await setSendOverrides(wc, model ? { model } : null)
   await typeAndSend(wc, prompt)
   const id = chatId ?? await waitFor(async () => wc.getURL().match(/\/c\/([0-9a-f-]{36})/)?.[1] ?? null, SUBMIT_TIMEOUT_MS, 500)
   if (!id) throw new Error('ChatGPT did not start a conversation for the prompt')
 
-  const end = Date.now() + TURN_TIMEOUT_MS
+  const sentAt = Date.now()
+  const end = sentAt + TURN_TIMEOUT_MS
+  let endedEmpty = 0
   while (Date.now() < end) {
     await sleep(POLL_MS)
     const conv = await readNodes(wc, id)
     if (!conv?.ok || !conv.nodes) continue
     const turn = readTurn(conv.nodes, prompt)
-    if (turn.state !== 'done') continue
+    if (turn.state !== 'done') {
+      // A turn ChatGPT closed without answering (seen live with a model the
+      // account cannot use) reports stream_status COMPLETE while no reply
+      // exists. Two such reads in a row fail the send instead of waiting out
+      // the full timeout; a turn still streaming is not COMPLETE.
+      if (Date.now() - sentAt < 15_000) continue
+      const s = await wc.executeJavaScript(getScript(`/backend-api/conversation/${id}/stream_status`)).catch(() => null) as Got | null
+      endedEmpty = (s?.body as { status?: unknown } | undefined)?.status === 'COMPLETE' ? endedEmpty + 1 : 0
+      if (endedEmpty >= 2) throw new Error(`ChatGPT ended the turn without an answer (chat ${id})${model ? `; model "${model}" may not be available on this account — see chatgpt_models` : ''}`)
+      continue
+    }
     // unverified: a text-limit refusal has not been captured live
     if (turn.images.length === 0 && turn.text.length < 400 && classifyRefusal(turn.text) === 'quota') throw new Refused('quota', turn.text)
     const images: SavedImage[] = []
@@ -160,7 +173,7 @@ async function sendOn(acc: PoolAccount, prompt: string, chatId: string | null): 
  * signed-in account that is not parked for a limit answers, and a limit or
  * sign-out moves the send to the next one.
  */
-export async function askChat(opts: { prompt: string; account?: string | null; chatId?: string | null }): Promise<AskResult> {
+export async function askChat(opts: { prompt: string; account?: string | null; chatId?: string | null; model?: string | null }): Promise<AskResult> {
   const chatId = opts.chatId || null
   let candidates: PoolAccount[]
   if (chatId) {
@@ -180,7 +193,7 @@ export async function askChat(opts: { prompt: string; account?: string | null; c
   const failures: string[] = []
   for (const acc of live) {
     try {
-      const r = await serial(acc.partition, () => sendOn(acc, opts.prompt, chatId))
+      const r = await serial(acc.partition, () => sendOn(acc, opts.prompt, chatId, opts.model || null))
       return { ok: true, account: label(acc), chatId: r.chatId, text: r.text, ...(r.images.length ? { images: r.images } : {}), ...(failures.length ? { triedFirst: failures } : {}) }
     } catch (e) {
       if (e instanceof Refused) {
@@ -274,6 +287,19 @@ export async function updateChat(opts: { chatId: string; account?: string | null
   const archivedOk = body.is_archived === undefined || c.is_archived === body.is_archived
   const state = { account: label(found.acc), title: typeof c.title === 'string' ? c.title : undefined, archived: c.is_archived === true }
   return titleOk && archivedOk ? { ok: true, ...state } : { ok: false, ...state, error: 'ChatGPT accepted the change but a fresh read does not show it' }
+}
+
+/** Models this account may pick (GET /backend-api/models); a `slug` goes into chatgpt_ask's `model`. */
+export async function chatModels(opts: { account?: string | null }): Promise<{ ok: boolean; account?: string; models: { slug: string; title: string | null; description: string | null }[]; error?: string }> {
+  const acc = oneAccount(opts.account)
+  if ('error' in acc) return { ok: false, models: [], error: acc.error }
+  const res = await apiGet(acc, '/backend-api/models?history_and_training_disabled=false')
+  if (!res.ok) return { ok: false, account: label(acc), models: [], error: res.error }
+  const list = (res.body as { models?: unknown } | null)?.models
+  const models = (Array.isArray(list) ? list : []).flatMap((m: Record<string, unknown>) => typeof m?.slug === 'string'
+    ? [{ slug: m.slug, title: typeof m.title === 'string' ? m.title : null, description: typeof m.description === 'string' ? m.description : null }]
+    : [])
+  return { ok: true, account: label(acc), models }
 }
 
 /** Save one ChatGPT image (a library `fileId`) to disk; returns a flowdesk-image:// link. */

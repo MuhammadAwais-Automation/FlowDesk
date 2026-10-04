@@ -49,7 +49,7 @@ function logCdpDecision(url: string, matchedHost: string | undefined, packaged: 
   } catch { /* discovery aid only */ }
 }
 
-const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'flow.google.com', 'labs.google', 'reddit.com', 'tiktok.com']
+const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'flow.google.com', 'labs.google', 'reddit.com', 'tiktok.com', 'chatgpt.com']
 
 /**
  * Extra hosts to capture ALONGSIDE a matched tab host, for sites whose real

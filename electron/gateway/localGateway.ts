@@ -98,7 +98,7 @@ let guard: Guard = (_m, _p, run) => run()
 import { askBrowserProvider, workerProgress } from '../agent/browserWorkerQueue'
 import { radarCollectOnce, radarReportFor, radarStatus, startRadar, stopRadar } from '../tiktok/tiktokRadar'
 import { loadNiches, removeNiche, upsertNiche } from '../tiktok/tiktokRadarStore'
-import { askChat, askChatgptText, downloadImage, imageLibrary, listChats, readChat, searchChats, updateChat } from '../chatgptChats'
+import { askChat, askChatgptText, chatModels, downloadImage, imageLibrary, listChats, readChat, searchChats, updateChat } from '../chatgptChats'
 import { enqueueImages, imageAccounts, listJobs, openChatgptLogin, publicJob, waitForJob, type ImageRequest } from '../chatgptImages'
 import { openHudWidget, closeHudWidget, getHudStatus } from '../hudWidget'
 import {
@@ -524,7 +524,8 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'chatgpt.searchChats': async (p) => searchChats({ query: String(p.query || ''), account: acct(p), limit: typeof p.limit === 'number' ? p.limit : undefined }),
   'chatgpt.downloadImage': async (p) => downloadImage({ fileId: String(p.fileId || ''), conversationId: String(p.conversationId || ''), account: acct(p) }),
   'chatgpt.updateChat': async (p) => updateChat({ chatId: String(p.chatId || ''), account: acct(p), title: typeof p.title === 'string' ? p.title : undefined, archived: typeof p.archived === 'boolean' ? p.archived : undefined }),
-  'chatgpt.ask': async (p) => askChat({ prompt: String(p.prompt || ''), account: acct(p), chatId: typeof p.chatId === 'string' && p.chatId ? p.chatId : null }),
+  'chatgpt.ask': async (p) => askChat({ prompt: String(p.prompt || ''), account: acct(p), chatId: typeof p.chatId === 'string' && p.chatId ? p.chatId : null, model: typeof p.model === 'string' && p.model ? p.model : null }),
+  'chatgpt.models': async (p) => chatModels({ account: acct(p) }),
 
   // ChatGPT images across every signed-in account (electron/chatgptImages.ts)
   'chatgpt.imageAccounts': async (p) => imageAccounts(p.refresh !== false),

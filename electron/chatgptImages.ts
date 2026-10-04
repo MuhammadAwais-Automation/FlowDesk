@@ -244,6 +244,37 @@ export async function typeAndSend(wc: WebContents, prompt: string): Promise<void
   if (!clicked) throw new Error('ChatGPT never enabled Send (upload stuck or composer changed)')
 }
 
+/**
+ * Sets fields of the next message's request body (captured 2026-10-04: the page
+ * POSTs /backend-api/f/conversation with `model` and `system_hints`; image mode
+ * is `system_hints: ["picture_v2"]`, plain text is `[]`).
+ *
+ * The page still builds and sends the request itself, so the anti-bot tokens
+ * (Sentinel chat-requirements, proof and Turnstile) are minted by ChatGPT's own
+ * code exactly as for a person; only plain body fields are overridden. Pass
+ * null to clear. The hook is installed once per page load.
+ */
+export async function setSendOverrides(wc: WebContents, overrides: Record<string, unknown> | null): Promise<void> {
+  await wc.executeJavaScript(`(function () {
+    window.__fdSend = ${JSON.stringify(overrides)}
+    if (window.__fdHooked) return true
+    window.__fdHooked = true
+    var orig = window.fetch
+    window.fetch = function (input, init) {
+      try {
+        var url = typeof input === 'string' ? input : input && input.url
+        if (window.__fdSend && url && /\\/backend-api\\/f\\/conversation$/.test(url.split('?')[0]) && init && init.method === 'POST' && typeof init.body === 'string') {
+          var b = JSON.parse(init.body)
+          Object.assign(b, window.__fdSend)
+          init = Object.assign({}, init, { body: JSON.stringify(b) })
+        }
+      } catch (e) {}
+      return orig.call(this, input, init)
+    }
+    return true
+  })()`)
+}
+
 // ── results ─────────────────────────────────────────────────────────────────
 
 const originsFile = () => join(generatedImagesDir(), '_chatgpt-origins.jsonl')
@@ -302,6 +333,9 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
 
   if (!cont && job.files.length) { job.stage = 'uploading the source image'; await attachFiles(wc, job.files) }
   job.stage = 'sending the prompt'
+  // Force image mode in the request itself: the ?hints= URL is lost when an edit
+  // continues an existing chat, and a caption-like prompt then comes back as text.
+  await setSendOverrides(wc, { system_hints: ['picture_v2'] })
   await typeAndSend(wc, job.prompt)
   job.stage = 'ChatGPT is generating'
 
