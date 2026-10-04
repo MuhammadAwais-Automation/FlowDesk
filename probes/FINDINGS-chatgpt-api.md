@@ -57,3 +57,22 @@ succeeded.
 Fix: `settleIdle` in `electron/agent/browserWorkerQueue.ts` — an idle stream
 that already produced content resolves with that content instead of
 rejecting. Pinned by `browserWorkerQueue.test.ts`.
+
+## Chat management and library (probes cg-20, cg-21, cg-22; live 2026-10-04)
+
+All with `Authorization: Bearer <accessToken>` from `/api/auth/session`.
+
+| call | result |
+|---|---|
+| `GET /backend-api/my/recent/image_gen?limit=N[&after=<cursor>]` | 200 `{ items, cursor }`. Every generated image across ALL chats, newest first: `asset_pointer` (`sediment://file_…`), `conversation_id`, `message_id`, `title`, `width`, `height`, `created_at` (epoch s), `is_archived`. `after=<cursor>` returns the next page (distinct ids, verified). |
+| `GET /backend-api/conversations/search?query=Q&limit=N` | 200 `{ items, cursor }`. Item: `conversation_id`, `title`, `update_time` (epoch s), `payload.snippet`. The snippet can be a whole pasted document (14k chars seen): cut it. |
+| `PATCH /backend-api/conversation/{id}` `{title}` or `{is_archived}` | 200 `{success:true}`; a fresh `GET` shows the change. Verified rename, archive, unarchive. |
+| `GET /backend-api/memories?include_memory_entries=true` | 200 `{ memories[], memory_max_tokens, memory_num_tokens }` |
+| `GET /backend-api/user_system_messages` | 200 custom instructions (about_user_message, about_model_message, traits…) |
+| `GET /backend-api/gizmos/snorlax/sidebar?limit=N` | 200 projects `{ items[{gizmo,tools,files,…}], cursor }` |
+| `GET /backend-api/tasks` | 200 `{ tasks[] }` (scheduled tasks, 14 on the test account) |
+| `GET /backend-api/shared_conversations?order=created` | 200 shared links |
+| `GET /backend-api/conversations?…&is_archived=true` / `&is_starred=true` | 200 `{ items, total, limit, offset }` |
+| `/backend-api/images/library`, `/files`, `/aip/connectors/list_accessible`, `/experimental/prompt_suggestions` | 404 / 403: not usable |
+
+Not captured yet: a text-limit refusal, and the image-size / style options the composer sends.
