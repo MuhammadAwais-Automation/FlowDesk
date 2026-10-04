@@ -199,20 +199,22 @@ function formatTikTokVisual(data) {
   return summaryWithData(md, data)
 }
 
+// The summary used to be the whole answer, so an error, `done`, `sceneId` and
+// the image link never reached the agent. The full payload now travels with it
+// (as summaryWithData does elsewhere), and a failed call carries isError.
 function formatFlowVisual(data) {
   if (!data) return textResult('No Google Flow generation data returned.')
-  let md = `### 🎨 Google Flow Generation Studio\n\n`
-  if (data.mediaId) md += `- **Media ID:** \`${data.mediaId}\`\n`
-  if (data.status) md += `- **Status:** \`${data.status}\`\n`
-  if (data.creditsRemaining !== undefined) md += `- **Credits Remaining:** ⚡ **${data.creditsRemaining}**\n`
-  if (data.modelKey) md += `- **Model:** \`${data.modelKey}\`\n`
-  if (data.prompt) md += `- **Prompt:** *"${data.prompt}"*\n`
-  if (data.videoUrl || data.url || data.downloadUrl) {
-    const mediaUrl = data.videoUrl || data.url || data.downloadUrl
-    md += `\n🔗 **Media Preview Link:** [Click to Open Video / Media](${mediaUrl})\n`
-  }
-  md += `\n> 💡 *Interactive Player widget available via MCP App at \`ui://flowdesk/flow-studio.html\`.*`
-  return { content: [{ type: 'text', text: md }] }
+  const { result: _raw, media: _media, ...slim } = data
+  let md = `### 🎨 Google Flow\n\n`
+  if (data.ok === false) md += `- **Error:** ${data.error}\n`
+  if (data.mediaId) md += `- **Media ID:** \`${data.mediaId}\`${data.kind ? ` (${data.kind})` : ''}\n`
+  if (data.sceneId) md += `- **Scene ID:** \`${data.sceneId}\`\n`
+  if (data.status) md += `- **Status:** \`${data.status}\`${data.done ? ' ✅ done' : ''}\n`
+  if (data.creditsLeft !== undefined && data.creditsLeft !== null) md += `- **Credits left:** ${data.creditsLeft}\n`
+  if (data.model) md += `- **Model:** \`${data.model}\`\n`
+  const mediaUrl = data.videoUrl || data.imageUrl
+  if (mediaUrl) md += `\n🔗 [Open media](${mediaUrl})\n`
+  return { ...summaryWithData(md, slim), ...(data.ok === false ? { isError: true } : {}) }
 }
 
 function formatWhatsAppVisual(data) {
@@ -1834,6 +1836,7 @@ server.tool(
   'flow_list_projects',
   'List all Google Flow projects on one Google account (default account when omitted).',
   { account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'), },
+  { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.listProjects', args))
 )
 
@@ -1841,18 +1844,19 @@ server.tool(
   'flow_create_project',
   'Create a new project in Google Flow.',
   { title: z.string().min(1).describe('Project title.'), account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'), },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.createProject', args))
 )
 
 server.tool(
   'flow_generate_image',
-  'Generate an AI image in Google Flow (uses real Flow credits). Runs on the project\'s account; if that account is out of credits it moves to the next account with credits, into that account\'s "FlowDesk" project, and the result names the account and projectId it used.',
+  'Generate one AI image in Google Flow (model Nano Banana 2; in the live test it spent no credits). Comes back in about 30 s with mediaId and imageUrl; download with flow_download_media or animate with flow_generate_video_from_image. Output is landscape: Flow\'s current API has no verified aspect-ratio setting. Runs on the project\'s account and moves to another account\'s "FlowDesk" project if that one is out of credits.',
   {
     account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'),
-    projectId: z.string().min(1).describe('Project ID where generation will occur.'),
+    projectId: z.string().min(1).describe('Project ID (flow_list_projects or flow_create_project).'),
     prompt: z.string().min(1).describe('Detailed prompt describing the image.'),
-    aspectRatio: z.enum(['LANDSCAPE', 'PORTRAIT', 'SQUARE']).optional().describe('Aspect ratio.'),
   },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.generateImage', args))
 )
 
@@ -1860,6 +1864,7 @@ server.tool(
   'flow_credits',
   'Check available Google Flow credits on one account (default account when omitted). flow_accounts lists every account.',
   { account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'), },
+  { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.credits', args))
 )
 
@@ -1867,6 +1872,7 @@ server.tool(
   'flow_accounts',
   'Every Google account FlowDesk holds, with its Flow sign-in and credit balance. Generations fail over between these when one runs out of credits.',
   {},
+  { readOnlyHint: true, openWorldHint: true },
   async () => textResult(await callGatewayRpc('flow.accounts'))
 )
 
@@ -1874,7 +1880,8 @@ server.registerTool(
   'flow_media_status',
   {
     title: 'Google Flow Media Status & Player',
-    description: 'Check status of a running media generation in Google Flow and display player preview.',
+    annotations: { readOnlyHint: true, openWorldHint: true },
+    description: 'Status of one Flow media item: kind (image/video), status (rendering, completed, …), done, and its videoUrl/imageUrl for flow_download_media. Poll a new video every 10-15 s until done is true. Images are done as soon as they exist.',
     inputSchema: {
       mediaId: z.string().min(1).describe('Media ID.'),
       account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'),
@@ -1892,13 +1899,14 @@ server.registerTool(
   'flow_generate_video',
   {
     title: 'Google Flow Video Generator',
-    description: 'Generate an AI video from a text prompt in Google Flow (spends Flow credits). Fails over to the next account with credits like flow_generate_image; the result names the account and projectId used.',
+    description: 'Start an AI video from a text prompt in Google Flow (spends credits: 12 for abra_t2v_8s in the live test). Returns at once with mediaId (poll flow_media_status until done, about 30 s to a few minutes) and sceneId (needed by flow_extend_video). Fails over to the next account with credits; the result names the account and projectId used.',
     inputSchema: {
       account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'),
       projectId: z.string().min(1).describe('Project ID.'),
       prompt: z.string().min(1).describe('Video scene prompt.'),
-      modelKey: z.string().min(1).describe('Model key from flow_video_models (e.g. abra_t2v_8s).'),
+      modelKey: z.string().min(1).describe('A textToVideo key from flow_video_models → verifiedModelKeys (verified: abra_t2v_8s). Family names like veo_3_1_lite are rejected.'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     _meta: {
       ui: {
         resourceUri: 'ui://flowdesk/flow-studio.html',
@@ -1912,13 +1920,14 @@ server.registerTool(
   'flow_generate_video_from_image',
   {
     title: 'Google Flow Image-to-Video Generator',
-    description: 'Generate an AI video starting from an uploaded image in Google Flow.',
+    description: 'Start an AI video that animates an image already in the project (from flow_upload_image or flow_generate_image) in Google Flow (spends credits: 10 for veo_3_1_r2v_lite in the live test). Returns mediaId to poll with flow_media_status, and sceneId. Runs on the project\'s own account.',
     inputSchema: {
-      projectId: z.string().min(1).describe('Project ID.'),
+      projectId: z.string().min(1).describe('Project ID that holds the image.'),
       prompt: z.string().min(1).describe('How the image should animate.'),
       mediaId: z.string().min(1).describe('Image media ID in the project.'),
-      modelKey: z.string().min(1).describe('Model key from flow_video_models (e.g. abra_r2v_10s).'),
+      modelKey: z.string().min(1).describe('An imageToVideo key from flow_video_models → verifiedModelKeys (verified: veo_3_1_r2v_lite).'),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     _meta: {
       ui: {
         resourceUri: 'ui://flowdesk/flow-studio.html',
@@ -1930,13 +1939,14 @@ server.registerTool(
 
 server.tool(
   'flow_extend_video',
-  'Extend an existing Google Flow video scene.',
+  'Continue a finished Google Flow video with a new shot (spends credits: 20 in the live test). Returns a new mediaId to poll with flow_media_status; the scene stays the same.',
   {
     projectId: z.string().min(1).describe('Project ID.'),
-    prompt: z.string().min(1).describe('Continuation prompt.'),
-    sourceVideoId: z.string().min(1).describe('Source video ID to extend.'),
-    sceneId: z.string().min(1).describe('Scene ID.'),
+    prompt: z.string().min(1).describe('What happens next.'),
+    sourceVideoId: z.string().min(1).describe('mediaId of the finished video to continue.'),
+    sceneId: z.string().min(1).describe('sceneId returned by the generate call that made that video.'),
   },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.extendVideo', args))
 )
 
@@ -1947,6 +1957,7 @@ server.tool(
     projectId: z.string().min(1).describe('Target project ID.'),
     localFilePath: z.string().min(1).describe('Absolute path to the local image file.'),
   },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.uploadImage', args))
 )
 
@@ -1956,14 +1967,24 @@ server.tool(
   {
     mediaUrl: z.string().min(1).describe('Media URL obtained from project listing.'),
   },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.downloadMedia', args))
 )
 
 server.tool(
   'flow_video_models',
-  'List accepted Google Flow video model keys.',
+  'Video model keys: verifiedModelKeys (textToVideo, imageToVideo, extend) are the keys proven to generate; families is Flow\'s own list of model families, which the generate calls do NOT accept as modelKey.',
   {},
+  { readOnlyHint: true, openWorldHint: true },
   async () => textResult(await callGatewayRpc('flow.videoModels'))
+)
+
+server.tool(
+  'flow_list_project_media',
+  'List the media (images and videos) inside one Google Flow project: mediaId and prompt per item. Get a download link with flow_media_status, then save it with flow_download_media.',
+  { projectId: z.string().min(1).describe('Project ID.') },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('flow.listProjectMedia', args))
 )
 
 // ── FLOWDESK BRAIN (Memory & Atlas Knowledge Graph) ──────────────────────────

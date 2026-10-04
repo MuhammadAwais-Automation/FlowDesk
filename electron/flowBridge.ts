@@ -327,6 +327,22 @@ const VIDEO_MODEL_KEYS: Record<VideoModel, Partial<Record<VideoMode, string>>> =
   OMNI_FLASH: { INGREDIENTS: 'abra_r2v_6s', FRAMES: 'abra_i2v_6s' },
 }
 
+/**
+ * The ids a video generation (YhhmEf), image-to-video (MZZa6b) or extend (jIps6)
+ * answer carries, read off live answers 2026-10-04: payload[1] is the credit
+ * balance after the spend, payload[3][0] is the new media entry
+ * [mediaId, projectId, sceneId, …]. sceneId is what flow_extend_video needs;
+ * an extend keeps the scene of the video it continues.
+ */
+const VIDEO_IDS_JS = `(function (p) {
+  var m = Array.isArray(p) && Array.isArray(p[3]) && Array.isArray(p[3][0]) ? p[3][0] : []
+  return {
+    mediaId: typeof m[0] === 'string' ? m[0] : null,
+    sceneId: typeof m[2] === 'string' ? m[2] : null,
+    creditsLeft: Array.isArray(p) && typeof p[1] === 'number' ? p[1] : null,
+  }
+})(out.payload)`
+
 export const __testing = { AISANDBOX_API, RECAPTCHA_SITE_KEY, AISANDBOX_API_KEY, ASPECT_RATIO_MAP, IMAGE_MODEL_MAP, VIDEO_MODEL_KEYS, buildScript }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -456,7 +472,15 @@ export function generateImageScript(prompt: string, projectId: string, imageMode
 
     var out = await callBatch('ogiZ0b', arg)
     if (!out.ok) return out
-    return { ok: true, requested: true, model: model, seed: seed, result: safe(out.payload) }
+    // The new image's URL is flow-content.google/image/<mediaId> (live, 2026-10-04).
+    var imageUrl = null
+    ;(function find(n, d) {
+      if (imageUrl || !n || d > 10) return
+      if (typeof n === 'string' && n.indexOf('flow-content.google/image/') !== -1) imageUrl = n
+      else if (Array.isArray(n)) for (var i = 0; i < n.length; i++) find(n[i], d + 1)
+    })(out.payload, 0)
+    var mediaId = imageUrl ? (imageUrl.split('/image/')[1] || '').split('?')[0] || null : null
+    return { ok: true, requested: true, model: model, seed: seed, mediaId: mediaId, imageUrl: imageUrl, result: safe(out.payload) }
   `)
 }
 
@@ -497,7 +521,7 @@ export function generateVideoScript(prompt: string, projectId: string, modelKey:
     // Reported as an unlabelled number rather than named "credits": the
     // meaning is consistent with the balance nzlxg returns but is not proven.
     var creditsAfter = Array.isArray(out.payload) && typeof out.payload[1] === 'number' ? out.payload[1] : null
-    return { ok: true, requested: true, model: modelKey, creditsAfterIfThatIsWhatItIs: creditsAfter, result: safe(out.payload) }
+    return Object.assign({ ok: true, requested: true, model: modelKey, creditsAfterIfThatIsWhatItIs: creditsAfter }, ${VIDEO_IDS_JS}, { result: safe(out.payload) })
   `)
 }
 
@@ -547,40 +571,47 @@ export function mediaStatusScript(mediaId: string): string {
     var payload = out.payload
     var videoUrl = null
     var imageUrl = null
-    var byteSize = null
-    var statusCode = null
-    var statusText = 'unknown'
 
     function scan(node, depth) {
       if (!node || depth > 8) return
       if (typeof node === 'string') {
         if (node.indexOf('flow-content.google/video/') !== -1 && !videoUrl) videoUrl = node
         if (node.indexOf('flow-content.google/image/') !== -1 && !imageUrl) imageUrl = node
-      } else if (typeof node === 'number' && node > 100000 && !byteSize) {
-        byteSize = node
       } else if (Array.isArray(node)) {
-        if (node.length === 1 && typeof node[0] === 'number' && node[0] >= 1 && node[0] <= 10 && statusCode === null) {
-          statusCode = node[0]
-        }
         for (var i = 0; i < node.length; i++) scan(node[i], depth + 1)
       }
     }
     scan(payload, 0)
 
+    // A video's generation status sits at payload[5][8] ([2] rendering, [3]
+    // completed; read off three live videos 2026-10-04). It used to be "the
+    // first one-number array anywhere", which picked up the [5] inside an
+    // image-to-video's model settings and left a finished video "status_5"
+    // forever. An image has no status there: it exists once it is listed.
+    var at = Array.isArray(payload) && Array.isArray(payload[5]) ? payload[5][8] : null
+    var statusCode = Array.isArray(at) && typeof at[0] === 'number' ? at[0] : null
+    var kind = videoUrl ? 'video' : imageUrl ? 'image' : 'unknown'
+    var statusText = 'unknown'
     if (statusCode === 3) statusText = 'completed'
     else if (statusCode === 2) statusText = 'rendering'
     else if (statusCode === 6) statusText = 'queued'
     else if (statusCode !== null) statusText = 'status_' + statusCode
+    else if (kind === 'image') statusText = 'completed'
+
+    // Nothing at all came back: the media is not on this account. Saying so
+    // (instead of ok + "unknown") keeps the caller from filing the id under
+    // the wrong account and lets it look on the others.
+    if (kind === 'unknown' && statusCode === null) return { ok: false, error: 'media ' + id + ' was not found on this account', notFound: true }
 
     return {
       ok: true,
       mediaId: id,
+      kind: kind,
       status: statusText,
       statusCode: statusCode,
-      done: statusCode === 3,
+      done: statusText === 'completed',
       videoUrl: videoUrl,
       imageUrl: imageUrl,
-      byteSize: byteSize,
       media: safe(payload)
     }
   `)
@@ -779,7 +810,7 @@ export function generateVideoFromImageScript(prompt: string, projectId: string, 
 
     var out = await callBatch('MZZa6b', arg)
     if (!out.ok) return out
-    return { ok: true, requested: true, model: ${JSON.stringify(modelKey)}, result: safe(out.payload) }
+    return Object.assign({ ok: true, requested: true, model: ${JSON.stringify(modelKey)} }, ${VIDEO_IDS_JS}, { result: safe(out.payload) })
   `)
 }
 
@@ -817,6 +848,6 @@ export function extendVideoScript(prompt: string, projectId: string, sourceVideo
 
     var out = await callBatch('jIps6', arg)
     if (!out.ok) return out
-    return { ok: true, requested: true, result: safe(out.payload) }
+    return Object.assign({ ok: true, requested: true }, ${VIDEO_IDS_JS}, { result: safe(out.payload) })
   `)
 }

@@ -5,6 +5,7 @@
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import { app, session } from 'electron'
 import type { WebContents } from 'electron'
@@ -54,6 +55,32 @@ export function setGoogleAccountsGetter(getter: () => { email: string; partition
  */
 const projectOwner = new Map<string, string>() // project and media ids -> partition
 
+// Kept on disk: held only in memory, a restart sent every status, image-to-video
+// and extend call about an earlier generation to the default account, where the
+// media does not exist (seen live 2026-10-04: three finished videos read "unknown").
+const OWNERS_CAP = 5000
+const ownersFile = () => join(app.getPath('userData'), 'flow-owners.json')
+let ownersLoaded = false
+let ownersSave: ReturnType<typeof setTimeout> | null = null
+
+function loadOwners() {
+  if (ownersLoaded) return
+  ownersLoaded = true
+  try {
+    const saved = JSON.parse(readFileSync(ownersFile(), 'utf8')) as Record<string, string>
+    for (const [id, partition] of Object.entries(saved)) if (!projectOwner.has(id)) projectOwner.set(id, partition)
+  } catch { /* first run */ }
+}
+
+function saveOwnersSoon() {
+  if (ownersSave) return
+  ownersSave = setTimeout(() => {
+    ownersSave = null
+    const entries = [...projectOwner.entries()].slice(-OWNERS_CAP)
+    void writeFile(ownersFile(), JSON.stringify(Object.fromEntries(entries)), 'utf8').catch(() => {})
+  }, 1_000)
+}
+
 function defaultPartition(): string | null {
   return googlePartitionGetter ? googlePartitionGetter() : null
 }
@@ -65,6 +92,7 @@ function resolvePartition(projectId?: string, account?: string | null): string |
     const hit = googleAccountsGetter().find(a => a.partition === want || a.email.toLowerCase().includes(want))
     if (hit) return hit.partition
   }
+  loadOwners()
   if (projectId && projectOwner.has(projectId)) return projectOwner.get(projectId)!
   return defaultPartition()
 }
@@ -172,8 +200,13 @@ async function call(script: string, projectId?: string, account?: string | null)
 /** Every project and media id in a result belongs to the account it came from. */
 function learnOwners(r: FlowResult, partition: string) {
   if (!r.ok) return
+  loadOwners()
   const text = JSON.stringify(r)
-  for (const id of text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []) projectOwner.set(id, partition)
+  let learned = false
+  for (const id of text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []) {
+    if (projectOwner.get(id) !== partition) { projectOwner.delete(id); projectOwner.set(id, partition); learned = true }
+  }
+  if (learned) saveOwnersSoon()
 }
 
 // ── account routing ─────────────────────────────────────────────────────────
@@ -302,6 +335,7 @@ export function flowGenerateVideo(prompt: string, projectId: string, modelKey: s
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to generate without a projectId' })
   const model = String(modelKey ?? '').trim()
   if (!model) return Promise.resolve({ ok: false, error: 'refusing to generate without a model key — call flowVideoModels first' })
+  if (!isGenerationKey(model)) return Promise.resolve({ ok: false, error: familyKeyError(model, VERIFIED_VIDEO_KEYS.textToVideo) })
   return generateRouted(id, account, pid => generateVideoScript(text, pid, model))
 }
 
@@ -310,11 +344,20 @@ export function flowGetCredits(account?: string | null): Promise<FlowResult> {
 }
 
 /** Looks up one media item by the id a generation returned. */
-export function flowMediaStatus(mediaId: string, account?: string | null): Promise<FlowResult> {
+export async function flowMediaStatus(mediaId: string, account?: string | null): Promise<FlowResult> {
   const id = String(mediaId ?? '').trim()
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to look up without a mediaId' })
   // A media id routes to the account that made it, like a project id does.
-  return call(mediaStatusScript(id), id, account)
+  const first = await call(mediaStatusScript(id), id, account)
+  if (first.ok || account || !(first as { notFound?: boolean }).notFound) return first
+  // Not on the account it was routed to (an id never seen, or made outside
+  // FlowDesk): look on the others; the one that has it becomes its owner.
+  const tried = resolvePartition(id, null)
+  for (const acc of googleAccountsGetter().filter(a => a.partition !== tried)) {
+    const r = await call(mediaStatusScript(id), id, acc.partition)
+    if (r.ok) return r
+  }
+  return first
 }
 
 /** Renames an existing project. New capability: the retired API had none. */
@@ -333,9 +376,26 @@ export function flowListProjectMedia(projectId: string): Promise<FlowResult> {
   return call(listProjectMediaScript(id), id)
 }
 
-/** The video model keys Flow accepts, read from Flow rather than hardcoded. */
-export function flowVideoModels(): Promise<FlowResult> {
-  return call(videoModelsScript())
+/**
+ * Generation keys proven by a real generation (2026-10-04, live). Flow's own
+ * model list (yBhWQ) names model FAMILIES (veo_3_1_lite, abra, …); sending a
+ * family as the key makes Flow answer a bare error [5]. A key names model,
+ * mode and length: t2v = text-to-video, r2v = from a reference image.
+ */
+export const VERIFIED_VIDEO_KEYS = {
+  textToVideo: ['abra_t2v_8s'],
+  imageToVideo: ['veo_3_1_r2v_lite'],
+  extend: ['abra_edit'],
+} as const
+
+const isGenerationKey = (key: string) => /_(t2v|r2v|i2v)(_|$)/.test(key)
+const familyKeyError = (key: string, use: readonly string[]) =>
+  `"${key}" is a model family, not a generation key (Flow rejects it). Use one of: ${use.join(', ')} — see flow_video_models`
+
+/** Flow's model families plus the generation keys verified to work. */
+export async function flowVideoModels(): Promise<FlowResult> {
+  const r = await call(videoModelsScript()) as FlowResult & { models?: string[] }
+  return { ...r, families: r.models ?? [], verifiedModelKeys: VERIFIED_VIDEO_KEYS, note: 'Pass a verifiedModelKeys entry as modelKey. Family names are not accepted by the generate calls.' }
 }
 
 /** Deletes a project. Flow answers with nothing, so this reports the request. */
@@ -457,6 +517,7 @@ export function flowGenerateVideoFromImage(prompt: string, projectId: string, me
   if (!media) return Promise.resolve({ ok: false, error: 'refusing to generate without a source mediaId' })
   const model = String(modelKey ?? '').trim()
   if (!model) return Promise.resolve({ ok: false, error: 'refusing to generate without a model key -- call flowVideoModels first' })
+  if (!isGenerationKey(model)) return Promise.resolve({ ok: false, error: familyKeyError(model, VERIFIED_VIDEO_KEYS.imageToVideo) })
   return call(generateVideoFromImageScript(text, id, media, model), id)
 }
 
