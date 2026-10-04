@@ -21,7 +21,7 @@
 import { app, BrowserWindow, session, type WebContents } from 'electron'
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { basename, extname, isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { ensureBackgroundView } from './sessions'
 import { generatedImagesDir, parseSavedImageRef } from './savedImages'
@@ -148,6 +148,17 @@ export function conversationScript(conversationId: string): string {
   })()`
 }
 
+/** `status` of GET /backend-api/conversation/{id}/stream_status ("COMPLETE" once a turn is over), or null. */
+function streamStatusScript(conversationId: string): string {
+  return `(async function () {
+    try {
+      ${SESSION_JS}
+      var r = await fetch('/backend-api/conversation/' + ${JSON.stringify(conversationId)} + '/stream_status', { headers: { Authorization: 'Bearer ' + __s.accessToken } })
+      return r.ok ? (await r.json()).status || null : null
+    } catch (e) { return null }
+  })()`
+}
+
 function downloadUrlScript(fileId: string, conversationId: string): string {
   const path = `/backend-api/files/download/${fileId}?conversation_id=${encodeURIComponent(conversationId)}&inline=false`
   return `(async function () {
@@ -198,19 +209,53 @@ export async function waitFor<T>(fn: () => Promise<T | null | undefined | false>
   return null
 }
 
-async function attachFiles(wc: WebContents, files: string[]): Promise<void> {
-  await withCdp(wc, async send => {
-    const { root } = await send('DOM.getDocument', { depth: 1 })
-    const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector: 'input[type="file"][accept="image/*"]' })
-    if (!nodeId) throw new Error('ChatGPT has no image upload input on this page')
-    await send('DOM.setFileInputFiles', { nodeId, files })
-  })
-  // The thumbnails appear at once; the upload behind them finishes later and
-  // keeps Send disabled until it does, which the submit step waits out.
-  const shown = await waitFor(() => wc.executeJavaScript(
-    `(function () { var c = document.querySelector(${JSON.stringify(COMPOSER)}); var f = c && c.closest('form'); return f ? f.querySelectorAll('img').length >= ${files.length} : false })()`,
-  ), 30_000)
-  if (!shown) throw new Error('the image did not attach to the ChatGPT message')
+export interface UploadedFile { id: string; size: number; name: string; mime: string; width: number | null; height: number | null }
+
+const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }
+
+/**
+ * Uploads a local image over the API, the chain captured live (probe cg-26,
+ * 2026-10-04): POST /backend-api/files -> { upload_url, file_id }; PUT the
+ * bytes to upload_url (blob storage, 201); POST /backend-api/files/process_upload_stream
+ * streams events until "file.processing.file_ready". None of these carry
+ * Sentinel tokens. The returned file is attached to the next message by
+ * setSendOverrides({ _attachments }).
+ */
+async function uploadFile(wc: WebContents, path: string): Promise<UploadedFile> {
+  const name = basename(path)
+  const mime = MIME[extname(path).slice(1).toLowerCase()] ?? 'image/png'
+  const b64 = (await readFile(path)).toString('base64')
+  const r = await wc.executeJavaScript(`(async function () {
+    try {
+      ${SESSION_JS}
+      if (!__s || !__s.accessToken) return { ok: false, error: 'signed out' }
+      var auth = { Authorization: 'Bearer ' + __s.accessToken, 'Content-Type': 'application/json' }
+      var NAME = ${JSON.stringify(name)}, MIME = ${JSON.stringify(mime)}
+      var bin = Uint8Array.from(atob(${JSON.stringify(b64)}), function (c) { return c.charCodeAt(0) })
+      var blob = new Blob([bin], { type: MIME })
+      var dim = { width: null, height: null }
+      try { var bm = await createImageBitmap(blob); dim = { width: bm.width, height: bm.height } } catch (e) {}
+      var r1 = await fetch('/backend-api/files', { method: 'POST', headers: auth, body: JSON.stringify({
+        file_name: NAME, file_size: blob.size, use_case: 'multimodal', timezone_offset_min: new Date().getTimezoneOffset(),
+        reset_rate_limits: false, supports_direct_azure_multipart: true, mime_type: MIME, entry_surface: 'chat_composer',
+        selection_method: 'file_picker', client_resolved_mime_type: MIME, mime_resolution_source: 'filename_extension',
+        library_persistence_mode: 'opportunistic' }) })
+      if (!r1.ok) return { ok: false, error: 'files HTTP ' + r1.status }
+      var j1 = await r1.json()
+      if (!j1.upload_url || !j1.file_id) return { ok: false, error: 'no upload_url in ' + JSON.stringify(j1).slice(0, 200) }
+      var r2 = await fetch(j1.upload_url, { method: 'PUT', headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': MIME }, body: blob })
+      if (!r2.ok) return { ok: false, error: 'blob upload HTTP ' + r2.status }
+      var r3 = await fetch('/backend-api/files/process_upload_stream', { method: 'POST', headers: auth, body: JSON.stringify({
+        file_id: j1.file_id, use_case: 'multimodal', index_for_retrieval: false, file_name: NAME,
+        library_persistence_mode: 'opportunistic', entry_surface: 'chat_composer',
+        metadata: { is_temporary_chat: false, library_eligibility_reason: 'eligible', is_project_thread: false }, mime_type: MIME }) })
+      var events = await r3.text()
+      if (!/file_ready/.test(events)) return { ok: false, error: 'upload not processed: ' + events.slice(-300) }
+      return { ok: true, file: { id: j1.file_id, size: blob.size, name: NAME, mime: MIME, width: dim.width, height: dim.height } }
+    } catch (e) { return { ok: false, error: String(e && e.message || e) } }
+  })()`) as { ok: boolean; file?: UploadedFile; error?: string }
+  if (!r?.ok || !r.file) throw new Error(`image upload failed: ${r?.error ?? 'no answer'}`)
+  return r.file
 }
 
 export async function typeAndSend(wc: WebContents, prompt: string): Promise<void> {
@@ -265,7 +310,23 @@ export async function setSendOverrides(wc: WebContents, overrides: Record<string
         var url = typeof input === 'string' ? input : input && input.url
         if (window.__fdSend && url && /\\/backend-api\\/f\\/conversation$/.test(url.split('?')[0]) && init && init.method === 'POST' && typeof init.body === 'string') {
           var b = JSON.parse(init.body)
-          Object.assign(b, window.__fdSend)
+          var o = Object.assign({}, window.__fdSend)
+          var att = o._attachments
+          delete o._attachments
+          Object.assign(b, o)
+          // Attachments go on this one message only (a follow-up must not repeat
+          // them), in the shape captured from a real upload (probe cg-26).
+          if (att && att.length && b.messages && b.messages[0]) {
+            delete window.__fdSend._attachments
+            var m = b.messages[0]
+            var text = ((m.content && m.content.parts) || []).filter(function (p) { return typeof p === 'string' }).join('\\n')
+            m.content = { content_type: 'multimodal_text', parts: att.map(function (a) {
+              return { content_type: 'image_asset_pointer', asset_pointer: 'sediment://' + a.id, size_bytes: a.size, width: a.width, height: a.height }
+            }).concat([text]) }
+            m.metadata = Object.assign({}, m.metadata, { attachments: att.map(function (a) {
+              return { id: a.id, size: a.size, name: a.name, mime_type: a.mime, width: a.width, height: a.height, source: 'local', is_big_paste: false }
+            }) }, o.system_hints ? { system_hints: o.system_hints } : {})
+          }
           init = Object.assign({}, init, { body: JSON.stringify(b) })
         }
       } catch (e) {}
@@ -331,11 +392,15 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
   if (!q.loggedIn) throw new AccountRefused('login', 'not signed in to ChatGPT')
   if (!isUsable(q, Date.now())) throw new AccountRefused('quota', 'no image generations left')
 
-  if (!cont && job.files.length) { job.stage = 'uploading the source image'; await attachFiles(wc, job.files) }
+  const attachments: UploadedFile[] = []
+  if (!cont && job.files.length) {
+    job.stage = 'uploading the source image'
+    for (const f of job.files) attachments.push(await uploadFile(wc, f))
+  }
   job.stage = 'sending the prompt'
   // Force image mode in the request itself: the ?hints= URL is lost when an edit
   // continues an existing chat, and a caption-like prompt then comes back as text.
-  await setSendOverrides(wc, { system_hints: ['picture_v2'] })
+  await setSendOverrides(wc, { system_hints: ['picture_v2'], ...(attachments.length ? { _attachments: attachments } : {}) })
   await typeAndSend(wc, job.prompt)
   job.stage = 'ChatGPT is generating'
 
@@ -357,6 +422,8 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
   // chat asks for the picture; a second text-only answer is reported as it is.
   let awaiting = job.prompt
   let nudged = false
+  let quietCount = -1
+  let quietSince = Date.now()
   while (Date.now() < end) {
     await sleep(POLL_MS)
     const conv = await wc.executeJavaScript(conversationScript(conversationId)).catch(() => null) as { ok: boolean; nodes?: ConvNode[]; error?: string } | null
@@ -364,7 +431,18 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
     const turn = readTurn(conv.nodes, awaiting)
     if (turn.images.length !== lastCount) { lastCount = turn.images.length; stableSince = Date.now() }
     const settled = turn.state === 'done' || (turn.images.length > 0 && Date.now() - stableSince > 20_000)
-    if (!settled) continue
+    if (!settled) {
+      // Nothing new in the chat for 90 s while ChatGPT reports the stream over
+      // (stream_status COMPLETE): the turn ended empty, or a follow-up never
+      // reached the chat (seen live after "an error on my side"). Long enough
+      // that an image still rendering after the text stream closed is not cut off.
+      if (conv.nodes.length !== quietCount) { quietCount = conv.nodes.length; quietSince = Date.now() }
+      if (turn.images.length === 0 && Date.now() - quietSince > 90_000 &&
+        await wc.executeJavaScript(streamStatusScript(conversationId)).catch(() => null) === 'COMPLETE') {
+        throw new Error(`ChatGPT ended the turn without an image${nudged ? ' (also after the follow-up)' : ''}; conversation ${conversationId}`)
+      }
+      continue
+    }
 
     if (turn.images.length === 0) {
       const text = turn.state === 'done' ? turn.text : ''
