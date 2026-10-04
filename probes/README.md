@@ -1,96 +1,102 @@
 # probes/
 
-Discovery probes for reverse-engineering a web app from inside a live,
-logged-in FlowDesk session.
+Autonomous discovery probes for reverse-engineering and automating web apps from inside a live, logged-in FlowDesk session.
 
-Save a `.js` file here and it runs immediately — no rebuild, no app restart,
-no re-login. The result appears as JSON in `out/`.
+Save a `.js` file here and it runs immediately — no rebuild, no app restart, no re-login. The result appears as JSON in `out/`.
 
-## Writing a probe
+---
+
+## 1. Writing an Autonomous Probe
 
 ```js
-// @target linkedin.com
-const r = await fetch('/voyager/api/me', {
-  headers: { 'csrf-token': document.cookie.match(/JSESSIONID="?([^";]+)"?/)[1] },
-})
-return { status: r.status, body: await r.json() }
+// @target tiktok.com
+// @goto https://www.tiktok.com/tiktokstudio/upload
+// @file video ./out/generated_videos/alpha_paws_black_cat_phone.mp4
+// @timeout 60000
+
+// 1. Autonomous file injection without manual drag-and-drop
+await probe.waitFor('input[type="file"]')
+const fileResult = await probe.injectFile('input[type="file"]', probe.files.video)
+
+// 2. Wait for Draft.js / Lexical rich text editor and type caption
+await probe.waitFor('[contenteditable="true"]')
+await probe.type('[contenteditable="true"]', 'Alpha Paws video #viral #fyp')
+
+// 3. Toggle HD and comment switches
+await probe.setSwitch('input[name="allow_comments"]', true)
+
+// 4. Synthetically click publish with complete pointer event chain
+await probe.click('button[data-e2e="post_video_button"]')
+
+return { status: 'published', file: fileResult }
 ```
 
-- **`// @target <url-substring>`** on the first line is required. It picks
-  which open view to run in. A probe without it cannot be aimed and fails
-  with that message rather than running somewhere unintended.
-- The rest is the body of an `async function`, so `await` works and `return`
-  is how a result comes back.
-- Anything returned is flattened to primitives before it crosses back —
-  functions become `"[function name]"`, Blobs become `"[Blob 1234b]"`.
-  This is not tidiness: one un-cloneable value fails the entire call with
-  "An object could not be cloned", and during the WhatsApp work that
-  silently destroyed a diagnostic's own report.
+---
 
-## Running
+## 2. Directives Reference
 
-1. `npm run dev`
-2. Open the target site in FlowDesk's Social page and sign in — **once**.
-3. Save a probe file here (Ctrl+S is enough — no edit needed). The result is
-   written to `probes/out/<name>.json` and summarised in the terminal.
+Directives are parsed from comment headers at the top of the probe file:
 
-The app stays open the whole time. Saving a probe re-runs it.
+- **`// @target <url-substring>`** *(Required)*
+  Picks which open Electron view to execute in (e.g. `tiktok.com`, `flow.google.com`, `linkedin.com`, `flowdesk`, or `worker:<tool>`).
+- **`// @file <alias> <path>`** *(Optional, multiple allowed)*
+  Loads local host files from disk, encodes them as Base64, detects MIME type, and exposes them in-page at `probe.files.<alias>`. Eliminates the need to paste megabytes of Base64 strings into probe code!
+- **`// @goto <url>`** *(Optional)*
+  Navigates the view to the specified URL before executing the probe script if not already on that page.
+- **`// @timeout <ms>`** *(Optional)*
+  Overrides default 30s timeout for long-running workflows (e.g. 60000ms).
 
-## Network capture uses CDP, not page hooks
+---
 
-The network recorder is **not** a probe and **not** an injected script. It
-attaches via the Chrome DevTools Protocol in `electron/discovery/cdpRecorder.ts`
-and writes a rolling capture to `probes/out/_network-<host>.json` on its own —
-no probe save, no user action.
+## 3. Autonomous In-Page Toolkit (`window.probe`)
 
-Page-level `fetch`/`XHR` hooks were tried first and have a blind spot that
-decided the matter: those hooks live on the main thread's global object, and a
-Web Worker has its own. A LinkedIn session that browsed messaging, opened a
-thread and *sent a message* produced 201 captured calls with no messaging
-request among them — a sent message has to hit the network, so it hit one the
-hooks could not see. CDP sits under the renderer and sees every request
-whichever thread issued it, plus document navigations and server-sent events.
+The harness automatically injects the `probe` object into the target view's context:
 
-Cost: one debugger client per WebContents, so opening DevTools on a recorded
-view will conflict. Hosts are listed in `CDP_RECORDER_HOSTS` and removed once
-that site is no longer being studied.
+### `probe.type(selectorOrEl, text, [options])`
+Automates text input across both standard HTML inputs and rich contenteditable editors:
+- **Inputs & Textareas**: Uses prototype property descriptor setters to bypass React synthetic state wrappers (`_valueTracker`), firing `input` and `change` events.
+- **Rich Text Editors** (Draft.js, Lexical, ProseMirror, Slate): Selects content and executes `document.execCommand('insertText', false, text)`, cleanly updating internal immutable state structures without DOM corruption.
+- Options: `{ clear: boolean, waitAfterMs: number }`.
 
-## Injected scripts belong in CAPTURE_RULES, not in probe files
+### `probe.click(selectorOrEl, [options])`
+Dispatches a full user-like event sequence:
+- Scrolls element into view: `scrollIntoView({ block: 'center' })`.
+- Focuses element.
+- Fires `pointerdown` → `mousedown` → `pointerup` → `mouseup` → `click` (plus optional `dblclick`).
+- Options: `{ waitAfterMs: number, dblClick: boolean }`.
 
-Anything that must be *listening before you act* — a network recorder, an
-event hook — installs automatically on page load via `CAPTURE_RULES` in
-`electron/sessions.ts`, not by saving a probe.
+### `probe.injectFile(selectorOrEl, fileData)`
+Injects binary files into `input[type="file"]`:
+- Takes `{ base64, filename, mimeType }` (e.g. from `probe.files.<alias>`).
+- Synthesizes `Blob` → `File` → `DataTransfer`.
+- Assigns `input.files = dt.files` and triggers `change` and `input` events.
 
-Two failures made that necessary, both real:
+### `probe.setSwitch(selectorOrEl, checked, [options])`
+Intelligently inspects checkbox state, `aria-checked`, or `data-state="checked"`. If current state does not match `checked`, triggers a synthetic click to toggle it.
 
-- A recorder you have to remember to switch on is off when it matters. The
-  first LinkedIn attempt had a full browsing session recorded by nothing,
-  because installing it was a separate step that got skipped — and the only
-  symptom was an empty capture afterwards.
-- Injected hooks die on navigation. A reload, or the site's own login
-  redirect, wipes them; a manually installed recorder then goes quiet
-  mid-session without saying so. `CAPTURE_RULES` re-injects on every
-  dom-ready.
+### `probe.waitFor(selectorOrConditionFn, [options])`
+Asynchronously polls until an element exists (or is visible) or a custom predicate function returns truthy:
+- Options: `{ timeoutMs: number, intervalMs: number, visible: boolean }`.
 
-Probe files are for *asking questions about what was captured* — the part
-that changes constantly while you learn the shape of a site.
+### `probe.captureNetwork(actionFn, [options])`
+Temporarily intercepts in-page `window.fetch` and `XMLHttpRequest` during execution of `actionFn`:
+- Returns `{ ok: true, result, requests: [{ method, url, requestHeaders, postData, status, responseBody, responseJson }] }`.
+- Automatically restores original `fetch` and `XHR` in a `finally` block to ensure zero side-effects.
 
-## Why this exists
+### `probe.sleep(ms)`
+Async delay helper (`await probe.sleep(1000)`).
 
-Probes used to live inside the app's source, so changing one question meant
-rebuild → relaunch → re-login → wait for sync → copy terminal output by
-hand. Two to three minutes per question, on work that needs dozens.
+### `probe.query(selector)` / `probe.queryAll(selector)`
+DOM query helpers returning elements or arrays.
 
-None of that was necessary. A probe is a string of JavaScript evaluated in a
-page that is already open — `whatsapp_diagnose` already proved that by
-running the same probes with no restart at all.
+### `probe.info()`
+Returns `{ url, title, readyState }`.
 
-## What this is not
+---
 
-This is a **development** tool. It is gated behind `!app.isPackaged` and is
-never exposed to the in-app agent, deliberately: it evaluates arbitrary
-JavaScript inside an authenticated session, and the agent reads message and
-post content written by strangers. A tool of this shape cannot be gated by
-an approval dialog — there is nothing to show that a user could reasonably
-judge. Narrow tools ("send this text to this chat") can be gated precisely
-because their parameters say what they will do.
+## 4. Running Probes
+
+1. Start FlowDesk: `npm run dev`
+2. Open target site in FlowDesk and authenticate (once).
+3. Save or edit a probe file in `probes/` (Ctrl+S).
+4. The runner executes the probe, logs the summary in the console, and writes the structured result to `probes/out/<name>.json`.

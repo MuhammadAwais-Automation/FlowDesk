@@ -757,3 +757,17 @@ Clicking raises "Add a note to your invitation?" with "Send without a note" —
 and that dialog is **not** a `[role="dialog"]` on this build, which is exactly
 why the UI tool clicked Connect and then never found the confirmation. None of
 that matters now, but it is the reason the API was worth finding.
+
+
+## Reactions over the wire (probes lk-05, lk-07, lk-08, 2026-09-28)
+
+Supersedes "Reactions have no API". The old attempts only tried voyager REST
+routes. Replaying the request the like button itself sends works:
+
+- `POST /flagship-web/rsc-action/actions/server-request?sduiid=com.linkedin.sdui.reactions.create` (unlike: `...reactions.delete`, same body)
+- headers: `csrf-token` (JSESSIONID, quotes stripped), `content-type: application/json`, `x-li-rsc-stream: true` — the x-li-track/page-instance headers are not needed
+- body: `requestedArguments.payload = { threadUrn.threadUrnActivityThreadUrn.activityUrn.activityId, reactionType: ReactionType_LIKE, reactionSource: Update }`, plus `requestMetadata.currentActor` (key `identitySwitcherActorContext-urn:li:activity:<id>`) — without it: 500
+- `states` / `screenId` / `knownTemplateIds` go INSIDE the top-level `requestedArguments` copy; placed one level up: 500
+- success = HTTP 200 **and** empty `response.errors` on the streamed `0:` line. A bogus id also answers 200, with a non-empty `errors` — which makes id "1" a safe way to test the request shape without reacting to anything.
+
+Verified: own post like count 2 → 3 → 2 via replay.
