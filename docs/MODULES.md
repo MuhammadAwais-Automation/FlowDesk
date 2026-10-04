@@ -33,13 +33,43 @@ Percent = meri mota andaza (code + tools ke hisaab se), exact nahi.
 
 | Module | Scope | Abhi |
 |---|---|---|
-| **M1 — AI + Content Creation** | 1A ChatGPT (full human-like use) · 1B Gemini/Grok/Perplexity/Claude same pattern · 1C Google Flow (video/image) | ~35% |
+| **M1 — AI + Content Creation** | 1A ChatGPT (full human-like use) · 1B Gemini/Grok/Perplexity/Claude same pattern · 1C Google Flow (video/image) | **1A + 1C FINAL (2026-10-04)** · 1B not started |
 | **M2 — Social Media (multi-account)** | WhatsApp, TikTok, LinkedIn, Reddit, Facebook, Pinterest; har platform ke 2-3 accounts | ~60% (TikTok sabse aage) |
 | **M3 — Brain / Intelligence** | memory, knowledge, radar, answer packs | ~65% (UI Atlas ban chuka) |
 | **M4 — Workflows + Skills** | SKILL.md, agent/approval/wait steps, channels, cron | ~30% (Phase 1 done) |
 | **M5 — Platform hardening** | commit hygiene, main.ts/gateway split, action-policy, packaging | ongoing |
 
-## 4. Module 1A — ChatGPT (pehla kaam)
+## Module 1 — FINAL (2026-10-04)
+
+ChatGPT (1A) aur Google Flow (1C) band. Naya tool nahi jodna. Jo neeche hai sab live test hua.
+
+**ChatGPT — 14 tools** (`electron/chatgptChats.ts`, `chatgptImages.ts`; skill `chatgpt`):
+`chatgpt_ask`, `ask_chatgpt`, `chatgpt_models`, `chatgpt_chats`, `chatgpt_chat_read`, `chatgpt_search_chats`,
+`chatgpt_chat_update`, `chatgpt_generate_image`, `chatgpt_edit_image`, `chatgpt_image_jobs`,
+`chatgpt_image_library`, `chatgpt_download_image`, `chatgpt_image_accounts`, `chatgpt_open_login`.
+CLI: `flowdesk chatgpt …`.
+
+**Google Flow — 13 tools** (`electron/flow.ts`, `flowBridge.ts`; skill `google-flow`):
+`flow_accounts`, `flow_credits`, `flow_list_projects`, `flow_create_project`, `flow_list_project_media`,
+`flow_generate_image`, `flow_upload_image`, `flow_video_models`, `flow_generate_video`,
+`flow_generate_video_from_image`, `flow_extend_video`, `flow_media_status`, `flow_download_media`.
+
+**MCP standard:** `isError` on failed results, read/write annotations, long timeouts, server
+`instructions` pointing agents to the two skills.
+
+**Re-run the checks** (app running): `node scripts/mcp-chatgpt-check.mjs`, `node scripts/mcp-flow-check.mjs`,
+`node scripts/mcp-skills-check.mjs`; plus `npm run typecheck`, `npx vitest run`, `npm run build`.
+
+**Known limits, accepted as-is (not bugs):**
+- Text-limit failover (ChatGPT) and out-of-credits failover (Flow) are coded but the real refusal has never happened, so never seen live.
+- Flow images are landscape only; no verified aspect-ratio slot in Flow's current API.
+- ChatGPT Plus `imagesLeft` did not drop after use; treat it as approximate.
+- Sending a ChatGPT message goes through the real page (Sentinel/Turnstile tokens are not forged); everything else is backend API.
+- Not built by decision: chat delete, ChatGPT memories/projects/tasks, Gemini/Claude/Grok/Perplexity parity (1B).
+
+Found but outside Module 1: `alpha-paws-auto-short` workflow downloads with a mediaId instead of a URL and does not wait for the video (Module 4).
+
+## 4. Module 1A — ChatGPT (pehla kaam, plan as written at the start)
 
 **Goal:** jo ek insaan ChatGPT mein karta hai wo sab MCP se: chats list/open/continue, naya chat, images (progress ke saath), upload/edit/download, aur multiple accounts ke beech quota-aware routing.
 
