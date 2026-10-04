@@ -98,6 +98,7 @@ let guard: Guard = (_m, _p, run) => run()
 import { askBrowserProvider, workerProgress } from '../agent/browserWorkerQueue'
 import { radarCollectOnce, radarReportFor, radarStatus, startRadar, stopRadar } from '../tiktok/tiktokRadar'
 import { loadNiches, removeNiche, upsertNiche } from '../tiktok/tiktokRadarStore'
+import { addSocialAccount, isSocialPlatform, openSocialLogin, socialAccountsStatus } from '../socialAccounts'
 import { askChat, askChatgptText, chatModels, downloadImage, imageLibrary, listChats, readChat, searchChats, updateChat } from '../chatgptChats'
 import { enqueueImages, imageAccounts, listJobs, openChatgptLogin, publicJob, waitForJob, type ImageRequest } from '../chatgptImages'
 import { openHudWidget, closeHudWidget, getHudStatus } from '../hudWidget'
@@ -365,6 +366,15 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   ),
 
   // LinkedIn methods
+  // One account list for every social platform (electron/socialAccounts.ts)
+  'social.accounts': async (p) => socialAccountsStatus(isSocialPlatform(p.platform) ? p.platform : undefined),
+  'social.addAccount': async (p) => isSocialPlatform(p.platform)
+    ? { ok: true, account: addSocialAccount(p.platform, typeof p.label === 'string' ? p.label : undefined), next: 'sign in with social.openLogin' }
+    : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook' },
+  'social.openLogin': async (p) => isSocialPlatform(p.platform)
+    ? openSocialLogin(p.platform, typeof p.account === 'string' || typeof p.account === 'number' ? p.account : null)
+    : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook' },
+
   'linkedin.accounts': async () => liAccounts(),
   'linkedin.switchAccount': async (p) => liSwitchAccount(typeof p.account === 'string' || typeof p.account === 'number' ? p.account : '1'),
   'linkedin.status': async (p) => liStatus(typeof p?.account === 'string' || typeof p?.account === 'number' ? p.account : undefined),

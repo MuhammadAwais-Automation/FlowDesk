@@ -10,6 +10,7 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { clipboard, type WebContents } from 'electron'
 import { ensureBackgroundView, getActiveView, getViewById, showView } from '../sessions'
+import { isSignedIn, listSocialAccounts } from '../socialAccounts'
 import {
   tiktokStatusScript,
   tiktokFeedScript,
@@ -474,7 +475,9 @@ export async function tkAccounts(): Promise<{
   }>
 }> {
   const active = getActiveView()
-  const accountIds = ['1', '2', '3']
+  // The shared list (electron/socialAccounts.ts), not a fixed ['1','2','3'].
+  const registry = listSocialAccounts('tiktok')
+  const accountIds = registry.map(a => a.id)
   const results: Array<{
     id: string
     label: string
@@ -503,11 +506,16 @@ export async function tkAccounts(): Promise<{
           username = status.username || null
         }
       } catch {}
+    } else {
+      // Never opened this run: the session cookie still tells whether it is signed in
+      // (it used to read as false, so a signed-in account 2 looked signed out).
+      authenticated = (await isSignedIn({ platform: 'tiktok', id, label: '', partition })) === true
     }
 
+    const base = registry.find(a => a.id === id)?.label ?? `Account ${id}`
     results.push({
       id,
-      label: id === '1' ? 'Account 1 (@alphapaws6)' : `Account ${id}`,
+      label: username ? `${base} (@${username})` : base,
       partition,
       authenticated,
       username,

@@ -1659,6 +1659,40 @@ server.tool(
 )
 
 
+// ── SOCIAL ACCOUNTS (one list for every platform: electron/socialAccounts.ts) ─
+
+const SOCIAL_PLATFORM = z.enum(['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook'])
+
+server.tool(
+  'social_accounts',
+  'Every social account FlowDesk holds (WhatsApp, TikTok, LinkedIn, Reddit, Facebook): id, label, partition and whether it is signed in (null = cannot tell without opening it, WhatsApp). Pass a platform tool\'s `account` as one of these ids.',
+  { platform: SOCIAL_PLATFORM.optional().describe('Only this platform.') },
+  { readOnlyHint: true, openWorldHint: false },
+  async (args) => textResult(await callGatewayRpc('social.accounts', args))
+)
+
+server.tool(
+  'social_add_account',
+  'Add another account slot for a social platform (it gets the next id). Then sign it in with social_open_login.',
+  {
+    platform: SOCIAL_PLATFORM.describe('Platform.'),
+    label: z.string().optional().describe('A name for it, e.g. "Brand 2".'),
+  },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  async (args) => textResult(await callGatewayRpc('social.addAccount', args))
+)
+
+server.tool(
+  'social_open_login',
+  'Open a visible sign-in window for one social account so the user can sign in once. The user types the password; nothing is filled in.',
+  {
+    platform: SOCIAL_PLATFORM.describe('Platform.'),
+    account: z.string().optional().describe('Account id from social_accounts (default 1).'),
+  },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('social.openLogin', args))
+)
+
 // ── AI BROWSER WORKERS (Via Logged-in Desktop Sessions) ──────────────────────
 
 server.tool(
