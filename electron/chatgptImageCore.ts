@@ -71,13 +71,20 @@ export function readTurn(nodes: ConvNode[], prompt: string): TurnResult {
   return final ? { state: 'done', images, text: final.text } : { state: 'pending', images }
 }
 
-export type Refusal = 'quota' | 'refused'
+export type Refusal = 'quota' | 'unavailable' | 'refused'
 
-/** Only a clear limit message counts as quota; everything else is reported as-is. */
+/**
+ * Only a clear limit message counts as quota. "unavailable" is an account that
+ * cannot draw right now although its quota reads fine (seen live 2026-10-04 on
+ * a free account with 3 images left: "I wasn't able to generate the image due
+ * to an error on my side." / "It looks like image creation is temporarily
+ * unavailable.") — the job belongs on another account. Everything else
+ * (content policy, a question back) is reported as-is.
+ */
 export function classifyRefusal(text: string): Refusal {
-  return /(hit|reached|exceeded)[^.]{0,60}\blimit\b|\blimit\b[^.]{0,40}\b(reset|resets)\b|image generation limit|too many (image )?requests|try again (in|after) \d/i.test(text)
-    ? 'quota'
-    : 'refused'
+  if (/(hit|reached|exceeded)[^.]{0,60}\blimit\b|\blimit\b[^.]{0,40}\b(reset|resets)\b|image generation limit|too many (image )?requests|try again (in|after) \d/i.test(text)) return 'quota'
+  if (/temporarily unavailable|error on my side|image (creation|generation) is (currently |temporarily )?(unavailable|down|disabled)|(wasn'?t|was not|couldn'?t|could not|am not|unable to)( able to)? (generate|create) (the |an |this )?image/i.test(text)) return 'unavailable'
+  return 'refused'
 }
 
 export interface AccountQuota {

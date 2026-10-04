@@ -55,6 +55,12 @@ describe('classifyRefusal', () => {
     expect(classifyRefusal('We’re so sorry, but the prompt may violate our content policies.')).toBe('refused')
     expect(classifyRefusal('Would you like it in portrait or landscape?')).toBe('refused')
   })
+
+  it('treats a can-not-draw-right-now answer as unavailable (live replies, free account with quota left)', () => {
+    expect(classifyRefusal("I wasn't able to generate the image due to an error on my side.")).toBe('unavailable')
+    expect(classifyRefusal('It looks like image creation is temporarily unavailable. Do you want to try something else?')).toBe('unavailable')
+    expect(classifyRefusal('Here is a description of a boat instead.')).toBe('refused')
+  })
 })
 
 describe('pickAccount', () => {

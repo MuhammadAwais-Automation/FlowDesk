@@ -36,6 +36,7 @@ const SUBMIT_TIMEOUT_MS = 90_000
 const TURN_TIMEOUT_MS = 15 * 60_000
 const POLL_MS = 4_000
 const NUDGE = 'Please create the image now.'
+const UNAVAILABLE_PARK_MS = 15 * 60_000
 
 export interface SavedImage { url: string; path: string; width?: number; height?: number; title?: string | null }
 
@@ -379,7 +380,7 @@ async function originOf(fileName: string): Promise<{ partition: string; conversa
 // ── one job on one account ──────────────────────────────────────────────────
 
 class AccountRefused extends Error {
-  constructor(public reason: 'quota' | 'login', message: string) { super(message) }
+  constructor(public reason: 'quota' | 'unavailable' | 'login', message: string) { super(message) }
 }
 
 async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
@@ -446,7 +447,8 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
 
     if (turn.images.length === 0) {
       const text = turn.state === 'done' ? turn.text : ''
-      if (classifyRefusal(text) === 'quota') throw new AccountRefused('quota', text.slice(0, 300))
+      const refusal = classifyRefusal(text)
+      if (refusal === 'quota' || refusal === 'unavailable') throw new AccountRefused(refusal, text.slice(0, 300))
       if (!nudged) {
         nudged = true
         awaiting = NUDGE
@@ -541,6 +543,8 @@ function run(job: ImageJob, acc: PoolAccount) {
         const q = await readQuota(acc).catch(() => quotas.get(acc.partition))
         if (q) {
           if (e.reason === 'quota') q.exhaustedUntil = exhaustedUntil(q.resetAfter, Date.now())
+          // Cannot draw right now although quota reads fine: rest it a while.
+          if (e.reason === 'unavailable') q.exhaustedUntil = Date.now() + UNAVAILABLE_PARK_MS
           if (e.reason === 'login') q.loggedIn = false
           quotas.set(acc.partition, q)
           await saveQuotas()
