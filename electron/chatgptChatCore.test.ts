@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mapChatList, mapChatSearch, mapImageLibrary, toMessages } from './chatgptChatCore'
+import { mapChatList, mapChatSearch, mapImageLibrary, planAsk, toMessages } from './chatgptChatCore'
 import type { ConvNode } from './chatgptImageCore'
 
 const node = (o: Partial<ConvNode> & { id: string; role: string }): ConvNode => ({
@@ -45,6 +45,29 @@ describe('mapChatSearch', () => {
   it('keeps the matching snippet and converts the epoch time', () => {
     const hits = mapChatSearch({ items: [{ conversation_id: 'c1', title: 'Reply pong', update_time: 1788088215, payload: { kind: 'message', snippet: 'pong' } }, { title: 'no id' }] })
     expect(hits).toEqual([{ chatId: 'c1', title: 'Reply pong', snippet: 'pong', updatedAt: '2026-08-30T11:10:15.000Z', archived: false }])
+  })
+})
+
+describe('planAsk', () => {
+  const a = { partition: 'a' }, b = { partition: 'b' }, c = { partition: 'c' }
+  const none = new Map<string, number>()
+
+  it('puts the preferred account first and keeps the rest in order', () => {
+    expect(planAsk([a, b, c], c, none, 0).live).toEqual([c, a, b])
+  })
+
+  it('skips an account parked after a limit and reports it', () => {
+    const plan = planAsk([a, b], null, new Map([['a', 1000]]), 500)
+    expect(plan.live).toEqual([b])
+    expect(plan.parked).toEqual([a])
+  })
+
+  it('uses the account again once its park time has passed', () => {
+    expect(planAsk([a, b], null, new Map([['a', 1000]]), 1000).live).toEqual([a, b])
+  })
+
+  it('has nothing live when every account is parked', () => {
+    expect(planAsk([a, b], null, new Map([['a', 9], ['b', 9]]), 1).live).toEqual([])
   })
 })
 

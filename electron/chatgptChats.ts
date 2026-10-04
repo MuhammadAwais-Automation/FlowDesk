@@ -16,7 +16,7 @@
  */
 import type { WebContents } from 'electron'
 import { classifyRefusal, readTurn, type ConvNode, type PoolAccount } from './chatgptImageCore'
-import { mapChatList, mapChatSearch, mapImageLibrary, toMessages, type ChatHit, type ChatMessage, type ChatSummary, type LibraryImage } from './chatgptChatCore'
+import { mapChatList, mapChatSearch, mapImageLibrary, planAsk, toMessages, type ChatHit, type ChatMessage, type ChatSummary, type LibraryImage } from './chatgptChatCore'
 import { SESSION_JS, conversationScript, label, poolAccounts, saveImage, sleep, typeAndSend, waitFor, workerFor, type SavedImage } from './chatgptImages'
 
 const HOME = 'https://chatgpt.com/'
@@ -123,13 +123,13 @@ export interface AskResult {
   account?: string
   chatId?: string
   text?: string
-  /** Generated image file ids; the image tools download them. */
-  images?: string[]
+  /** Images ChatGPT drew in this turn, already saved to disk. */
+  images?: SavedImage[]
   triedFirst?: string[]
   error?: string
 }
 
-async function sendOn(acc: PoolAccount, prompt: string, chatId: string | null): Promise<{ chatId: string; text: string; images: string[] }> {
+async function sendOn(acc: PoolAccount, prompt: string, chatId: string | null): Promise<{ chatId: string; text: string; images: SavedImage[] }> {
   const wc = await workerFor(acc.partition, chatId ? `${HOME}c/${chatId}` : HOME, CHAT_WORKER)
   const signedIn = await waitFor(() => wc.executeJavaScript(SESSION_CHECK) as Promise<boolean>, 15_000, 1_000)
   if (!signedIn) throw new Refused('login', 'not signed in to ChatGPT')
@@ -147,7 +147,9 @@ async function sendOn(acc: PoolAccount, prompt: string, chatId: string | null): 
     if (turn.state !== 'done') continue
     // unverified: a text-limit refusal has not been captured live
     if (turn.images.length === 0 && turn.text.length < 400 && classifyRefusal(turn.text) === 'quota') throw new Refused('quota', turn.text)
-    return { chatId: id, text: turn.text, images: turn.images.map(i => i.fileId) }
+    const images: SavedImage[] = []
+    for (const img of turn.images) images.push(await saveImage(wc, acc.partition, id, img))
+    return { chatId: id, text: turn.text, images }
   }
   throw new Error(`no answer after ${TURN_TIMEOUT_MS / 60_000} minutes (chat ${id})`)
 }
@@ -172,9 +174,9 @@ export async function askChat(opts: { prompt: string; account?: string | null; c
     candidates = picked ? [picked, ...all.filter(a => a !== picked)] : all
   }
 
-  const now = Date.now()
-  const live = candidates.filter(a => (parkedUntil.get(a.partition) ?? 0) <= now)
-  const parked = candidates.filter(a => !live.includes(a)).map(a => `${label(a)} (parked after a limit)`)
+  const plan = planAsk(candidates, null, parkedUntil, Date.now())
+  const live = plan.live
+  const parked = plan.parked.map(a => `${label(a)} (parked after a limit)`)
   const failures: string[] = []
   for (const acc of live) {
     try {
@@ -190,6 +192,18 @@ export async function askChat(opts: { prompt: string; account?: string | null; c
     }
   }
   return { ok: false, error: `no ChatGPT account could answer: ${[...failures, ...parked].join(', ') || 'none configured'}` }
+}
+
+/**
+ * What the old `ask_chatgpt` returned: plain text. Any image ChatGPT drew is
+ * saved and listed as flowdesk-image:// links after the answer. A failure
+ * throws, as the old path did.
+ */
+export async function askChatgptText(prompt: string): Promise<string> {
+  const r = await askChat({ prompt })
+  if (!r.ok) throw new Error(r.error ?? 'ChatGPT did not answer')
+  const links = (r.images ?? []).map(i => i.url)
+  return [r.text ?? '', links.length ? `Images:\n${links.join('\n')}` : '', r.chatId ? `(chat ${r.chatId} on ${r.account})` : ''].filter(Boolean).join('\n\n')
 }
 
 // ── library, search, download ───────────────────────────────────────────────

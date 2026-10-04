@@ -35,6 +35,7 @@ const COMPOSER = 'div.ProseMirror[contenteditable="true"], #prompt-textarea'
 const SUBMIT_TIMEOUT_MS = 90_000
 const TURN_TIMEOUT_MS = 15 * 60_000
 const POLL_MS = 4_000
+const NUDGE = 'Please create the image now.'
 
 export interface SavedImage { url: string; path: string; width?: number; height?: number; title?: string | null }
 
@@ -48,6 +49,8 @@ export interface ImageJob {
   continueIn?: { partition: string; conversationId: string }
   preferred?: string | null
   status: 'queued' | 'running' | 'done' | 'failed'
+  /** What a running job is doing right now, for progress display. */
+  stage?: string
   account?: string
   partition?: string
   conversationId?: string
@@ -289,14 +292,18 @@ class AccountRefused extends Error {
 
 async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
   const cont = job.continueIn && job.continueIn.partition === acc.partition ? job.continueIn : null
+  job.stage = 'opening ChatGPT'
   const wc = await workerFor(acc.partition, cont ? `https://chatgpt.com/c/${cont.conversationId}` : NEW_IMAGE_CHAT)
 
+  job.stage = 'checking the image limit'
   const q = await readQuota(acc, wc)
   if (!q.loggedIn) throw new AccountRefused('login', 'not signed in to ChatGPT')
   if (!isUsable(q, Date.now())) throw new AccountRefused('quota', 'no image generations left')
 
-  if (!cont && job.files.length) await attachFiles(wc, job.files)
+  if (!cont && job.files.length) { job.stage = 'uploading the source image'; await attachFiles(wc, job.files) }
+  job.stage = 'sending the prompt'
   await typeAndSend(wc, job.prompt)
+  job.stage = 'ChatGPT is generating'
 
   const conversationId = cont?.conversationId ?? await waitFor(async () => {
     const m = wc.getURL().match(/\/c\/([0-9a-f-]{36})/)
@@ -311,11 +318,16 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
   const end = Date.now() + TURN_TIMEOUT_MS
   let lastCount = -1
   let stableSince = 0
+  // A prompt that reads like a caption ("a red boat, flat illustration") can be
+  // answered with text alone (seen live, 2026-10-04). One follow-up in the same
+  // chat asks for the picture; a second text-only answer is reported as it is.
+  let awaiting = job.prompt
+  let nudged = false
   while (Date.now() < end) {
     await sleep(POLL_MS)
     const conv = await wc.executeJavaScript(conversationScript(conversationId)).catch(() => null) as { ok: boolean; nodes?: ConvNode[]; error?: string } | null
     if (!conv?.ok || !conv.nodes) continue
-    const turn = readTurn(conv.nodes, job.prompt)
+    const turn = readTurn(conv.nodes, awaiting)
     if (turn.images.length !== lastCount) { lastCount = turn.images.length; stableSince = Date.now() }
     const settled = turn.state === 'done' || (turn.images.length > 0 && Date.now() - stableSince > 20_000)
     if (!settled) continue
@@ -323,8 +335,17 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
     if (turn.images.length === 0) {
       const text = turn.state === 'done' ? turn.text : ''
       if (classifyRefusal(text) === 'quota') throw new AccountRefused('quota', text.slice(0, 300))
+      if (!nudged) {
+        nudged = true
+        awaiting = NUDGE
+        job.stage = 'ChatGPT answered in text, asking it to draw'
+        await typeAndSend(wc, NUDGE)
+        lastCount = -1
+        continue
+      }
       throw new Error(`ChatGPT answered without an image: ${text.slice(0, 400)}`)
     }
+    job.stage = `saving ${turn.images.length} image${turn.images.length === 1 ? '' : 's'}`
     for (const img of turn.images) job.images.push(await saveImage(wc, acc.partition, conversationId, img))
     job.text = turn.state === 'done' ? turn.text : undefined
     return
@@ -542,7 +563,9 @@ export function openChatgptLogin(partition: string): { ok: boolean; error?: stri
 /** Shape returned to callers: no partitions of other accounts, no raw emails. */
 export function publicJob(j: ImageJob) {
   return {
-    id: j.id, kind: j.kind, status: j.status, account: j.account ?? null,
+    id: j.id, kind: j.kind, status: j.status,
+    stage: j.status === 'queued' ? 'waiting for a free account' : j.status === 'running' ? (j.stage ?? 'starting') : null,
+    account: j.account ?? null,
     conversationId: j.conversationId ?? null,
     images: j.images, text: j.text ? j.text.slice(0, 600) : null, error: j.error ?? null,
     retriedOn: j.tried.length, seconds: Math.round(((j.finishedAt ?? Date.now()) - j.createdAt) / 1000),

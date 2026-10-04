@@ -98,7 +98,7 @@ let guard: Guard = (_m, _p, run) => run()
 import { askBrowserProvider, workerProgress } from '../agent/browserWorkerQueue'
 import { radarCollectOnce, radarReportFor, radarStatus, startRadar, stopRadar } from '../tiktok/tiktokRadar'
 import { loadNiches, removeNiche, upsertNiche } from '../tiktok/tiktokRadarStore'
-import { askChat, downloadImage, imageLibrary, listChats, readChat, searchChats, updateChat } from '../chatgptChats'
+import { askChat, askChatgptText, downloadImage, imageLibrary, listChats, readChat, searchChats, updateChat } from '../chatgptChats'
 import { enqueueImages, imageAccounts, listJobs, openChatgptLogin, publicJob, waitForJob, type ImageRequest } from '../chatgptImages'
 import { openHudWidget, closeHudWidget, getHudStatus } from '../hudWidget'
 import {
@@ -145,8 +145,10 @@ async function runImageJobs(req: ImageRequest, wait: boolean) {
   const jobs = await enqueueImages(req)
   if (wait) await Promise.all(jobs.map(j => waitForJob(j, 14 * 60_000)))
   const out = jobs.map(publicJob)
+  const count = (s: string) => out.filter(j => j.status === s).length
   return {
     ok: out.some(j => j.status === 'done') || (!wait && out.length > 0),
+    progress: { total: out.length, done: count('done'), running: count('running'), queued: count('queued'), failed: count('failed') },
     jobs: out,
     images: out.flatMap(j => j.images),
     ...(out.some(j => j.status === 'queued' || j.status === 'running') ? { note: 'some jobs are still running — read them with chatgpt.imageJobs' } : {}),
@@ -507,7 +509,8 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'tiktok.apiBatchOutliers': async (p) => tkApiBatchOutliers(Array.isArray(p.creators) ? p.creators.map(String) : [], typeof p.minMultiplier === 'number' ? p.minMultiplier : 2.5, typeof p.account === 'string' || typeof p.account === 'number' ? p.account : undefined),
 
   // AI Browser Workers (via user's logged-in desktop sessions)
-  'ask.chatgpt': async (p) => askBrowserProvider('chatgpt', String(p.prompt || '')),
+  // ChatGPT goes through electron/chatgptChats.ts: its own chat per call, per-account queue, limit failover.
+  'ask.chatgpt': async (p) => askChatgptText(String(p.prompt || '')),
   'ask.claude': async (p) => askBrowserProvider('claude', String(p.prompt || '')),
   'ask.gemini': async (p) => askBrowserProvider('gemini', String(p.prompt || '')),
   'ask.grok': async (p) => askBrowserProvider('grok', String(p.prompt || '')),

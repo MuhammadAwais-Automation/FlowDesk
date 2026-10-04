@@ -93,6 +93,23 @@ export function mapChatSearch(body: unknown): ChatHit[] {
   })
 }
 
+/**
+ * Which accounts a text send may use, in order. A chat that already exists
+ * lives on one account and gets only that one; otherwise the preferred account
+ * goes first, then the rest. An account parked after a limit is skipped until
+ * its park time passes, and reported separately so the error can say why.
+ */
+export function planAsk<T extends { partition: string }>(
+  all: T[],
+  preferred: T | null,
+  parkedUntil: Map<string, number>,
+  now: number,
+): { live: T[]; parked: T[] } {
+  const ordered = preferred ? [preferred, ...all.filter(a => a.partition !== preferred.partition)] : [...all]
+  const isParked = (a: T) => (parkedUntil.get(a.partition) ?? 0) > now
+  return { live: ordered.filter(a => !isParked(a)), parked: ordered.filter(isParked) }
+}
+
 const iso = (t: number | null | undefined) => (typeof t === 'number' && t > 0 ? new Date(t * 1000).toISOString() : null)
 
 /**
