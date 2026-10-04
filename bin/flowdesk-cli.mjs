@@ -916,6 +916,34 @@ async function main() {
     }
   }
 
+  // ── SOCIAL ACCOUNTS (electron/socialAccounts.ts) ───────────────────────────
+  if (command === 'social') {
+    const sub = rawArgs[1]
+    const { flags, positional } = parseFlags(rawArgs.slice(2))
+    const fail = (msg) => { console.error(`\x1b[31m${msg}\x1b[0m`); process.exitCode = 1 }
+    const platforms = ['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook']
+    if (sub === 'accounts') {
+      const platform = positional[0]
+      if (platform && !platforms.includes(platform)) return fail(`platform must be one of ${platforms.join(', ')}`)
+      const res = await callRpc('social.accounts', { platform })
+      for (const a of res.accounts) console.log(`${a.platform.padEnd(9)} ${a.id.padEnd(3)} ${String(a.signedIn === null ? 'unknown' : a.signedIn ? 'signed in' : 'signed out').padEnd(11)} ${a.label}  (${a.partition})`)
+      return
+    }
+    if (sub === 'add') {
+      if (!platforms.includes(positional[0])) return fail(`Usage: flowdesk social add <${platforms.join('|')}> [--label "<name>"]`)
+      const res = await callRpc('social.addAccount', { platform: positional[0], label: typeof flags.label === 'string' ? flags.label : undefined })
+      if (!res.ok) return fail(res.error)
+      console.log(`added ${res.account.platform} account ${res.account.id} (${res.account.label}). Sign it in: flowdesk social login ${res.account.platform} ${res.account.id}`)
+      return
+    }
+    if (sub === 'login') {
+      if (!platforms.includes(positional[0])) return fail(`Usage: flowdesk social login <${platforms.join('|')}> [accountId]`)
+      const res = await callRpc('social.openLogin', { platform: positional[0], account: positional[1] })
+      return res.ok ? console.log(`sign-in window opened for ${res.account.platform} account ${res.account.id}`) : fail(res.error)
+    }
+    return fail('Usage: flowdesk social <accounts [platform]|add <platform> [--label name]|login <platform> [accountId]>')
+  }
+
   // ── CHATGPT (electron/chatgptChats.ts + chatgptImages.ts) ──────────────────
   if (command === 'chatgpt') {
     const sub = rawArgs[1]
@@ -1334,6 +1362,10 @@ Usage:
 
   flowdesk ask <chatgpt|claude|gemini|grok|perplexity> "<prompt>"
                                                      Query AI models via logged-in sessions
+
+  flowdesk social accounts [platform]                Every social account and whether it is signed in
+  flowdesk social add <platform> [--label name]      Add an account slot (whatsapp|tiktok|linkedin|reddit|facebook)
+  flowdesk social login <platform> [accountId]       Open a sign-in window for that account
 
   flowdesk chatgpt accounts                          Sign-in, plan and image quota per account
   flowdesk chatgpt login <partition>                 Open a ChatGPT sign-in window for one account
