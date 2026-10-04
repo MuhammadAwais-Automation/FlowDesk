@@ -76,3 +76,12 @@ All with `Authorization: Bearer <accessToken>` from `/api/auth/session`.
 | `/backend-api/images/library`, `/files`, `/aip/connectors/list_accessible`, `/experimental/prompt_suggestions` | 404 / 403: not usable |
 
 Not captured yet: a text-limit refusal, and the image-size / style options the composer sends.
+
+## Sending a message (probes cg-23, cg-24, cg-25 + CDP capture; live 2026-10-04)
+
+- The page sends `POST /backend-api/f/conversation` (`accept: text/event-stream`). Body: `action:"next"`, `messages[{id, author.role:"user", content{content_type:"text", parts[...]}}]`, `parent_message_id` (`client-created-root` for a new chat), `model` (`"auto"` by default), `system_hints` (`["picture_v2"]` = image mode, `[]` = text), `conversation_mode`, `timezone`, `client_contextual_info`, …
+- It is preceded by `POST /backend-api/sentinel/chat-requirements/prepare` + `/finalize` and `POST /backend-api/f/conversation/prepare`, and carries `OpenAI-Sentinel-Chat-Requirements-Token`, `OpenAI-Sentinel-Proof-Token`, `OpenAI-Sentinel-Turnstile-Token`, `x-conduit-token`, `X-OAI-IS-Client-Observation`. These are ChatGPT's anti-bot tokens, minted by the page's own code. **We do not generate or forge them.**
+- What FlowDesk does instead (`setSendOverrides` in chatgptImages.ts): the real page builds and sends the request, so the tokens are genuine; a fetch hook only overrides plain body fields (`model`, `system_hints`).
+- `GET /backend-api/models?history_and_training_disabled=false` lists model slugs. A slug the account cannot use (seen: `gpt-5-3-mini` on a free account) makes ChatGPT end the turn with no reply.
+- `GET /backend-api/conversation/{id}/stream_status` answers `{"status":"COMPLETE"}` once a turn is over, including a turn that ended with no reply. COMPLETE + no assistant message = failed send.
+- Uploads (`POST /backend-api/files`, PUT to blob storage, `POST /backend-api/files/process_upload_stream`) showed no Sentinel headers in the capture; not built yet.
