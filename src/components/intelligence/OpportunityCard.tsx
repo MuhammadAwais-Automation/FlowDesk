@@ -1,4 +1,5 @@
-import { Check, Clock3, ExternalLink, X } from 'lucide-react'
+import { useState } from 'react'
+import { Check, CheckCheck, Clock3, Copy, ExternalLink, Sparkles, X } from 'lucide-react'
 import { citationHref } from '@/lib/shellLinkDecision'
 import type { BrainOpportunity, BrainScope, OpportunityEvidence } from '@/types/brain'
 
@@ -13,7 +14,39 @@ const categoryLabels: Record<BrainOpportunity['category'], string> = {
 
 function platformLabel(platform: string) {
   if (platform.toLocaleLowerCase() === 'linkedin') return 'LinkedIn'
+  if (platform.toLocaleLowerCase() === 'reddit') return 'Reddit'
   return `${platform.charAt(0).toUpperCase()}${platform.slice(1)}`
+}
+
+function generatePitch(opportunity: BrainOpportunity): string {
+  const title = opportunity.title.replace(/^(?:direct lead|warm opportunity|market signal) signal for /i, '')
+  const text = (title + ' ' + opportunity.summary).toLowerCase()
+  const isMobile = /flutter|mobile|ios|android/i.test(text)
+  const isAi = /ai|agent|automation|bot|scrap|reverse/i.test(text)
+
+  let specialization = 'Flutter & Next.js/TypeScript architecture with Supabase'
+  if (isMobile) {
+    specialization = 'production Flutter applications with offline-first local sync and real-time backend infrastructure'
+  } else if (isAi) {
+    specialization = 'full-stack AI systems with reverse-engineered browser automation, local agent workflows, and Claude Agent SDK'
+  }
+
+  return `Hi,
+
+Saw your post regarding ${title}.
+
+I am a full-stack engineer specializing in ${specialization}.
+
+A relevant system I built:
+- An enterprise operational system supporting 4,491 active users with field-tech mobile apps and automated real-time billing.
+- Desktop AI platform with reverse-engineered browser automation, event queues, and resilient IPC/RPC bridges.
+
+I can jump in, audit the requirements, and have a functional MVP or core implementation running quickly.
+
+Let me know if you'd like to review a quick loom/architecture demo or discuss the deliverables.
+
+Best,
+Muhammad Awais`
 }
 
 export function OpportunityCard({ opportunity, scope, evidence, busy = false, onQualify, onDismiss, onExpand }: {
@@ -28,6 +61,18 @@ export function OpportunityCard({ opportunity, scope, evidence, busy = false, on
    * instead of one IPC round trip per opportunity on every refresh. */
   onExpand?: (id: string) => void
 }) {
+  const [showPitch, setShowPitch] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const isLead = opportunity.category === 'direct_lead' || opportunity.score >= 60
+  const pitchText = showPitch ? generatePitch(opportunity) : ''
+
+  function copyPitch() {
+    navigator.clipboard.writeText(pitchText)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
   // Retention has purged the sources behind `stale` rows, so they are citations
   // in name only. Once the rail has been read, the count says how many can
   // still be followed rather than repeating a total that includes dead ones.
@@ -65,9 +110,19 @@ export function OpportunityCard({ opportunity, scope, evidence, busy = false, on
             </div>)}
           </div>
         </details>
-        {opportunity.status !== 'dismissed' && opportunity.status !== 'converted' && <div className="mt-4 flex flex-wrap gap-2">
+        {opportunity.status !== 'dismissed' && opportunity.status !== 'converted' && <div className="mt-4 flex flex-wrap items-center gap-2">
           {opportunity.status !== 'qualified' && <button disabled={busy} onClick={() => onQualify(opportunity.id)} aria-label="Qualify opportunity" className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><Check size={14} /> Qualify</button>}
+          {isLead && <button onClick={() => setShowPitch(!showPitch)} className="inline-flex items-center gap-1.5 rounded-lg bg-violet-700 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-800"><Sparkles size={14} /> {showPitch ? 'Hide Pitch' : 'Draft Value Pitch'}</button>}
           <button disabled={busy} onClick={() => onDismiss(opportunity.id)} aria-label="Dismiss opportunity" className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-semibold text-stone-700 disabled:opacity-50"><X size={14} /> Dismiss</button>
+        </div>}
+        {showPitch && <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50/70 p-4">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-xs font-bold text-violet-900"><Sparkles size={13} /> Tailored Value-First Pitch</span>
+            <button onClick={copyPitch} className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-100">
+              {copied ? <><CheckCheck size={13} className="text-emerald-600" /> Copied!</> : <><Copy size={13} /> Copy Pitch</>}
+            </button>
+          </div>
+          <pre className="mt-3 whitespace-pre-wrap font-sans text-xs leading-5 text-stone-800">{pitchText}</pre>
         </div>}
       </div>
     </div>

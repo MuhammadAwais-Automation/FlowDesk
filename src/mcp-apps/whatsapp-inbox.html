@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlowDesk WhatsApp Inbox</title>
+  <style>
+    :root {
+      --bg: #0b141a;
+      --panel-bg: #111b21;
+      --chat-bg: #0c1317;
+      --bubble-in: #202c33;
+      --bubble-out: #005c4b;
+      --accent: #25d366;
+      --accent-dim: #00a884;
+      --text: #e9edef;
+      --text-dim: #8696a0;
+      --border: #222e35;
+      --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font); }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .header {
+      background: var(--panel-bg);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #000;
+      font-weight: 800;
+      font-size: 15px;
+    }
+    .title { font-size: 15px; font-weight: 600; }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--accent);
+      background: rgba(37, 211, 102, 0.12);
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-weight: 600;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
+    }
+    .main-container {
+      display: flex;
+      flex: 1;
+      height: calc(100vh - 54px);
+    }
+    .chat-list-panel {
+      width: 320px;
+      background: var(--panel-bg);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    .search-box-wrap {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .search-input {
+      width: 100%;
+      background: #202c33;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 7px 12px;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+    }
+    .search-input:focus { border-color: var(--accent-dim); }
+    .chat-items {
+      flex: 1;
+      overflow-y: auto;
+    }
+    .chat-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      transition: background 0.15s;
+    }
+    .chat-item:hover, .chat-item.active { background: #202c33; }
+    .avatar {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: #374248;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      color: #cfd9df;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    .chat-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .chat-top {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 3px;
+    }
+    .chat-name {
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chat-time {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .chat-preview-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .chat-preview {
+      font-size: 12px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .unread-badge {
+      background: var(--accent);
+      color: #000;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 800;
+      padding: 1px 6px;
+      min-width: 18px;
+      text-align: center;
+    }
+    .conversation-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--chat-bg);
+      position: relative;
+    }
+    .conv-header {
+      padding: 10px 16px;
+      background: var(--panel-bg);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .messages-area {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg-bubble {
+      max-width: 68%;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.4;
+      position: relative;
+    }
+    .msg-in {
+      align-self: flex-start;
+      background: var(--bubble-in);
+      border-top-left-radius: 2px;
+    }
+    .msg-out {
+      align-self: flex-end;
+      background: var(--bubble-out);
+      border-top-right-radius: 2px;
+    }
+    .msg-meta {
+      font-size: 10px;
+      color: rgba(255,255,255,0.5);
+      text-align: right;
+      margin-top: 4px;
+    }
+    .reply-bar {
+      padding: 10px 14px;
+      background: var(--panel-bg);
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .reply-input {
+      flex: 1;
+      background: #2a3942;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+    }
+    .reply-input:focus { border-color: var(--accent-dim); }
+    .send-btn {
+      background: var(--accent-dim);
+      color: #fff;
+      border: none;
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: opacity 0.2s;
+    }
+    .send-btn:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <div class="logo">WA</div>
+      <div>
+        <div class="title">WhatsApp Web Hub</div>
+        <div style="font-size: 11px; color: var(--text-dim);">Live MCP App Extension</div>
+      </div>
+    </div>
+    <div class="status-badge">
+      <div class="status-dot"></div>
+      <span>Session Connected</span>
+    </div>
+  </div>
+
+  <div class="main-container">
+    <div class="chat-list-panel">
+      <div class="search-box-wrap">
+        <input class="search-input" placeholder="Search chats..." id="search-box" oninput="filterChats()" />
+      </div>
+      <div class="chat-items" id="chat-items">
+        <!-- Sample/dynamic items -->
+        <div class="chat-item active" onclick="selectChat('Tech Group', '+1 555-0192')">
+          <div class="avatar">TG</div>
+          <div class="chat-info">
+            <div class="chat-top">
+              <span class="chat-name">Tech & Automation Group</span>
+              <span class="chat-time">11:42 AM</span>
+            </div>
+            <div class="chat-preview-row">
+              <span class="chat-preview">The new headless bot workflow is live...</span>
+              <span class="unread-badge">3</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-item" onclick="selectChat('Sarah Client', '+1 555-0143')">
+          <div class="avatar">SC</div>
+          <div class="chat-info">
+            <div class="chat-top">
+              <span class="chat-name">Sarah Client</span>
+              <span class="chat-time">Yesterday</span>
+            </div>
+            <div class="chat-preview-row">
+              <span class="chat-preview">Can you send over the video campaign report?</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="conversation-panel">
+      <div class="conv-header">
+        <div>
+          <div class="chat-name" id="active-chat-name">Tech & Automation Group</div>
+          <div style="font-size: 11px; color: var(--text-dim);" id="active-chat-id">+1 555-0192@c.us</div>
+        </div>
+        <div style="font-size: 12px; color: var(--accent);">● Encrypted Session</div>
+      </div>
+
+      <div class="messages-area" id="messages-area">
+        <div class="msg-bubble msg-in">
+          Hey team, did we verify the TikTok upload schedule for this week?
+          <div class="msg-meta">11:38 AM</div>
+        </div>
+        <div class="msg-bubble msg-out">
+          Yes! FlowDesk headless worker prepared the video queue automatically.
+          <div class="msg-meta">11:40 AM ✓✓</div>
+        </div>
+        <div class="msg-bubble msg-in">
+          Awesome! Send the confirmation once published.
+          <div class="msg-meta">11:42 AM</div>
+        </div>
+      </div>
+
+      <div class="reply-bar">
+        <input class="reply-input" id="reply-text" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendReply()" />
+        <button class="send-btn" onclick="sendReply()">Send ➤</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentChatId = '+1 555-0192@c.us'
+
+    window.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'flowdesk_whatsapp_chats') {
+        renderChats(event.data.payload)
+      }
+    })
+
+    function selectChat(name, id) {
+      document.getElementById('active-chat-name').textContent = name
+      document.getElementById('active-chat-id').textContent = id
+      currentChatId = id
+    }
+
+    function sendReply() {
+      const input = document.getElementById('reply-text')
+      const text = input.value.trim()
+      if (!text) return
+
+      const area = document.getElementById('messages-area')
+      const msg = document.createElement('div')
+      msg.className = 'msg-bubble msg-out'
+      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      msg.innerHTML = `${text}<div class="msg-meta">${time} ✓✓</div>`
+      area.appendChild(msg)
+      area.scrollTop = area.scrollHeight
+      input.value = ''
+
+      if (window.parent) {
+        window.parent.postMessage({ type: 'mcp_app_action', action: 'whatsapp_send', payload: { chatId: currentChatId, text } }, '*')
+      }
+      alert(`[FlowDesk WhatsApp] Sent message to ${currentChatId}:\n"${text}"`)
+    }
+
+    function renderChats(chats) {
+      if (!Array.isArray(chats)) return
+      const container = document.getElementById('chat-items')
+      container.innerHTML = ''
+      chats.forEach((c, i) => {
+        const item = document.createElement('div')
+        item.className = 'chat-item' + (i === 0 ? ' active' : '')
+        item.onclick = () => selectChat(c.name || c.id, c.id)
+        const initials = (c.name || 'WA').slice(0, 2).toUpperCase()
+        item.innerHTML = `
+          <div class="avatar">${initials}</div>
+          <div class="chat-info">
+            <div class="chat-top">
+              <span class="chat-name">${c.name || c.id}</span>
+              <span class="chat-time">${c.time || ''}</span>
+            </div>
+            <div class="chat-preview-row">
+              <span class="chat-preview">${c.lastMessage || 'No recent messages'}</span>
+              ${c.unreadCount ? `<span class="unread-badge">${c.unreadCount}</span>` : ''}
+            </div>
+          </div>
+        `
+        container.appendChild(item)
+      })
+    }
+  </script>
+</body>
+</html>

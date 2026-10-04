@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Sigma from 'sigma'
 import { AreaLabels } from './AreaLabels'
+import { MiniMap } from './MiniMap'
 import { BAND_RULES, bandForRatio, buildAtlasGraph, regionCentroids, type AtlasRegion, type ZoomBand } from '@/lib/atlasGraph'
 import { fitBox } from '@/lib/atlasSearch'
 import { OBSERVATORY } from '@/lib/atlasTheme'
-import type { KnowledgeGraph } from '@/types/brainKnowledge'
+import type { KnowledgeDocType, KnowledgeGraph } from '@/types/brainKnowledge'
 
 /**
  * The map itself. No chrome — the command bar, status strip and drawer float
@@ -30,6 +31,7 @@ export function AtlasCanvas({ graph, selectedPath, matches, highlighted, fitTo, 
   const sigmaRef = useRef<Sigma | null>(null)
   const [band, setBand] = useState<ZoomBand>('mid')
   const [regions, setRegions] = useState<AtlasRegion[]>([])
+  const [viewport, setViewport] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
   const [, setProjectionTick] = useState(0)
   const paint = useRef({ band: 'mid' as ZoomBand, hovered: null as string | null, matches, highlighted, selectedPath })
 
@@ -94,6 +96,21 @@ export function AtlasCanvas({ graph, selectedPath, matches, highlighted, fitTo, 
       // Region labels are positioned in screen space, so they move with every
       // pan as well as every zoom.
       setProjectionTick(tick => tick + 1)
+      try {
+        const dim = instance.getDimensions()
+        if (dim.width > 0 && dim.height > 0) {
+          const tl = instance.viewportToGraph({ x: 0, y: 0 })
+          const br = instance.viewportToGraph({ x: dim.width, y: dim.height })
+          setViewport({
+            x: Math.min(tl.x, br.x),
+            y: Math.min(tl.y, br.y),
+            width: Math.abs(br.x - tl.x),
+            height: Math.abs(br.y - tl.y),
+          })
+        }
+      } catch {
+        // Safe if container is unmeasured
+      }
     }
     camera.on('updated', onCamera)
 
@@ -140,6 +157,31 @@ export function AtlasCanvas({ graph, selectedPath, matches, highlighted, fitTo, 
     }, { duration: 350 })
   }, [fitTo, built])
 
+  const miniMapNodes = useMemo(() => {
+    if (!built) return []
+    return built.nodes().map(path => ({
+      path,
+      title: (built.getNodeAttribute(path, 'label') as string) || path,
+      type: built.getNodeAttribute(path, 'docType') as KnowledgeDocType,
+      x: Number(built.getNodeAttribute(path, 'x') ?? 0),
+      y: Number(built.getNodeAttribute(path, 'y') ?? 0),
+      color: built.getNodeAttribute(path, 'color') as string,
+      degree: Number(built.getNodeAttribute(path, 'degree') ?? 0),
+    }))
+  }, [built])
+
+  const handleMiniMapNavigate = (coords: { x: number; y: number }) => {
+    const instance = sigmaRef.current
+    if (!instance) return
+    const toFramed = (point: { x: number; y: number }) =>
+      instance.viewportToFramedGraph(instance.graphToViewport(point))
+    const framed = toFramed(coords)
+    void instance.getCamera().animate({
+      x: framed.x,
+      y: framed.y,
+    }, { duration: 300 })
+  }
+
   if (!graph) {
     return (
       <div className="flex h-full items-center justify-center font-retro-mono text-xs" style={{ background: OBSERVATORY.canvas, color: OBSERVATORY.dim }}>
@@ -158,6 +200,17 @@ export function AtlasCanvas({ graph, selectedPath, matches, highlighted, fitTo, 
         <div className="absolute inset-0 flex items-center justify-center font-retro-mono text-xs" style={{ color: OBSERVATORY.dim }}>
           Is scope mein koi document nahi.
         </div>
+      )}
+      {graph.nodes.length > 0 && (
+        <MiniMap
+          graph={graph}
+          nodes={miniMapNodes}
+          viewport={viewport}
+          selectedPath={selectedPath}
+          onNavigate={handleMiniMapNavigate}
+          onSelectNode={onSelect}
+          className="bottom-14 right-4"
+        />
       )}
     </div>
   )

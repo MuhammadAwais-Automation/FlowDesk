@@ -11,7 +11,7 @@ const sourceRecipes: Record<string, string[]> = {
   notebooklm: ['notebooklm.research', 'notebooklm.artifact'],
   whatsapp: ['whatsapp.unread_intelligence'],
   linkedin: ['linkedin.opportunity_scan', 'linkedin.community_scan'],
-  reddit: [],
+  reddit: ['reddit.lead_sniper'],
 }
 
 /** Consent is per-scope AND per-recipe, so every declared recipe is read. */
@@ -452,6 +452,6 @@ function Sources({ jobs, consents, onRun }: { jobs: BrainJob[]; consents: Consen
           banner when the ledger has no grant yet. */}
       <p className="mt-1 text-[11px] text-stone-500">{control.recipeId}: {consentLabels[consents.recipes[control.recipeId] ?? 'unknown']}</p>
     </div>
-    })}{source.id === 'reddit' &&<p className="mt-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">Live capture excluded; fake data show nahi hogi.</p>}</section>
+    })}</section>
   })}</div>
 }

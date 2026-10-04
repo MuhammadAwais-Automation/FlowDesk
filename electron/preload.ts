@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Store
   storeGet: (key: string) => ipcRenderer.invoke('store:get', key),
   storeSet: (key: string, value: unknown) => ipcRenderer.invoke('store:set', key, value),
+  actionPolicyGet: () => ipcRenderer.invoke('actionPolicy:get'),
+  actionPolicySet: (policy: { blocked: string[]; requireApproval: string[] }) => ipcRenderer.invoke('actionPolicy:set', policy),
+  actionPolicyLog: (limit?: number) => ipcRenderer.invoke('actionPolicy:log', limit),
 
   brainGetStatus: () => ipcRenderer.invoke('brain:getStatus'),
   brainGetActiveScope: () => ipcRenderer.invoke('brain:getActiveScope'),
@@ -103,7 +106,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   notebooklmGenerateArtifact: (request: unknown) => ipcRenderer.invoke('notebooklm:generateArtifact', request),
   notebooklmDownloadArtifact: (notebookId: string, kind: string, artifactId?: string, format?: string) => ipcRenderer.invoke('notebooklm:downloadArtifact', notebookId, kind, artifactId, format),
   notebooklmManage: (action: string, payload?: unknown) => ipcRenderer.invoke('notebooklm:manage', action, payload),
-  // Short Studio aliases used by the page layer.
+  // Short NotebookLM aliases used by the page layer.
   notebooksList: () => ipcRenderer.invoke('notebooklm:listNotebooks'),
   notebooksCreate: (input: { title: string }) => ipcRenderer.invoke('notebooklm:createNotebook', input.title),
   sourcesAdd: (input: { notebookId: string; type: 'url' | 'text'; value: string; title?: string }) =>
@@ -127,7 +130,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   switchView: (tabId: string, partition: string, url: string) =>
     ipcRenderer.invoke('view:switch', tabId, partition, url),
   closeView: (tabId: string) => ipcRenderer.invoke('view:close', tabId),
-  hideView: () => ipcRenderer.invoke('view:hide'),
+  hideView: (tabId?: string) => ipcRenderer.invoke('view:hide', tabId),
   injectPrompt: (text: string, tool: string) => ipcRenderer.invoke('view:inject', text, tool),
   injectToTab: (tabId: string, text: string, tool: string) => ipcRenderer.invoke('view:injectToTab', tabId, text, tool),
   getSelectedText: () => ipcRenderer.invoke('view:getSelection'),
@@ -143,6 +146,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   viewSetDockWidth: (w: number) => ipcRenderer.invoke('view:setDockWidth', w),
   clearPartitionStorage: (partition: string) =>
     ipcRenderer.invoke('session:clearPartition', partition),
+
+  // TikTok Multi-Account state sync
+  tiktokSetActiveAccount: (account: string | number) =>
+    ipcRenderer.invoke('tiktok:setActiveAccount', account),
+  onTikTokAccountSwitched: (cb: (accountId: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, accountId: string) => cb(accountId)
+    ipcRenderer.on('tiktok:accountSwitched', listener)
+    return () => ipcRenderer.removeListener('tiktok:accountSwitched', listener)
+  },
+
+  // LinkedIn Multi-Account state sync
+  linkedinSetActiveAccount: (account: string | number) =>
+    ipcRenderer.invoke('linkedin:setActiveAccount', account),
+  linkedinGetAccounts: () =>
+    ipcRenderer.invoke('linkedin:getAccounts'),
+  linkedinSaveAccounts: (accounts: unknown) =>
+    ipcRenderer.invoke('linkedin:saveAccounts', accounts),
+  onLinkedInAccountSwitched: (cb: (accountId: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, accountId: string) => cb(accountId)
+    ipcRenderer.on('linkedin:accountSwitched', listener)
+    return () => ipcRenderer.removeListener('linkedin:accountSwitched', listener)
+  },
 
   // Gmail session management
   gmailList: () => ipcRenderer.invoke('gmail:list'),
@@ -221,13 +246,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('capture:ids', cb),
   offCaptureIds: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('capture:ids', cb),
 
-  // Universal Chat: one background worker tab per provider
-  universalChatEnsureView: (provider: string) => ipcRenderer.invoke('universalChat:ensureView', provider),
-  universalChatSend: (tabId: string, text: string, tool: string) => ipcRenderer.invoke('universalChat:send', tabId, text, tool),
-  universalChatStart: (input: { sessionId: string; provider: string; text: string }) => ipcRenderer.invoke('universalChat:start', input),
-  universalChatGetRunState: (sessionId?: string) => ipcRenderer.invoke('universalChat:getRunState', sessionId),
-  onUniversalChatEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.on('universalChat:event', cb),
-  offUniversalChatEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('universalChat:event', cb),
+  // Real-time image generation progress (ChatGPT DALL-E)
+  onCaptureImageProgress: (cb: (e: unknown, data: { tool: string; elapsedSeconds: number; percent: number; stage: string }) => void) =>
+    ipcRenderer.on('capture:imageProgress', cb),
+  offCaptureImageProgress: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('capture:imageProgress', cb),
 
   inlineDictationStart: (input: unknown) => ipcRenderer.invoke('inlineDictation:start', input),
   inlineDictationStop: (runId: string) => ipcRenderer.invoke('inlineDictation:stop', runId),
@@ -240,18 +262,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentSendMessage: (input: { prompt: string; sessionId: string; runId: string; brain?: { use: boolean; learn: boolean; temporary: boolean } }) => ipcRenderer.invoke('agent:sendMessage', input),
   agentGetRunState: () => ipcRenderer.invoke('agent:getRunState'),
 
-  // Studio canvas
-  studioListDocuments: () => ipcRenderer.invoke('studio:listDocuments'),
-  studioCreateDocument: (title?: string) => ipcRenderer.invoke('studio:createDocument', title),
-  studioReadHtml: (id: string) => ipcRenderer.invoke('studio:readHtml', id),
-  studioRenameDocument: (id: string, title: string) => ipcRenderer.invoke('studio:renameDocument', id, title),
-  studioDeleteDocument: (id: string) => ipcRenderer.invoke('studio:deleteDocument', id),
-  studioExportPng: (documentId: string, artboardId: string) => ipcRenderer.invoke('studio:exportPng', documentId, artboardId),
-  studioExportPdf: (documentId: string) => ipcRenderer.invoke('studio:exportPdf', documentId),
-  studioWriteArtboardHtml: (documentId: string, artboardId: string, html: string) =>
-    ipcRenderer.invoke('studio:writeArtboardHtml', documentId, artboardId, html),
-  onStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => ipcRenderer.on('studio:documentChanged', cb),
-  offStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => ipcRenderer.removeListener('studio:documentChanged', cb),
   agentSessionList: () => ipcRenderer.invoke('agentSession:list'),
   agentSessionCreate: (title?: string) => ipcRenderer.invoke('agentSession:create', title),
   agentSessionTurns: (id: string) => ipcRenderer.invoke('agentSession:turns', id),
@@ -295,6 +305,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
   whatsappListChats: (limit?: number, onlyUnread?: boolean) => ipcRenderer.invoke('whatsapp:listChats', limit, onlyUnread),
   whatsappListMessages: (chatId: string, limit?: number) => ipcRenderer.invoke('whatsapp:listMessages', chatId, limit),
   whatsappSend: (chatId: string, text: string) => ipcRenderer.invoke('whatsapp:send', chatId, text),
+
+  // Reddit bridge
+  redditStatus: () => ipcRenderer.invoke('reddit:status'),
+  redditFeed: (options?: unknown) => ipcRenderer.invoke('reddit:feed', options),
+  redditPostComments: (subreddit: string, postId: string, limit?: number) => ipcRenderer.invoke('reddit:postComments', subreddit, postId, limit),
+  redditSearch: (query: string, sort?: string, limit?: number) => ipcRenderer.invoke('reddit:search', query, sort, limit),
+  redditVotePost: (postId: string, voteState: 'UP' | 'DOWN' | 'NONE') => ipcRenderer.invoke('reddit:votePost', postId, voteState),
+  redditVoteComment: (commentId: string, voteState: 'UP' | 'DOWN' | 'NONE') => ipcRenderer.invoke('reddit:voteComment', commentId, voteState),
+  redditCreateComment: (postId: string, parentId: string, text: string) => ipcRenderer.invoke('reddit:createComment', postId, parentId, text),
+  redditCreatePost: (subreddit: string, title: string, body?: string) => ipcRenderer.invoke('reddit:createPost', subreddit, title, body),
+  redditSubscribe: (subredditId: string, subscribeState: 'SUBSCRIBED' | 'UNSUBSCRIBED') => ipcRenderer.invoke('reddit:subscribe', subredditId, subscribeState),
+  redditMarkRead: () => ipcRenderer.invoke('reddit:markRead'),
+
+  // Skills & Workflows
+  skillsList: (filter?: unknown) => ipcRenderer.invoke('skills:list', filter),
+  skillsGet: (id: string) => ipcRenderer.invoke('skills:get', id),
+  skillsSave: (skill: unknown) => ipcRenderer.invoke('skills:save', skill),
+  skillsDelete: (id: string) => ipcRenderer.invoke('skills:delete', id),
+  workflowsList: (filter?: unknown) => ipcRenderer.invoke('workflows:list', filter),
+  workflowsGet: (id: string) => ipcRenderer.invoke('workflows:get', id),
+  workflowsSave: (workflow: unknown) => ipcRenderer.invoke('workflows:save', workflow),
+  workflowsDelete: (id: string) => ipcRenderer.invoke('workflows:delete', id),
+  workflowsRun: (id: string, inputs?: unknown) => ipcRenderer.invoke('workflows:run', id, inputs),
+  workflowsRuns: () => ipcRenderer.invoke('workflows:runs'),
+  workflowsResume: (runId: string) => ipcRenderer.invoke('workflows:resume', runId),
 
 })
 

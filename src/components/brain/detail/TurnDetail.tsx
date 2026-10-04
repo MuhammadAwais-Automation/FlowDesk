@@ -60,26 +60,26 @@ export function TurnDetail({ event, events, onSelect }: {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold">{eventTime(event.createdAt)} · Agent turn</h2>
-        <p className="mt-1 truncate text-xs text-stone-500">{describeEvent(event)}</p>
+        <h2 className="text-lg font-semibold text-slate-100">{eventTime(event.createdAt)} · Agent turn</h2>
+        <p className="mt-1 truncate text-xs text-[#94a3b8]">{describeEvent(event)}</p>
       </div>
 
       {temporary
-        ? <p className="rounded-xl bg-stone-100 p-3 text-sm text-stone-600">
+        ? <p className="rounded-xl border border-[#2a3142] bg-[#1a2030] p-3 text-sm text-slate-200">
             Temporary mode — baat mehfooz nahi ki gayi, sirf kharcha.
           </p>
         : <div className="space-y-3">
             {question && <Bubble role="Aap" text={question.content} />}
             {assistant && <Bubble role="Agent" text={assistant.content} />}
-            {sessionId === null && <p className="text-sm text-stone-500">Is turn par koi session ref nahi hai.</p>}
+            {sessionId === null && <p className="text-sm text-[#94a3b8]">Is turn par koi session ref nahi hai.</p>}
             {sessionId !== null && (unavailable || (turns !== null && assistant === undefined)) &&
-              <p className="text-sm text-stone-500">Is turn ki baat ab mehfooz nahi — session store mein nahi mili.</p>}
-            {sessionId !== null && !unavailable && turns === null && <p className="text-sm text-stone-500">Load ho raha hai…</p>}
+              <p className="text-sm text-[#94a3b8]">Is turn ki baat ab mehfooz nahi — session store mein nahi mili.</p>}
+            {sessionId !== null && !unavailable && turns === null && <p className="text-sm text-[#94a3b8]">Load ho raha hai…</p>}
           </div>}
 
       {(cost !== null || duration !== null || input !== null) && <div>
-        <h3 className="text-sm font-semibold">Kharcha</h3>
-        <p className="mt-1 text-xs text-stone-600">
+        <h3 className="text-sm font-semibold text-slate-200">Kharcha</h3>
+        <p className="mt-1 text-xs text-slate-300">
           {[
             cost !== null ? `$${cost.toFixed(4)}` : null,
             duration !== null ? `${(duration / 1000).toFixed(1)}s` : null,
@@ -89,20 +89,20 @@ export function TurnDetail({ event, events, onSelect }: {
       </div>}
 
       {read.length > 0 && <div>
-        <h3 className="text-sm font-semibold">Kya padha</h3>
+        <h3 className="text-sm font-semibold text-slate-200">Kya padha</h3>
         <div className="mt-2 flex flex-wrap gap-2">
           {read.map(path => <button
             key={path}
             onClick={() => onSelect({ kind: 'document', path })}
-            className="max-w-full truncate rounded-full bg-stone-100 px-3 py-1 text-xs text-stone-600 hover:bg-stone-200"
+            className="max-w-full truncate rounded-full border border-[#2a3142] bg-[#1a2030] px-3 py-1 text-xs text-slate-300 hover:bg-white/10 hover:text-white"
           >{path}</button>)}
         </div>
       </div>}
 
       {actions.length > 0 && <div>
-        <h3 className="text-sm font-semibold">Duniya mein kya kiya</h3>
+        <h3 className="text-sm font-semibold text-slate-200">Duniya mein kya kiya</h3>
         <ul className="mt-2 space-y-1">
-          {actions.map(action => <li key={action.id} className={`text-xs ${action.metadata.failed === true ? 'text-red-600' : 'text-stone-600'}`}>
+          {actions.map(action => <li key={action.id} className={`text-xs ${action.metadata.failed === true ? 'text-red-400' : 'text-slate-300'}`}>
             {describeEvent(action)}
           </li>)}
         </ul>
@@ -113,9 +113,9 @@ export function TurnDetail({ event, events, onSelect }: {
 
 function Bubble({ role, text }: { role: string; text: string }) {
   return (
-    <div className="rounded-xl bg-stone-50 p-3">
-      <p className="text-xs font-semibold uppercase tracking-wide text-stone-400">{role}</p>
-      <p className="mt-1 whitespace-pre-wrap text-sm text-stone-700">{text}</p>
+    <div className="rounded-xl border border-[#2a3142] bg-[#1a2030] p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-amber-500">{role}</p>
+      <p className="mt-1 whitespace-pre-wrap text-sm text-slate-200">{text}</p>
     </div>
   )
 }

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useWorkspaceStore } from '@/store/useWorkspaceStore'
 import { useThemeStore } from '@/store/useThemeStore'
 import {
-  Monitor, Layers, Info, Plus, Trash2, Bot,
-  Check, Zap
+  Monitor, Info, Bot,
+  Check, Zap, Shield, RefreshCw,
 } from 'lucide-react'
 import type { AppSettings } from '@/types/database'
+import type { ActionLogEntry, ActionPolicy } from '@/types/electron'
 
 const DEFAULT_SETTINGS: AppSettings = {
   launchOnStartup: false,
@@ -16,12 +16,12 @@ const DEFAULT_SETTINGS: AppSettings = {
   agentBypassPermissions: false,
 }
 
-type Section = 'general' | 'agent' | 'workspaces' | 'about'
+type Section = 'general' | 'agent' | 'security' | 'about'
 
 const NAV: { id: Section; icon: React.ElementType; label: string }[] = [
   { id: 'general',    icon: Monitor,  label: 'General'    },
   { id: 'agent',      icon: Bot,      label: 'Agent'      },
-  { id: 'workspaces', icon: Layers,   label: 'Workspaces' },
+  { id: 'security',   icon: Shield,   label: 'Security'   },
   { id: 'about',      icon: Info,     label: 'About'      },
 ]
 
@@ -175,133 +175,6 @@ function GeneralSection({ settings, set }: {
   )
 }
 
-function WorkspacesSection() {
-  const { workspaces, fetch: fetchWS, create: createWS, remove: removeWS } = useWorkspaceStore()
-  const [name, setName] = useState('')
-  const [color, setColor] = useState('#4F6EF7')
-
-  useEffect(() => { fetchWS() }, [])
-
-  async function handleAdd() {
-    if (!name.trim()) return
-    await createWS(name.trim(), color)
-    setName('')
-  }
-
-  return (
-    <>
-      <Card title="Your Workspaces">
-        {workspaces.length === 0 ? (
-          <div style={{ padding: '16px 0', fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>
-            No workspaces yet. Add your first one below.
-          </div>
-        ) : (
-          workspaces.map(ws => (
-            <div
-              key={ws.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '10px 0',
-                borderBottom: '1px solid var(--border-soft)',
-              }}
-            >
-              <div style={{
-                width: 10,
-                height: 10,
-                borderRadius: '50%',
-                background: ws.color ?? '#4F6EF7',
-                flexShrink: 0,
-              }} />
-              <span style={{ flex: 1, fontSize: 13, color: 'var(--text)' }}>{ws.name}</span>
-              <button
-                onClick={() => removeWS(ws.id)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: 'var(--text-3)',
-                  padding: 4,
-                  borderRadius: 6,
-                  display: 'flex',
-                  alignItems: 'center',
-                  transition: 'color 0.15s',
-                }}
-                onMouseEnter={e => (e.currentTarget.style.color = 'var(--danger)')}
-                onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-3)')}
-              >
-                <Trash2 size={13} />
-              </button>
-            </div>
-          ))
-        )}
-      </Card>
-
-      <Card title="Add Workspace">
-        <div style={{ padding: '10px 0', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            style={{
-              flex: 1,
-              background: 'var(--surface-2)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              padding: '7px 12px',
-              fontSize: 12,
-              color: 'var(--text)',
-              outline: 'none',
-              fontFamily: 'inherit',
-            }}
-            placeholder="Workspace name (e.g. My YouTube Channel)"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleAdd() }}
-          />
-          <input
-            type="color"
-            value={color}
-            onChange={e => setColor(e.target.value)}
-            style={{
-              width: 36,
-              height: 36,
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              background: 'var(--surface-2)',
-              cursor: 'pointer',
-              padding: 4,
-              flexShrink: 0,
-            }}
-            title="Pick color"
-          />
-          <button
-            onClick={handleAdd}
-            disabled={!name.trim()}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              padding: '7px 14px',
-              background: name.trim() ? 'var(--accent)' : 'var(--surface-3)',
-              color: name.trim() ? '#fff' : 'var(--text-3)',
-              border: 'none',
-              borderRadius: 8,
-              cursor: name.trim() ? 'pointer' : 'not-allowed',
-              fontSize: 12,
-              fontWeight: 500,
-              transition: 'all 0.15s',
-              fontFamily: 'inherit',
-              flexShrink: 0,
-            }}
-          >
-            <Plus size={13} />
-            Add
-          </button>
-        </div>
-      </Card>
-    </>
-  )
-}
-
 function AgentSection({ settings, set }: {
   settings: AppSettings
   set: (patch: Partial<AppSettings>) => void
@@ -372,7 +245,7 @@ function AboutSection() {
         </div>
 
         <p style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.6, margin: 0 }}>
-          AI &amp; YouTube account management desktop app. Manage multiple AI tools, YouTube channels, prompts, and workspaces from one place.
+          AI &amp; YouTube account management desktop app. Manage multiple AI tools, YouTube channels, and prompts from one place.
         </p>
 
         <div style={{
@@ -417,6 +290,100 @@ function AboutSection() {
   )
 }
 
+type Rule = 'allow' | 'ask' | 'block'
+
+function ruleOf(policy: ActionPolicy, action: string): Rule {
+  if (policy.blocked.includes(action)) return 'block'
+  if (policy.requireApproval.includes(action)) return 'ask'
+  return 'allow'
+}
+
+const OUTCOME_COLOR: Record<string, string> = {
+  ok: 'var(--success)', failed: 'var(--danger, #d9534f)', error: 'var(--danger, #d9534f)',
+  blocked: 'var(--danger, #d9534f)', denied: 'var(--warning, #e0a800)',
+}
+
+/**
+ * What an outside agent (MCP / CLI / workflows) may do through FlowDesk.
+ * Changes save immediately; the gateway re-reads the policy on every call.
+ */
+function SecuritySection() {
+  const api = window.electronAPI
+  const [policy, setPolicy] = useState<ActionPolicy>({ blocked: [], requireApproval: [] })
+  const [actions, setActions] = useState<string[]>([])
+  const [file, setFile] = useState('')
+  const [log, setLog] = useState<ActionLogEntry[]>([])
+  const [filter, setFilter] = useState('')
+
+  async function load() {
+    const r = await api.actionPolicyGet()
+    setPolicy(r.policy)
+    setActions(r.actions)
+    setFile(r.file)
+    setLog(await api.actionPolicyLog(30))
+  }
+  useEffect(() => { void load() }, [])
+
+  async function setRule(action: string, rule: Rule) {
+    const next: ActionPolicy = {
+      blocked: policy.blocked.filter(a => a !== action).concat(rule === 'block' ? [action] : []),
+      requireApproval: policy.requireApproval.filter(a => a !== action).concat(rule === 'ask' ? [action] : []),
+    }
+    setPolicy(await api.actionPolicySet(next))
+  }
+
+  // Keep listed names visible even if no longer offered by the gateway.
+  const all = [...new Set([...actions, ...policy.blocked, ...policy.requireApproval])].sort()
+  const shown = all.filter(a => a.includes(filter.trim().toLowerCase().replace(/[\s.-]+/g, '_')))
+
+  return (
+    <>
+      <Card title="Agent actions">
+        <div style={{ fontSize: 11, color: 'var(--text-3)', padding: '10px 0 4px', lineHeight: 1.5 }}>
+          Applies to agents connected over MCP, the CLI and workflows. <b>Ask</b> shows an Allow / Deny prompt
+          here (denied after 60s if nobody answers). Saved instantly to <span style={{ fontFamily: 'JetBrains Mono, monospace' }}>{file}</span>.
+        </div>
+        <input
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          placeholder="Filter, e.g. tiktok or delete"
+          style={{ ...selectStyle, cursor: 'text', margin: '8px 0', width: '100%', boxSizing: 'border-box' }}
+        />
+        {shown.map(action => (
+          <Row key={action} label={action}>
+            <select
+              value={ruleOf(policy, action)}
+              onChange={e => void setRule(action, e.target.value as Rule)}
+              style={selectStyle}
+            >
+              <option value="allow">Allow</option>
+              <option value="ask">Ask me</option>
+              <option value="block">Block</option>
+            </select>
+          </Row>
+        ))}
+      </Card>
+
+      <Card title="Recent agent actions">
+        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 0 0' }}>
+          <button onClick={() => void load()} style={{ ...selectStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
+        {log.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '12px 0' }}>Nothing yet.</div>}
+        {log.map((e, i) => {
+          const details = Object.entries(e).filter(([k]) => !['t', 'action', 'outcome'].includes(k)).map(([k, v]) => `${k}: ${v}`).join(' · ')
+          return (
+            <Row key={i} label={e.action} desc={`${new Date(e.t).toLocaleString()}${details ? ' — ' + details : ''}`}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: OUTCOME_COLOR[e.outcome] ?? 'var(--text-2)' }}>{e.outcome}</span>
+            </Row>
+          )
+        })}
+      </Card>
+    </>
+  )
+}
+
 /* ── Main Settings Page ────────────────────────────────────────── */
 export default function Settings() {
   const [section, setSection] = useState<Section>('general')
@@ -451,7 +418,7 @@ export default function Settings() {
   const sectionTitle: Record<Section, string> = {
     general:    'General',
     agent:      'Agent',
-    workspaces: 'Workspaces',
+    security:   'Security',
     about:      'About',
   }
 
@@ -545,12 +512,12 @@ export default function Settings() {
         <div style={{ flex: 1 }}>
           {section === 'general' && <GeneralSection settings={settings} set={patch} />}
           {section === 'agent' && <AgentSection settings={settings} set={patch} />}
-          {section === 'workspaces' && <WorkspacesSection />}
+          {section === 'security' && <SecuritySection />}
           {section === 'about' && <AboutSection />}
         </div>
 
         {/* Save button (only for sections that need saving) */}
-        {section !== 'workspaces' && section !== 'about' && (
+        {section !== 'about' && section !== 'security' && (
           <div style={{ paddingTop: 12 }}>
             <button
               onClick={handleSave}

@@ -1,0 +1,84 @@
+{
+  "id": "viral-video-autopilot",
+  "name": "Viral Video Autopilot",
+  "version": "1.0.0",
+  "description": "End-to-end autonomous creator pipeline: crafts anchor-based prompt, generates 8s video in Google Flow, downloads media, and publishes directly to TikTok Studio.",
+  "domains": [
+    "brain",
+    "flow",
+    "tiktok"
+  ],
+  "skills": [
+    "brain-memory",
+    "video-prompt-writer",
+    "flow-video-director",
+    "tiktok-publisher"
+  ],
+  "steps": [
+    {
+      "id": "brain-persona",
+      "title": "Retrieve Brand Persona & Character Guidelines",
+      "skillId": "brain-memory",
+      "actionTool": "brain.search",
+      "params": {
+        "query": "Alpha Paws cat persona character audio rule"
+      }
+    },
+    {
+      "id": "prompt-generation",
+      "title": "Craft Anchor-Based Natural Prompt with Black Cat Lock",
+      "skillId": "video-prompt-writer",
+      "params": {
+        "channelOrBrand": "Alpha Paws",
+        "niche": "{{inputs.niche}}",
+        "referenceAnchor": "{{inputs.referenceAnchor}}",
+        "activity": "{{inputs.activity}}",
+        "audioCommentary": "enthusiastic live human sportscaster commentary reacting in real time"
+      },
+      "dependsOn": [
+        "brain-persona"
+      ]
+    },
+    {
+      "id": "render-video",
+      "title": "Render 8s Video in Google Flow",
+      "skillId": "flow-video-director",
+      "actionTool": "flow.generateVideo",
+      "params": {
+        "prompt": "{{prompt-generation.result.prompt}}",
+        "projectId": "{{inputs.projectId}}",
+        "modelKey": "{{inputs.modelKey}}"
+      },
+      "dependsOn": [
+        "prompt-generation"
+      ]
+    },
+    {
+      "id": "download-video",
+      "title": "Download Signed Video Media",
+      "actionTool": "flow.downloadMedia",
+      "params": {
+        "mediaUrl": "{{render-video.result.mediaId}}"
+      },
+      "dependsOn": [
+        "render-video"
+      ]
+    },
+    {
+      "id": "publish-tiktok",
+      "title": "Publish Video to TikTok Studio",
+      "skillId": "tiktok-publisher",
+      "actionTool": "tiktok.apiUploadVideo",
+      "params": {
+        "filePath": "{{download-video.result.filePath}}",
+        "caption": "{{inputs.activity}} #fyp #viral #ai",
+        "privacy": "{{inputs.privacy}}"
+      },
+      "dependsOn": [
+        "download-video"
+      ]
+    }
+  ],
+  "createdAt": "2026-09-20T00:00:00.000Z",
+  "updatedAt": "2026-09-20T00:00:00.000Z"
+}

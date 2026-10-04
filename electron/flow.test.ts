@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('./sessions', () => ({ findViewByUrl: () => null, listViewUrls: () => ['https://mail.google.com/'] }))
+vi.mock('./sessions', () => ({
+  findViewByUrl: () => null,
+  findAnyViewByUrl: () => null,
+  ensureBackgroundView: () => Promise.resolve({ webContents: {} as any }),
+  listViewUrls: () => ['https://mail.google.com/'],
+}))
 
 const { flowGenerateImage, flowCreateProject, flowUploadImage, flowDownloadMedia, flowGenerateVideo, flowGenerateVideoFromImage, flowExtendVideo, flowDeleteProject, flowMediaStatus, flowGetCredits, flowViewMedia, flowRenameProject, flowListProjectMedia, flowVideoModels } = await import('./flow')
 
@@ -207,3 +212,18 @@ describe('flow extend video', () => {
   })
 })
 
+
+describe('flow account failover', async () => {
+  const { isFlowQuotaFailure } = await import('./flow')
+
+  it('treats quota and credit refusals as worth another account', () => {
+    expect(isFlowQuotaFailure({ ok: false, error: 'Google Flow refused the request (HTTP 429)' })).toBe(true)
+    expect(isFlowQuotaFailure({ ok: false, error: 'x', detail: '"status":"RESOURCE_EXHAUSTED"' })).toBe(true)
+    expect(isFlowQuotaFailure({ ok: false, error: 'insufficient credits' })).toBe(true)
+  })
+
+  it('does not move accounts on other failures or on success', () => {
+    expect(isFlowQuotaFailure({ ok: false, error: 'could not mint a reCAPTCHA token: timeout' })).toBe(false)
+    expect(isFlowQuotaFailure({ ok: true, creditsAfterIfThatIsWhatItIs: 0 })).toBe(false)
+  })
+})

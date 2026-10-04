@@ -2,6 +2,21 @@ import type { CustomTool } from './browser'
 import type { ProjectSessionSnapshot } from './project'
 import type { BrainCandidate, BrainContextPack, BrainDecisionBrief, BrainJob, BrainMemory, BrainMonitor, BrainOpportunity, BrainOpportunityStatus, BrainQuery, BrainScope, BrainScopeQuery, BrainSourceMetric, BrainStatus, MemoryKind, OpportunityEvidence } from './brain'
 import type { KnowledgeGraph, AnswerPack, BrainEntity, EntityMention, EntityMergeProposal, BrainEvent, CompactionReport, DocumentNeighborhood, VectorIndexReport, DecideCandidateInput, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, ProposeCandidateInput, UnresolvedLink, VaultImportReport } from './brainKnowledge'
+import type { AtomicSkill, Workflow, WorkflowRun, SkillFilter, WorkflowFilter } from './skills'
+
+/** Settings → Security. Names are canonical (e.g. "tiktok_delete_all_videos"). */
+export interface ActionPolicy {
+  blocked: string[]
+  requireApproval: string[]
+}
+
+export interface ActionLogEntry {
+  t: string
+  action: string
+  outcome: 'ok' | 'failed' | 'error' | 'blocked' | 'denied'
+  error?: string
+  [detail: string]: string | undefined
+}
 
 export interface GmailSession {
   email: string
@@ -12,7 +27,7 @@ export interface GmailSession {
 }
 
 export type InlineDictationProvider = 'chatgpt' | 'gemini'
-export type InlineDictationSurface = 'agent' | 'universal'
+export type InlineDictationSurface = 'agent'
 export type InlineDictationStatus = 'probing' | 'ready' | 'listening' | 'completed' | 'cancelled' | 'failed' | 'interrupted' | 'unavailable'
 export type InlineDictationCapability = 'unknown' | 'instrumentation_required' | 'available' | 'unavailable'
 export type ProviderVoiceProvider = InlineDictationProvider
@@ -84,43 +99,6 @@ export interface NotebookLMServiceState {
   url?: string
 }
 
-export type UniversalChatRunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
-export interface UniversalChatRun {
-  requestId: string
-  sessionId: string
-  provider: string
-  tabId: string
-  status: UniversalChatRunStatus
-  startedAt: string
-  updatedAt: string
-  liveText: string
-  text?: string
-  error?: string
-  events: { sequence: number; type: string; createdAt: string; message?: string }[]
-}
-export interface UniversalChatRunSnapshot { runs: UniversalChatRun[] }
-
-export type InlineDictationProvider = 'chatgpt' | 'gemini'
-export type InlineDictationSurface = 'agent' | 'universal'
-export type InlineDictationStatus = 'probing' | 'ready' | 'listening' | 'completed' | 'cancelled' | 'failed' | 'interrupted' | 'unavailable'
-export type InlineDictationCapability = 'unknown' | 'instrumentation_required' | 'available' | 'unavailable'
-export interface InlineDictationRun {
-  id: string
-  provider: InlineDictationProvider
-  accountId: string
-  accountEmail: string
-  partition: string
-  surface: InlineDictationSurface
-  surfaceSessionId: string
-  status: InlineDictationStatus
-  capability: InlineDictationCapability
-  startedAt: string
-  updatedAt: string
-  transcript?: string
-  error?: string
-  events: { sequence: number; type: string; createdAt: string; message?: string }[]
-}
-export interface InlineDictationRunSnapshot { runs: InlineDictationRun[] }
 
 // ── YouTube Multi-Account ────────────────────────────────────
 export interface YouTubeAccount {
@@ -162,18 +140,13 @@ export interface AgentSessionMeta {
   providers: Partial<Record<'claude' | 'codex', AgentSessionProviderLink>>
 }
 
-export interface StudioArtboardMeta { id: string; name: string; width: number; height: number }
-export interface StudioDocumentMeta {
-  id: string
-  title: string
-  createdAt: string
-  updatedAt: string
-  artboards: StudioArtboardMeta[]
-}
-
 export interface ElectronAPI {
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<void>
+  /** Settings → Security: which gateway actions are blocked or need approval. */
+  actionPolicyGet: () => Promise<{ policy: ActionPolicy; actions: string[]; file: string }>
+  actionPolicySet: (policy: ActionPolicy) => Promise<ActionPolicy>
+  actionPolicyLog: (limit?: number) => Promise<ActionLogEntry[]>
 
   brainGetStatus: () => Promise<BrainStatus>
   brainGetActiveScope: () => Promise<BrainScope | null>
@@ -292,7 +265,7 @@ export interface ElectronAPI {
   // Browser view controls
   switchView: (tabId: string, partition: string, url: string) => Promise<void>
   closeView: (tabId: string) => Promise<void>
-  hideView: () => Promise<void>
+  hideView: (tabId?: string) => Promise<void>
   getSelectedText: () => Promise<string>
   captureLatestAssistant: (tabId: string, tool: string) => Promise<string>
   pageChanged: (page: string) => Promise<void>
@@ -305,6 +278,12 @@ export interface ElectronAPI {
   viewSetNavWidth: (w: number) => Promise<void>
   viewSetDockWidth: (w: number) => Promise<void>
   clearPartitionStorage: (partition: string) => Promise<void>
+  tiktokSetActiveAccount?: (account: string | number) => Promise<boolean>
+  onTikTokAccountSwitched?: (cb: (accountId: string) => void) => () => void
+  linkedinSetActiveAccount?: (account: string | number) => Promise<boolean>
+  linkedinGetAccounts?: () => Promise<unknown>
+  linkedinSaveAccounts?: (accounts: unknown) => Promise<boolean>
+  onLinkedInAccountSwitched?: (cb: (accountId: string) => void) => () => void
 
   // Gmail session management
   gmailList: () => Promise<GmailSession[]>
@@ -364,13 +343,9 @@ export interface ElectronAPI {
   onCaptureIds: (cb: (e: unknown, data: { tool: string; ids: { conversationId: string; messageId?: string } }) => void) => void
   offCaptureIds: (cb: (e: unknown, data: { tool: string; ids: { conversationId: string; messageId?: string } }) => void) => void
 
-  // Universal Chat: one background worker tab per provider
-  universalChatEnsureView: (provider: string) => Promise<{ tabId: string } | { error: 'unknown_provider' | 'no_google_account' }>
-  universalChatSend: (tabId: string, text: string, tool: string) => Promise<boolean>
-  universalChatStart: (input: { sessionId: string; provider: string; text: string }) => Promise<{ requestId: string; tabId: string } | { error: 'invalid_request' | 'provider_busy' | 'send_failed'; requestId?: string }>
-  universalChatGetRunState: (sessionId?: string) => Promise<UniversalChatRunSnapshot>
-  onUniversalChatEvent: (cb: (e: unknown, data: { type: 'live' | 'complete' | 'failed'; run: UniversalChatRun }) => void) => void
-  offUniversalChatEvent: (cb: (e: unknown, data: { type: 'live' | 'complete' | 'failed'; run: UniversalChatRun }) => void) => void
+  // Real-time image generation progress (ChatGPT DALL-E)
+  onCaptureImageProgress: (cb: (e: unknown, data: { tool: string; elapsedSeconds: number; percent: number; stage: string }) => void) => void
+  offCaptureImageProgress: (cb: (e: unknown, data: unknown) => void) => void
 
   inlineDictationStart: (input: { provider: InlineDictationProvider; accountId: string; surface: InlineDictationSurface; surfaceSessionId: string }) => Promise<{ run: InlineDictationRun } | { error: 'invalid_request' | 'unknown_provider' | 'account_not_found' | 'provider_busy'; run?: InlineDictationRun }>
   inlineDictationStop: (runId: string) => Promise<{ run: InlineDictationRun } | { error: 'not_found' }>
@@ -378,27 +353,9 @@ export interface ElectronAPI {
   onInlineDictationEvent: (cb: (e: unknown, data: { type: string; run: InlineDictationRun }) => void) => () => void
   offInlineDictationEvent: (cb: (e: unknown, data: { type: string; run: InlineDictationRun }) => void) => void
 
-  inlineDictationStart: (input: { provider: InlineDictationProvider; accountId: string; surface: InlineDictationSurface; surfaceSessionId: string }) => Promise<{ run: InlineDictationRun } | { error: 'invalid_request' | 'unknown_provider' | 'account_not_found' | 'provider_busy'; run?: InlineDictationRun }>
-  inlineDictationStop: (runId: string) => Promise<{ run: InlineDictationRun } | { error: 'not_found' }>
-  inlineDictationGetRunState: (surface?: InlineDictationSurface, surfaceSessionId?: string) => Promise<InlineDictationRunSnapshot>
-  onInlineDictationEvent: (cb: (e: unknown, data: { type: string; run: InlineDictationRun }) => void) => void
-  offInlineDictationEvent: (cb: (e: unknown, data: unknown) => void) => void
-
   // Agent: selected lead SDK provider that can call the browser-driven worker tools
   agentSendMessage: (input: { prompt: string; sessionId: string; runId: string; brain?: { use: boolean; learn: boolean; temporary: boolean } }) => Promise<{ runId: string }>
   agentGetRunState: () => Promise<AgentRunSnapshot>
-
-  // Studio canvas
-  studioListDocuments: () => Promise<StudioDocumentMeta[]>
-  studioCreateDocument: (title?: string) => Promise<StudioDocumentMeta>
-  studioReadHtml: (id: string) => Promise<string | null>
-  studioRenameDocument: (id: string, title: string) => Promise<void>
-  studioDeleteDocument: (id: string) => Promise<void>
-  studioExportPng: (documentId: string, artboardId: string) => Promise<string>
-  studioExportPdf: (documentId: string) => Promise<string>
-  studioWriteArtboardHtml: (documentId: string, artboardId: string, html: string) => Promise<void>
-  onStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => void
-  offStudioDocumentChanged: (cb: (e: unknown, id: string) => void) => void
 
   agentSessionList: () => Promise<AgentSessionMeta[]>
   agentSessionCreate: (title?: string) => Promise<AgentSessionMeta>
@@ -442,6 +399,30 @@ export interface ElectronAPI {
   whatsappListMessages: (chatId: string, limit?: number) => Promise<any>
   whatsappSend: (chatId: string, text: string) => Promise<any>
 
+  // Reddit bridge
+  redditStatus: () => Promise<any>
+  redditFeed: (options?: { subreddit?: string; sort?: 'hot' | 'new' | 'top' | 'rising'; limit?: number; after?: string; timeFilter?: string }) => Promise<any>
+  redditPostComments: (subreddit: string, postId: string, limit?: number) => Promise<any>
+  redditSearch: (query: string, sort?: 'relevance' | 'hot' | 'top' | 'new', limit?: number) => Promise<any>
+  redditVotePost: (postId: string, voteState: 'UP' | 'DOWN' | 'NONE') => Promise<any>
+  redditVoteComment: (commentId: string, voteState: 'UP' | 'DOWN' | 'NONE') => Promise<any>
+  redditCreateComment: (postId: string, parentId: string, text: string) => Promise<any>
+  redditCreatePost: (subreddit: string, title: string, body?: string) => Promise<any>
+  redditSubscribe: (subredditId: string, subscribeState: 'SUBSCRIBED' | 'UNSUBSCRIBED') => Promise<any>
+  redditMarkRead: () => Promise<any>
+
+  // Skills & Workflows
+  skillsList: (filter?: SkillFilter) => Promise<AtomicSkill[]>
+  skillsGet: (id: string) => Promise<AtomicSkill | null>
+  skillsSave: (skill: AtomicSkill) => Promise<boolean>
+  skillsDelete: (id: string) => Promise<boolean>
+  workflowsList: (filter?: WorkflowFilter) => Promise<Workflow[]>
+  workflowsGet: (id: string) => Promise<Workflow | null>
+  workflowsSave: (workflow: Workflow) => Promise<boolean>
+  workflowsDelete: (id: string) => Promise<boolean>
+  workflowsRun: (id: string, inputs?: Record<string, any>) => Promise<WorkflowRun>
+  workflowsRuns: () => Promise<WorkflowRun[]>
+  workflowsResume: (runId: string) => Promise<WorkflowRun>
 }
 
 export type JarvisStreamEvent =
@@ -462,7 +443,7 @@ export type AgentToolName = 'chatgpt' | 'claude' | 'gemini' | 'grok' | 'perplexi
 export type AgentStreamEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_call'; toolUseId: string; tool: string; prompt: string }
-  | { type: 'tool_progress'; toolUseId: string; tool: string; elapsedSeconds: number }
+  | { type: 'tool_progress'; toolUseId: string; tool: string; elapsedSeconds: number; percent?: number; stage?: string }
   | { type: 'tool_result'; toolUseId: string; tool: string; text: string; isError: boolean }
   | { type: 'approval_request'; requestId: string; tool: string; title: string; detail?: string; input?: Record<string, unknown> }
   | { type: 'done'; text: string }

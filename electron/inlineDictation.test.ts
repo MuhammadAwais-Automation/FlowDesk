@@ -5,9 +5,9 @@ const accounts = [{ email: 'First@Example.com', partition: 'gmail-first' }, { em
 
 describe('inline dictation boundary', () => {
   it('binds a run to the selected account partition and never accepts a renderer partition', () => {
-    expect(resolveInlineDictationTarget({ provider: 'gemini', accountId: 'SECOND@example.com', partition: 'evil', surface: 'universal', surfaceSessionId: 'u-1' }, accounts)).toEqual({
+    expect(resolveInlineDictationTarget({ provider: 'gemini', accountId: 'SECOND@example.com', partition: 'evil', surface: 'agent', surfaceSessionId: 'u-1' }, accounts)).toEqual({
       ok: true,
-      target: { provider: 'gemini', accountId: 'second@example.com', accountEmail: 'second@example.com', partition: 'gmail-second', surface: 'universal', surfaceSessionId: 'u-1' },
+      target: { provider: 'gemini', accountId: 'second@example.com', accountEmail: 'second@example.com', partition: 'gmail-second', surface: 'agent', surfaceSessionId: 'u-1' },
     })
   })
 

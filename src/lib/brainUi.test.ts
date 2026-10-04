@@ -19,7 +19,7 @@ describe('Brain UI registry', () => {
     expect(Object.keys(MONITORABLE_RECIPE_CONTROLS).sort()).toEqual([...MONITORABLE_RECIPE_IDS].sort())
   })
 
-  it('does not pretend the Reddit connector is live', () => {
-    expect(INTELLIGENCE_SOURCES.find(source => source.id === 'reddit')).toMatchObject({ status: 'not_connected', liveCapture: false })
+  it('registers the Reddit connector as live for lead sniping', () => {
+    expect(INTELLIGENCE_SOURCES.find(source => source.id === 'reddit')).toMatchObject({ status: 'available', liveCapture: true })
   })
 })

@@ -20,6 +20,8 @@ export const capabilityRequestSchema = z.discriminatedUnion('capability', [
   z.object({ id, capability: z.literal('whatsapp.list_unread'), input: z.object({ limit }).strict() }).strict(),
   z.object({ id, capability: z.literal('linkedin.feed'), input: z.object({ limit, sort: z.literal('RECENT') }).strict() }).strict(),
   z.object({ id, capability: z.literal('linkedin.search'), input: z.object({ query: z.string().trim().min(1).max(500), limit }).strict() }).strict(),
+  z.object({ id, capability: z.literal('reddit.feed'), input: z.object({ subreddit: z.string().trim().min(1).max(100).optional(), sort: z.enum(['hot', 'new', 'top', 'rising']).optional(), limit }).strict() }).strict(),
+  z.object({ id, capability: z.literal('reddit.search'), input: z.object({ query: z.string().trim().min(1).max(500), sort: z.enum(['relevance', 'hot', 'top', 'new']).optional(), limit }).strict() }).strict(),
   // The only capability that is not a connector read. Electron main owns the
   // prompt and the model choice; the utility process supplies transcripts and
   // gets prose back, exactly as it supplies nothing and gets records back from
@@ -112,6 +114,7 @@ const recipeCapabilities: Record<string, Array<BrainCapabilityRequest['capabilit
   'whatsapp.unread_intelligence': ['whatsapp.list_unread', 'model.digest_chats'],
   'linkedin.community_scan': ['linkedin.feed'],
   'linkedin.opportunity_scan': ['linkedin.search'],
+  'reddit.lead_sniper': ['reddit.feed', 'reddit.search'],
 }
 
 // Only Electron main supplies read(). Neither commands nor executable code are accepted.

@@ -21,10 +21,15 @@ export const socialRecipeDefinitions = [
   { id: 'whatsapp.unread_intelligence', version: 2, title: 'WhatsApp Unread Intelligence', steps: ['capture', 'normalize', 'classify', 'score', 'digest', 'summarize'] },
   { id: 'linkedin.community_scan', version: 1, title: 'LinkedIn Community Scan', steps: ['capture', 'normalize', 'classify', 'score', 'summarize'] },
   { id: 'linkedin.opportunity_scan', version: 1, title: 'LinkedIn Opportunity Scan', steps: ['capture', 'normalize', 'classify', 'score', 'summarize'] },
+  { id: 'reddit.lead_sniper', version: 1, title: 'Reddit Lead Sniper', steps: ['capture', 'normalize', 'classify', 'score', 'summarize'] },
 ]
 
 export const socialIntelligenceKeywordConfig = {
-  icpTerms: ['developer', 'react', 'typescript', 'software', 'dashboard', 'support', 'backlog', 'automation', 'integration', 'migration', 'consulting'],
+  icpTerms: [
+    'developer', 'react', 'typescript', 'software', 'dashboard', 'support', 'backlog',
+    'automation', 'integration', 'migration', 'consulting',
+    'flutter', 'nextjs', 'next.js', 'supabase', 'electron', 'fullstack', 'full-stack', 'mvp', 'ai agent'
+  ],
 } as const
 
 export class RecipeStepError extends Error {
@@ -196,13 +201,22 @@ export class RecipeStepHandlers {
     const limit = parsed.parameters.limit ?? 50
     if (job.recipeId === 'whatsapp.unread_intelligence') return { id, capability: 'whatsapp.list_unread', input: { limit } }
     if (job.recipeId === 'linkedin.community_scan') return { id, capability: 'linkedin.feed', input: { limit, sort: 'RECENT' } }
-    return { id, capability: 'linkedin.search', input: { query: parsed.parameters.query || 'hiring developer consultant recommendation', limit } }
+    if (job.recipeId === 'linkedin.opportunity_scan') return { id, capability: 'linkedin.search', input: { query: parsed.parameters.query || 'hiring developer consultant recommendation', limit } }
+    if (job.recipeId === 'reddit.lead_sniper') {
+      if (parsed.parameters.query) {
+        const searchSort = parsed.parameters.sort === 'rising' ? 'new' : (parsed.parameters.sort ?? 'new')
+        return { id, capability: 'reddit.search', input: { query: parsed.parameters.query, sort: searchSort, limit: Math.min(limit, 100) } }
+      }
+      return { id, capability: 'reddit.feed', input: { subreddit: parsed.parameters.subreddit || 'forhire', sort: parsed.parameters.sort ?? 'new', limit: Math.min(limit, 100) } }
+    }
+    throw new RecipeStepError('permanent')
   }
 
   capture(job: BrainJob, stepId: string, result: BrainCapabilityResult): Record<string, unknown> {
     if (!result.ok) throw new RecipeStepError(result.error.code)
+    const source = job.recipeId.startsWith('whatsapp') ? 'whatsapp' : job.recipeId.startsWith('reddit') ? 'reddit' : 'linkedin'
     const manifest = this.artifacts.ingestBatch({
-      source: job.recipeId.startsWith('whatsapp') ? 'whatsapp' : 'linkedin', jobId: job.id, stepId,
+      source, jobId: job.id, stepId,
       scopeId: job.scopeId, accountId: job.accountId, connectorVersion: 'flowdesk-read-v1',
       records: result.records, retentionDays: Number(job.parameters.retentionDays ?? 30),
     })
@@ -267,26 +281,38 @@ export class RecipeStepHandlers {
   execute(job: BrainJob, stage: string, prior: Record<string, unknown> | undefined): Record<string, unknown> {
     if (stage === 'normalize') {
       const records = z.array(z.record(z.string(), z.unknown())).max(500).parse(this.readCapture(job, prior))
-      const source = job.recipeId.startsWith('whatsapp') ? 'whatsapp' : 'linkedin'
+      const source = job.recipeId.startsWith('whatsapp') ? 'whatsapp' : job.recipeId.startsWith('reddit') ? 'reddit' : 'linkedin'
       const intelligenceRecords: IntelligenceRecord[] = records.map((record, index) => {
         const last = record.last && typeof record.last === 'object' && !Array.isArray(record.last) ? record.last as Record<string, unknown> : {}
-        const text = (conversationText(record) || field(record, ['text', 'body', 'lastMessage', 'title']) || field(last, ['body', 'caption']))
-          .replace(/\s+/g, ' ').trim().slice(0, TEXT_LIMIT)
-        const externalId = field(record, ['id', 'urn', 'externalId', 'messageId', 'chatId']) || String(index)
-        const canonicalUrl = field(record, ['url', 'canonicalUrl', 'permalink']) || null
+        let rawText = ''
+        if (source === 'reddit') {
+          const title = field(record, ['title'])
+          const body = field(record, ['selftext', 'text', 'body'])
+          rawText = [title, body].filter(Boolean).join('\n\n')
+        } else {
+          rawText = conversationText(record) || field(record, ['text', 'body', 'lastMessage', 'title']) || field(last, ['body', 'caption'])
+        }
+        const text = rawText.replace(/\s+/g, ' ').trim().slice(0, TEXT_LIMIT)
+        const externalId = field(record, ['id', 'shortId', 'urn', 'externalId', 'messageId', 'chatId']) || String(index)
+        const permalink = field(record, ['permalink'])
+        const canonicalUrl = permalink
+          ? (permalink.startsWith('http') ? permalink : `https://www.reddit.com${permalink}`)
+          : (field(record, ['url', 'canonicalUrl']) || null)
+        const authorName = field(record, ['author', 'authorName', 'name'])
+        const author = authorName ? {
+          name: authorName,
+          verifiedHandle: source === 'reddit' ? (authorName.startsWith('u/') ? authorName : `u/${authorName}`) : (field(record, ['verifiedHandle']) || null),
+        } : null
         return {
           platform: source,
           externalId,
-          sourceRef: field(record, ['url', 'canonicalUrl', 'permalink']) || `${String(prior?.sourceRef)}#${index}`,
+          sourceRef: canonicalUrl || field(record, ['url']) || `${String(prior?.sourceRef)}#${index}`,
           sourceId: this.database.findCaptureSource({ scopeId: job.scopeId, jobId: job.id, platform: source, externalId, canonicalUrl }),
           canonicalUrl,
           text,
           observedAt: observedAt(record),
-          engagement: numberField(record, ['reactions', 'reactionCount', 'likes', 'likeCount', 'comments', 'commentCount', 'unread', 'unreadCount']),
-          author: field(record, ['authorName', 'name']) ? {
-            name: field(record, ['authorName', 'name']),
-            verifiedHandle: field(record, ['verifiedHandle']) || null,
-          } : null,
+          engagement: numberField(record, ['score', 'ups', 'numComments', 'reactions', 'reactionCount', 'likes', 'likeCount', 'comments', 'commentCount', 'unread', 'unreadCount']),
+          author,
         }
       })
       const queryTerms = typeof job.parameters.query === 'string' ? job.parameters.query.toLowerCase().match(/[a-z0-9]+/g) ?? [] : []

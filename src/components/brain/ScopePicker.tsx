@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import type { BrainScope } from '@/types/brain'
 
 export const BRAIN_ACTIVE_SCOPE_KEY = 'flowdeskBrainActiveScopeId'
@@ -93,17 +94,31 @@ interface ScopePickerProps {
 
 export function ScopePicker({ scopes, value, onChange, disabled = false }: ScopePickerProps) {
   const selected = scopes.find(scope => scope.id === value) ?? null
-  return <div className="flex items-center gap-2">
-    <span className="text-xs text-stone-500">{selected ? `${scopeTypeLabel(selected.type)} · ${selected.name}` : 'Scope · Loading'}</span>
-    <select
-      aria-label="Brain scope"
-      value={value ?? ''}
-      onChange={event => onChange(event.target.value)}
-      disabled={disabled || !selected}
-      className="max-w-56 rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs text-stone-700"
-    >
-      {!selected && <option value="">Loading…</option>}
-      {scopes.map(scope => <option key={scope.id} value={scope.id}>{scopeTypeLabel(scope.type)} — {scope.name}</option>)}
-    </select>
-  </div>
+  return (
+    <div className="flex items-center gap-2">
+      <span className="font-retro-mono text-xs text-stone-600">
+        {selected ? `${scopeTypeLabel(selected.type)} · ${selected.name}` : 'Scope · Loading'}
+      </span>
+      <div className="relative inline-flex items-center">
+        <select
+          aria-label="Brain scope"
+          value={value ?? ''}
+          onChange={event => onChange(event.target.value)}
+          disabled={disabled || !selected}
+          className="max-w-56 appearance-none cursor-pointer rounded-lg border border-[#2a3142] bg-[#141824] pl-3 pr-7 py-1.5 font-retro-sans text-xs text-[#cbd5e1] shadow-sm outline-none transition-colors hover:border-[#d97706]/60 focus:border-[#d97706] focus:ring-1 focus:ring-[#d97706] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {!selected && <option value="" className="bg-[#141824] text-[#cbd5e1]">Loading…</option>}
+          {scopes.map(scope => (
+            <option key={scope.id} value={scope.id} className="bg-[#141824] text-[#cbd5e1]">
+              {scopeTypeLabel(scope.type)} — {scope.name}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          size={13}
+          className="pointer-events-none absolute right-2.5 text-[#8b98b5]"
+        />
+      </div>
+    </div>
+  )
 }

@@ -6,4 +6,5 @@ export const PROVIDER_URLS: Record<string, string> = {
   gemini: 'https://gemini.google.com',
   grok: 'https://grok.com',
   perplexity: 'https://www.perplexity.ai',
+  deepseek: 'https://chat.deepseek.com',
 }

@@ -26,6 +26,7 @@ const WORKER_TOOLS: AgentToolInfo[] = [
   { name: 'ask_gemini', autoAllowed: true },
   { name: 'ask_grok', autoAllowed: true },
   { name: 'ask_perplexity', autoAllowed: true },
+  { name: 'ask_deepseek', autoAllowed: true },
 ]
 
 const NOTEBOOKLM_TOOLS: AgentToolInfo[] = [
@@ -52,6 +53,8 @@ const WHATSAPP_TOOLS: AgentToolInfo[] = [
 ]
 
 const LINKEDIN_TOOLS: AgentToolInfo[] = [
+  { name: 'linkedin_accounts', autoAllowed: true },
+  { name: 'linkedin_switch_account', autoAllowed: true },
   { name: 'linkedin_status', autoAllowed: true },
   { name: 'linkedin_list_chats', autoAllowed: true },
   { name: 'linkedin_list_messages', autoAllowed: true },

@@ -65,7 +65,7 @@ function truncateText(text: string, maxCharacters: number): string {
 /**
  * Each Agent turn is an independent, ephemeral query() call (no SDK session
  * resume) — continuity across turns is a text recap prepended to the next
- * message, same proven pattern as claudeSdkProvider.ts / UniversalChat.tsx's
+ * message, same proven pattern as claudeSdkProvider.ts's
  * buildHandoffPrompt. Includes a compact rendering of prior tool calls so
  * the lead agent remembers what it already asked other providers.
  */

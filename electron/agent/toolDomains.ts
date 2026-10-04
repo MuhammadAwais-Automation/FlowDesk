@@ -17,9 +17,9 @@
 export type ToolDomain =
   | 'whatsapp'
   | 'linkedin'
+  | 'reddit'
   | 'facebook'
   | 'flow'
-  | 'studio'
   | 'notebooklm'
   | 'project'
 
@@ -36,9 +36,9 @@ export const ALWAYS_LOADED = ['workers', 'brain', 'image'] as const
 const TRIGGERS: Record<ToolDomain, RegExp> = {
   whatsapp: /\b(whatsapp|wa|chat|message|msg|paigham|unread|contact|send to|bhej)/i,
   linkedin: /\b(linkedin|post|feed|connection|profile|outreach|dm|comment|lead)/i,
+  reddit: /\b(reddit|subreddit|upvote|downvote|karma|r\/)\b/i,
   facebook: /\b(facebook|fb|meta|page|reel|group)/i,
   flow: /\b(flow|image|video|generate|banao|picture|thumbnail|render|veo|imagen)/i,
-  studio: /\b(studio|design|artboard|canvas|layout|figma|mockup|poster|banner|slide)/i,
   notebooklm: /\b(notebook|notebooklm|research|source|deep research|cite|paper)/i,
   project: /\b(project|workspace|repo|file|folder|code|build|directory)/i,
 }

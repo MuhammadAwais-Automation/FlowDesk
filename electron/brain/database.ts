@@ -1190,12 +1190,35 @@ export class BrainDatabase {
   }): BrainJob {
     const keySource = stableJson({ recipeId: input.recipeId, recipeVersion: input.recipeVersion, scopeId: input.scopeId, accountId: input.accountId ?? null, parameters: input.parameters })
     const idempotencyKey = createHash('sha256').update(keySource).digest('hex')
-    const existing = this.db.prepare("SELECT * FROM jobs WHERE idempotency_key = ? AND status NOT IN ('failed', 'cancelled')").get(idempotencyKey) as SqlRow | undefined
-    if (existing) return mapJob(existing)
-    const id = randomUUID()
     const timestamp = now()
     this.db.exec('BEGIN IMMEDIATE')
     try {
+      const existing = this.db.prepare('SELECT * FROM jobs WHERE idempotency_key = ?').get(idempotencyKey) as SqlRow | undefined
+      if (existing) {
+        if (existing.status !== 'failed' && existing.status !== 'cancelled') {
+          this.db.exec('COMMIT')
+          return mapJob(existing)
+        }
+
+        const id = String(existing.id)
+        this.db.prepare(`UPDATE jobs SET
+          recipe_id = ?, recipe_version = ?, scope_id = ?, account_id = ?, status = 'queued',
+          parameters_json = ?, result_json = NULL, lease_expires_at = NULL, retry_count = 0, updated_at = ?
+          WHERE id = ?`)
+          .run(input.recipeId, input.recipeVersion, input.scopeId, input.accountId ?? null, stableJson(input.parameters), timestamp, id)
+        this.db.prepare("UPDATE job_steps SET status = 'queued', attempts = 0, lease_expires_at = NULL, started_at = NULL, completed_at = NULL, error = NULL WHERE job_id = ?").run(id)
+        this.db.prepare('DELETE FROM job_checkpoints WHERE job_id = ?').run(id)
+        this.db.prepare('DELETE FROM job_artifacts WHERE job_id = ?').run(id)
+        this.db.prepare('DELETE FROM agent_continuations WHERE job_id = ?').run(id)
+        if (input.continuation) {
+          this.db.prepare("INSERT INTO agent_continuations(id, job_id, session_id, provider_session_id, mode, context_budget, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'waiting', ?)")
+            .run(randomUUID(), id, input.continuation.sessionId, input.continuation.providerSessionId ?? null, input.continuation.mode, input.continuation.contextBudget, timestamp)
+        }
+        this.db.exec('COMMIT')
+        return this.getJob(id) as BrainJob
+      }
+
+      const id = randomUUID()
       this.db.prepare("INSERT INTO jobs(id, recipe_id, recipe_version, scope_id, account_id, status, idempotency_key, parameters_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)")
         .run(id, input.recipeId, input.recipeVersion, input.scopeId, input.accountId ?? null, idempotencyKey, stableJson(input.parameters), timestamp, timestamp)
       const recipe = this.db.prepare('SELECT definition_json FROM recipes WHERE id = ? AND version = ?').get(input.recipeId, input.recipeVersion) as SqlRow | undefined
@@ -1210,11 +1233,11 @@ export class BrainDatabase {
           .run(randomUUID(), id, input.continuation.sessionId, input.continuation.providerSessionId ?? null, input.continuation.mode, input.continuation.contextBudget, timestamp)
       }
       this.db.exec('COMMIT')
+      return this.getJob(id) as BrainJob
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
     }
-    return this.getJob(id) as BrainJob
   }
 
   getJob(id: string): BrainJob | null {

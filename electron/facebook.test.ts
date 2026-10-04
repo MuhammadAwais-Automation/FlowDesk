@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('./sessions', () => ({ findViewByUrl: () => null }))
+vi.mock('./sessions', () => ({ findAnyViewByUrl: () => null, ensureBackgroundView: async () => { throw new Error('no window in tests') } }))
 
 const { fbFeed, fbComment, fbReply, fbShare, fbFollow, fbHide } = await import('./facebook')
 

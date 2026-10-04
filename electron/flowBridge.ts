@@ -132,14 +132,75 @@ const PRELUDE = `
 
   function getRecaptchaToken(action) {
     return new Promise(function (resolve, reject) {
-      if (!window.grecaptcha || !window.grecaptcha.enterprise) {
-        reject(new Error('grecaptcha.enterprise is not loaded on this page'))
-        return
+      var timeout = setTimeout(function () {
+        clearInterval(interval)
+        reject(new Error('Timed out waiting for grecaptcha.enterprise to load'))
+      }, 15000)
+
+      function tryExec() {
+        if (window.grecaptcha && window.grecaptcha.enterprise && typeof window.grecaptcha.enterprise.ready === 'function') {
+          window.grecaptcha.enterprise.ready(function () {
+            window.grecaptcha.enterprise.execute(RECAPTCHA_SITE_KEY, { action: action })
+              .then(function (tok) {
+                clearTimeout(timeout)
+                clearInterval(interval)
+                resolve(tok)
+              })
+              .catch(function (err) {
+                clearTimeout(timeout)
+                clearInterval(interval)
+                reject(err)
+              })
+          })
+          return true
+        }
+        return false
       }
-      window.grecaptcha.enterprise.ready(function () {
-        window.grecaptcha.enterprise.execute(RECAPTCHA_SITE_KEY, { action: action })
-          .then(resolve, reject)
-      })
+
+      if (tryExec()) return
+
+      var tt = window.trustedTypes
+      if (tt && tt.createPolicy && !tt.defaultPolicy) {
+        try {
+          tt.createPolicy('default', {
+            createScriptURL: function (url) { return url },
+            createScript: function (s) { return s }
+          })
+        } catch (e) {}
+      }
+
+      var existing = document.querySelector('script[src*="recaptcha/enterprise.js"]')
+      if (!existing) {
+        var nonceEl = document.querySelector('script[nonce]')
+        var nonce = nonceEl ? (nonceEl.nonce || nonceEl.getAttribute('nonce')) : ''
+
+        var policy = window.__flowRecaptchaPolicy
+        if (!policy && tt && tt.createPolicy) {
+          try {
+            policy = tt.createPolicy('flowdesk-recaptcha-loader', {
+              createScriptURL: function (url) { return url }
+            })
+            window.__flowRecaptchaPolicy = policy
+          } catch (e) {
+            policy = window.__flowRecaptchaPolicy
+          }
+        }
+
+        var scriptUrl = 'https://www.google.com/recaptcha/enterprise.js?render=' + RECAPTCHA_SITE_KEY
+        var trustedUrl = policy ? policy.createScriptURL(scriptUrl) : scriptUrl
+
+        var script = document.createElement('script')
+        script.src = trustedUrl
+        if (nonce) script.nonce = nonce
+        script.async = true
+        document.head.appendChild(script)
+      }
+
+      var interval = setInterval(function () {
+        if (tryExec()) {
+          clearInterval(interval)
+        }
+      }, 150)
     })
   }
 
@@ -476,9 +537,52 @@ export function videoModelsScript(): string {
  */
 export function mediaStatusScript(mediaId: string): string {
   return buildScript(`
-    var out = await callBatch('jwpduf', [null, null, [[${JSON.stringify(mediaId)}]]])
+    var id = ${JSON.stringify(mediaId)}
+    var out = await callBatch('as29s', [id])
+    if (!out.ok) {
+      out = await callBatch('jwpduf', [null, null, [[id]]])
+    }
     if (!out.ok) return out
-    return { ok: true, media: safe(out.payload) }
+
+    var payload = out.payload
+    var videoUrl = null
+    var imageUrl = null
+    var byteSize = null
+    var statusCode = null
+    var statusText = 'unknown'
+
+    function scan(node, depth) {
+      if (!node || depth > 8) return
+      if (typeof node === 'string') {
+        if (node.indexOf('flow-content.google/video/') !== -1 && !videoUrl) videoUrl = node
+        if (node.indexOf('flow-content.google/image/') !== -1 && !imageUrl) imageUrl = node
+      } else if (typeof node === 'number' && node > 100000 && !byteSize) {
+        byteSize = node
+      } else if (Array.isArray(node)) {
+        if (node.length === 1 && typeof node[0] === 'number' && node[0] >= 1 && node[0] <= 10 && statusCode === null) {
+          statusCode = node[0]
+        }
+        for (var i = 0; i < node.length; i++) scan(node[i], depth + 1)
+      }
+    }
+    scan(payload, 0)
+
+    if (statusCode === 3) statusText = 'completed'
+    else if (statusCode === 2) statusText = 'rendering'
+    else if (statusCode === 6) statusText = 'queued'
+    else if (statusCode !== null) statusText = 'status_' + statusCode
+
+    return {
+      ok: true,
+      mediaId: id,
+      status: statusText,
+      statusCode: statusCode,
+      done: statusCode === 3,
+      videoUrl: videoUrl,
+      imageUrl: imageUrl,
+      byteSize: byteSize,
+      media: safe(payload)
+    }
   `)
 }
 
@@ -623,7 +727,7 @@ export function uploadImageScript(base64: string, projectId: string, mimeType: s
 export function fetchMediaUrlScript(mediaUrl: string): string {
   return buildScript(`
     var url = ${JSON.stringify(mediaUrl)}
-    if (url.indexOf('/asb/') === -1 && url.indexOf('googleusercontent.com') === -1) {
+    if (url.indexOf('/asb/') === -1 && url.indexOf('googleusercontent.com') === -1 && url.indexOf('flow-content.google') === -1) {
       return { ok: false, error: 'refusing to fetch a URL that is not a Flow media URL: ' + url.slice(0, 80) }
     }
 

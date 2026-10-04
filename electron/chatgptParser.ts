@@ -128,6 +128,10 @@ export function isLikelyImageEvent(event: string): boolean {
   return /image_asset_pointer|"content_type"\s*:\s*"image|dalle|asset_pointer/i.test(event)
 }
 
+export function isDalleToolInvoked(event: string): boolean {
+  return /t2uay3k\.sj1i4kz|"recipient"\s*:\s*"[^"]*dalle[^"]*"|"name"\s*:\s*"[^"]*dalle[^"]*"|image_gen_title|generating_image/i.test(event)
+}
+
 /**
  * ChatGPT's own "this turn is finished" event.
  *

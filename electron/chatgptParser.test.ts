@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { extractImageAssetsFromSSEEvent, extractTextFromSSEEvent, isLikelyImageEvent, isMessageStreamComplete } from './chatgptParser'
+import { extractImageAssetsFromSSEEvent, extractTextFromSSEEvent, isLikelyImageEvent, isMessageStreamComplete, isDalleToolInvoked } from './chatgptParser'
+import { detectImageProgressStage, CHATGPT_IMAGE_STAGES } from './captureInject'
 
 /**
  * Real captured event (probes/out/_chatgpt-image-debug.log) from an actual
@@ -146,5 +147,25 @@ data: {"p":"/message/content/parts/0","o":"append","v":"Here is your blueprint."
     extractTextFromSSEEvent(ARGS_APPEND, state)
     extractTextFromSSEEvent(ARGS_CONTINUATION, state)
     expect(extractTextFromSSEEvent(REAL_ANSWER_APPEND, state)).toEqual(['Here is your blueprint.'])
+  })
+})
+
+describe('isDalleToolInvoked and detectImageProgressStage', () => {
+  it('detects DALL-E invocation from recipient or name', () => {
+    expect(isDalleToolInvoked('{"recipient":"t2uay3k.sj1i4kz"}')).toBe(true)
+    expect(isDalleToolInvoked('{"recipient":"dalle.image"}')).toBe(true)
+    expect(isDalleToolInvoked('{"name":"dalle"}')).toBe(true)
+    expect(isDalleToolInvoked('{"recipient":"browser"}')).toBe(false)
+  })
+
+  it('detects stage progression with detectImageProgressStage', () => {
+    const stage2 = detectImageProgressStage('{"recipient":"t2uay3k.sj1i4kz"}', 1)
+    expect(stage2).toEqual(CHATGPT_IMAGE_STAGES[2])
+
+    const stage3 = detectImageProgressStage('{"content_type":"image_asset_pointer"}', 2)
+    expect(stage3).toEqual(CHATGPT_IMAGE_STAGES[3])
+
+    const stage4 = detectImageProgressStage('sediment://file_123', 3)
+    expect(stage4).toEqual(CHATGPT_IMAGE_STAGES[4])
   })
 })

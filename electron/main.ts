@@ -21,17 +21,15 @@ import { widenDomains, type ToolDomain } from './agent/toolDomains'
 // Initializes Crashpad so Windows dev runs are less likely to log "not connected" (harmless Chromium noise otherwise).
 crashReporter.start({ productName: 'FlowDesk', uploadToServer: false })
 
+// Prevent Windows Chromium GPU cache locking (Access is denied 0x5) across concurrent session partitions
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
+
 // Must run before app is ready. Gives the custom scheme fetch/CORS semantics
 // like a normal https:// origin so an <img src="flowdesk-image://...">
 // loads cleanly from the Vite-served renderer without CSP/mixed-content
 // trouble (a bare file:// src can be blocked depending on webSecurity/CSP).
 protocol.registerSchemesAsPrivileged([
   { scheme: 'flowdesk-image', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
-  // Serves a Studio document's assets/ folder into both the canvas iframe
-  // (srcdoc) and the offscreen export window (a data: URL) — bypassCSP is
-  // what lets an <img src="studio-asset://..."> resolve from either of
-  // those origins rather than only a normal https:// page.
-  { scheme: 'studio-asset', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
 ])
 
 // Generated images (e.g. Gemini image-gen replies) are saved here rather
@@ -80,29 +78,39 @@ interface PromptCategory {
 
 import { join, basename, resolve, sep } from 'path'
 import Store from 'electron-store'
-import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, ensureBackgroundView, findAnyViewByUrl, findWorkerViewByTool } from './sessions'
+import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, findAnyViewByUrl, findWorkerViewByTool, prewarmBackgroundViews, flushAllCookies, rememberedView } from './sessions'
 import { attachShellLinkPolicy } from './shellLinkPolicy'
 import { startProbeRunner } from './discovery/probeRunner'
+import { APPROVAL_TIMEOUT_MS, loadPolicy, policyPaths, readActionLog, savePolicy } from './gateway/actionPolicy'
+import { initSkillsRegistry, listSkills, getSkill, saveSkill, deleteSkill, listWorkflows, getWorkflow, saveWorkflow, deleteWorkflow } from './skills/skillRegistry'
+import { listWorkflowRuns, configureRunStore } from './skills/workflowRunner'
 import { injectPrompt, getLatestAssistantText, getSelectedText, type AITool } from './injector'
-import { extractTextFromSSEEvent, extractUsageFromSSEEvent, extractModelInfoFromSSEEvent, extractIdsFromSSEEvent, extractImageAssetsFromSSEEvent, isMessageStreamComplete } from './chatgptParser'
+import { extractTextFromSSEEvent, extractUsageFromSSEEvent, extractModelInfoFromSSEEvent, extractIdsFromSSEEvent, extractImageAssetsFromSSEEvent, isMessageStreamComplete, isDalleToolInvoked } from './chatgptParser'
 import { extractTextFromClaudeSSEEvent, extractModelInfoFromSSEEvent as extractClaudeModelInfoFromSSEEvent, extractUsageFromSSEEvent as extractClaudeUsageFromSSEEvent } from './claudeParser'
 import { extractLatestGeminiText, extractTurnMetaFromRaw as extractGeminiTurnMetaFromRaw, extractImageUrlsFromRaw as extractGeminiImageUrlsFromRaw } from './geminiParser'
 import { extractTextFromSSEEvent as extractQwenTextFromSSEEvent, extractThinkingSummaryFromSSEEvent, extractUsageFromSSEEvent as extractQwenUsageFromSSEEvent } from './qwenParser'
 import { extractPerplexitySSEEvent } from './perplexityParser'
 import type { AppSettings } from '../src/types/database'
 import { PROVIDER_URLS } from './providerUrls'
-import { configureBrowserWorkerQueue, notifyCaptureComplete, notifyCaptureActivity, workerProgress, askBrowserProvider } from './agent/browserWorkerQueue'
+import { configureBrowserWorkerQueue, notifyCaptureComplete, notifyCaptureActivity, notifyImageProgress, workerProgress, askBrowserProvider, type WorkerProgress } from './agent/browserWorkerQueue'
 import { orderBrowserAccounts } from './agent/accountFailover'
 import * as agentSessions from './agentSessionStore'
-import * as studioStore from './studio/documentStore'
-import * as designMemory from './studio/designMemory'
-import { isValidDocumentId as studioIsValidDocumentId } from './studio/paths'
-import { exportArtboardPng, exportDocumentPdf } from './studio/export'
-import { replaceArtboardHtml } from './studio/artboards'
 import { buildCatchUp } from '../src/lib/agentCatchUp'
 import { runAgentTurn, type AgentStreamEvent } from './agent/leadAgent'
-import { waStatus, waListChats, waListMessages, waSend, waUnreadWithMessages } from './whatsapp'
-import { liFeed, liSearch } from './linkedin'
+import { waStatus, waListChats, waListMessages, waSend, waUnreadWithMessages } from './whatsapp/whatsapp'
+import { liFeed, liSearch } from './linkedin/linkedin'
+import {
+  rdStatus,
+  rdFeed,
+  rdPostComments,
+  rdSearch,
+  rdVotePost,
+  rdVoteComment,
+  rdCreateComment,
+  rdCreatePost,
+  rdSubscribe,
+  rdMarkRead,
+} from './reddit'
 import { runJarvisTurn } from './jarvis/jarvisService'
 import { createLivekitToken } from './jarvis/jarvisToken'
 import {
@@ -121,6 +129,13 @@ import { alwaysApprove, type RequestApproval } from './agent/approval'
 import { socialRecipeRequestSchema } from './brain/socialRecipes'
 import { executeBrainCapability } from './brain/capabilityProtocol'
 import { askClaudeSdk } from './claudeSdkProvider'
+import { startLocalGateway, setGatewayBrainHandler, knownWriteActions, executeWorkflow, resumeWorkflow, type GatewayServer } from './gateway/localGateway'
+import { setGooglePartitionGetter, setGoogleAccountsGetter } from './flow'
+import { configureChatgptImages } from './chatgptImages'
+import { startRadar } from './tiktok/tiktokRadar'
+import { loadNiches } from './tiktok/tiktokRadarStore'
+import { setActiveTikTokAccount, setOnAccountSwitchedListener } from './tiktok/tiktok'
+import { setActiveLinkedInAccount, setOnLinkedInAccountSwitchedListener, liAccounts, saveLinkedInAccounts } from './linkedin/linkedin'
 
 // @anthropic-ai/claude-agent-sdk (electron/claudeSdkProvider.ts, used by the
 // Brain's chat digest and otherwise pending the orchestrator) auths via the local
@@ -242,6 +257,20 @@ configureBrowserWorkerQueue({
   ),
 })
 
+configureChatgptImages({
+  getAccounts: () => (store.get('gmailSessions') as GmailSession[]).map(({ email, partition }) => ({ email, partition })),
+  getPreferred: () => store.get('agentBrowserAccountEmail' as never) as string | null,
+})
+
+setGoogleAccountsGetter(() => (store.get('gmailSessions') as GmailSession[]).map(({ email, partition }) => ({ email, partition })))
+
+setGooglePartitionGetter(() => {
+  const sessions = (store.get('gmailSessions') as GmailSession[]) || []
+  if (sessions.length === 0) return null
+  const preferred = sessions.find(s => s.email.toLowerCase().includes('awaismushtaqokr'))
+  return preferred?.partition ?? sessions[0]?.partition ?? null
+})
+
 // Backstop only — electron/agent/browserWorkerQueue.ts's own 60s
 // handler-level timeout is authoritative and fires first; this just guards
 // against whatever default the SDK's own MCP tool-call timeout would
@@ -340,12 +369,16 @@ function setupTray() {
 }
 
 function createWindow() {
+  const isHeadless = process.env.FLOWDESK_HEADLESS === '1' || process.argv.includes('--headless') || process.argv.includes('--hidden') || process.argv.includes('--background')
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 780,
     minWidth: 900,
     minHeight: 600,
     frame: true,
+    show: !isHeadless,
+    title: 'FlowDesk',
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       nodeIntegration: false,
@@ -354,6 +387,18 @@ function createWindow() {
   })
 
   setMainWindow(mainWindow)
+
+  setOnAccountSwitchedListener((accountId) => {
+    try {
+      mainWindow?.webContents.send('tiktok:accountSwitched', accountId)
+    } catch {}
+  })
+
+  setOnLinkedInAccountSwitchedListener((accountId) => {
+    try {
+      mainWindow?.webContents.send('linkedin:accountSwitched', accountId)
+    } catch {}
+  })
 
   // Defence in depth for links the shell renders. The renderer already refuses
   // to paint a non-http(s) citation as an href (src/lib/shellLinkDecision.ts),
@@ -369,10 +414,10 @@ function createWindow() {
     mainWindow?.webContents.send('theme:systemChanged', { shouldUseDarkColors: nativeTheme.shouldUseDarkColors })
   })
 
-  // Minimize-to-tray: intercept close event
+  // Minimize-to-tray: intercept close event (or keep hidden in headless mode)
   mainWindow.on('close', (e) => {
     const s = store.get('settings') as Partial<AppSettings>
-    if (s?.minimizeToTray && tray) {
+    if ((s?.minimizeToTray || isHeadless) && tray) {
       e.preventDefault()
       mainWindow.hide()
     }
@@ -381,9 +426,27 @@ function createWindow() {
   const devServerUrl = process.env['ELECTRON_RENDERER_URL']
   if (devServerUrl) {
     mainWindow.loadURL(devServerUrl)
-    mainWindow.webContents.openDevTools()
+    if (!isHeadless) {
+      // Detached: docked DevTools took half the 1200px window and squeezed the app UI.
+      mainWindow.webContents.openDevTools({ mode: 'detach' })
+    }
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+
+  if (!isHeadless) {
+    mainWindow.once('ready-to-show', () => {
+      mainWindow.show()
+      // Windows blocks focus-stealing, so a window launched from a terminal opens
+      // behind it (and Chromium skips painting occluded windows, so it looks blank).
+      // A brief always-on-top raises it once without pinning it there.
+      mainWindow.setAlwaysOnTop(true)
+      mainWindow.focus()
+      mainWindow.setAlwaysOnTop(false)
+    })
+  } else {
+    if (!tray) setupTray()
+    console.log('[FlowDesk] Running in HEADLESS mode (window hidden, Local Gateway & background sessions active)')
   }
 
   registerShortcuts()
@@ -420,6 +483,15 @@ function registerShortcuts() {
 }
 
 // IPC: electron-store
+// Settings → Security: what an outside agent may do (see gateway/actionPolicy.ts).
+ipcMain.handle('actionPolicy:get', async () => {
+  const { policyFile } = policyPaths(app.getPath('userData'))
+  return { policy: await loadPolicy(policyFile), actions: await knownWriteActions(), file: policyFile }
+})
+ipcMain.handle('actionPolicy:set', async (_e, policy: unknown) => savePolicy(policyPaths(app.getPath('userData')).policyFile, policy))
+ipcMain.handle('actionPolicy:log', async (_e, limit: unknown) =>
+  readActionLog(policyPaths(app.getPath('userData')).logFile, typeof limit === 'number' ? Math.min(Math.max(limit, 1), 500) : 50))
+
 ipcMain.handle('store:get', (_e, key: string) => store.get(key))
 ipcMain.handle('store:set', (_e, key: string, value: unknown) => {
   store.set(key, value)
@@ -489,6 +561,11 @@ ipcMain.handle('brain:entityGet', (_e, input: unknown) => brainRequest('entity.g
 ipcMain.handle('brain:entityMentions', (_e, input: unknown) => brainRequest('entity.mentions', input))
 ipcMain.handle('brain:entityListProposals', (_e, input: unknown) => brainRequest('entity.listProposals', input))
 ipcMain.handle('brain:entityDecideProposal', (_e, input: unknown) => brainRequest('entity.decideProposal', input))
+
+// ── Inline Dictation safe IPC handlers ─────────────────────────────
+ipcMain.handle('inlineDictation:getRunState', (_e, _surface: unknown, _sessionId: unknown) => null)
+ipcMain.handle('inlineDictation:start', (_e, _input: unknown) => ({ status: 'unavailable' }))
+ipcMain.handle('inlineDictation:stop', (_e, _runId: unknown) => ({ status: 'completed' }))
 ipcMain.handle('brain:knowledgeBuildVectors', (_e, input: unknown) => brainRequest('knowledge.buildVectors', input))
 ipcMain.handle('brain:knowledgeVectorStatus', (_e, input: unknown) => brainRequest('knowledge.vectorStatus', input))
 ipcMain.handle('brain:listEvents', (_e, input: unknown) => brainRequest('listEvents', input))
@@ -638,7 +715,10 @@ ipcMain.handle('gmail:add', async () => {
               null
             )
           `)
-          if (typeof result === 'string' && result.includes('@')) email = result
+          // The aria-label fallback reads "Google Account: Name\n(x@gmail.com)";
+          // keep only the address, or the whole label became the account's email.
+          const found = typeof result === 'string' ? result.match(/[^\s()<>]+@[^\s()<>]+/) : null
+          if (found) email = found[0].toLowerCase()
         } catch { /* ignore */ }
         resolve()
       })
@@ -782,7 +862,7 @@ ipcMain.handle('view:close', (_e, tabId: string) => {
 })
 
 // IPC: hide view
-ipcMain.handle('view:hide', () => hideView())
+ipcMain.handle('view:hide', (_e, specificTabId?: string) => hideView(typeof specificTabId === 'string' ? specificTabId : undefined))
 
 // IPC: set custom bounds for WebContentsView (used by Accounts page Gmail tab)
 ipcMain.handle('view:setCustomBounds', (_e, x: number, y: number, w: number, h: number) => {
@@ -803,6 +883,29 @@ ipcMain.handle('session:clearPartition', async (_e, partition: string) => {
   } catch {
     return false
   }
+})
+
+// IPC: Synchronize active TikTok account between React UI and main process
+ipcMain.handle('tiktok:setActiveAccount', (_e, account: string | number) => {
+  setActiveTikTokAccount(account)
+  return true
+})
+
+// IPC: Synchronize active LinkedIn account between React UI and main process
+ipcMain.handle('linkedin:setActiveAccount', (_e, account: string | number) => {
+  setActiveLinkedInAccount(account)
+  return true
+})
+
+ipcMain.handle('linkedin:getAccounts', async () => {
+  return liAccounts()
+})
+
+ipcMain.handle('linkedin:saveAccounts', (_e, accounts: unknown) => {
+  if (Array.isArray(accounts)) {
+    saveLinkedInAccounts(accounts)
+  }
+  return true
 })
 
 // IPC: Google Login — opens a real BrowserWindow with account's session
@@ -888,7 +991,10 @@ ipcMain.handle('yt:add', async () => {
               null
             )
           `)
-          if (typeof result === 'string' && result.includes('@')) email = result.trim()
+          // The aria-label fallback reads "Google Account: Name\n(x@gmail.com)";
+          // keep only the address, or the whole label became the account's email.
+          const found = typeof result === 'string' ? result.match(/[^\s()<>]+@[^\s()<>]+/) : null
+          if (found) email = found[0].toLowerCase().trim()
         } catch { /* ignore */ }
         resolve()
       })
@@ -1173,37 +1279,6 @@ ipcMain.handle('view:captureLatestAssistant', async (_e, tabId: string, tool: st
   const view = getViewById(tabId)
   if (!view) return ''
   return getLatestAssistantText(view.webContents, tool as 'chatgpt' | 'claude' | 'gemini' | 'grok')
-})
-
-// ─────────────────────────────────────────────────────────────────
-// IPC: Universal Chat — one background (never-shown) WebContentsView per
-// provider, sharing the user's existing Google-authenticated session
-// (same partition model AI Browser tabs already use) so no separate login
-// flow is needed if the user has already used these sites via that account.
-// ─────────────────────────────────────────────────────────────────
-
-ipcMain.handle('universalChat:ensureView', async (_e, provider: string) => {
-  const url = PROVIDER_URLS[provider]
-  if (!url) return { error: 'unknown_provider' as const }
-
-  const gmailSessions = store.get('gmailSessions')
-  if (gmailSessions.length === 0) return { error: 'no_google_account' as const }
-
-  const tabId = `universalchat-${provider}`
-  await ensureBackgroundView(tabId, gmailSessions[0].partition, url)
-  return { tabId }
-})
-
-// Fills AND submits — unlike view:injectToTab (used by AI Browser's manual
-// "Inject Prompt", where a human presses Enter/Send themselves), nobody is
-// watching Universal Chat's background tabs.
-ipcMain.handle('universalChat:send', async (_e, tabId: string, text: string, tool: string) => {
-  console.log(`[FlowDesk universalChat] send called tabId=${tabId} tool=${tool} chars=${text.length} at ${new Date().toISOString()}`)
-  const view = getViewById(tabId)
-  if (!view) return false
-  const ok = await injectPrompt(view.webContents, text, tool as AITool, true)
-  console.log(`[FlowDesk universalChat] send result ok=${ok} at ${new Date().toISOString()}`)
-  return ok
 })
 
 /**
@@ -1578,6 +1653,22 @@ ipcMain.handle('whatsapp:listMessages', (_e, chatId: string, limit?: number) => 
 ipcMain.handle('whatsapp:send', (_e, chatId: string, text: string) => waSend(chatId, text))
 
 // ─────────────────────────────────────────────────────────────────
+// IPC: Skills & Workflows Engine
+// ─────────────────────────────────────────────────────────────────
+ipcMain.handle('skills:list', (_e, filter) => listSkills(filter))
+ipcMain.handle('skills:get', (_e, id: string) => getSkill(id) ?? null)
+ipcMain.handle('skills:save', async (_e, skill) => { await saveSkill(skill); return true })
+ipcMain.handle('skills:delete', async (_e, id: string) => deleteSkill(id))
+ipcMain.handle('workflows:list', (_e, filter) => listWorkflows(filter))
+ipcMain.handle('workflows:get', (_e, id: string) => getWorkflow(id) ?? null)
+ipcMain.handle('workflows:save', async (_e, wf) => { await saveWorkflow(wf); return true })
+ipcMain.handle('workflows:delete', async (_e, id: string) => deleteWorkflow(id))
+// Same executor as the MCP path: runs real tools through the action guard.
+ipcMain.handle('workflows:run', async (_e, id: string, inputs?: Record<string, any>) => executeWorkflow(id, inputs))
+ipcMain.handle('workflows:resume', async (_e, runId: string) => resumeWorkflow(runId))
+ipcMain.handle('workflows:runs', () => listWorkflowRuns())
+
+// ─────────────────────────────────────────────────────────────────
 // IPC: Jarvis — voice turn against Gemini, plus a LiveKit room token.
 // ─────────────────────────────────────────────────────────────────
 
@@ -1638,52 +1729,6 @@ ipcMain.handle('jarvis:abort', () => {
   currentJarvisAbort = null
 })
 
-// ─────────────────────────────────────────────────────────────────
-// IPC: Studio canvas — documents the agent authors and the user exports.
-// Ids arrive from the renderer, so each is validated before it can reach
-// the filesystem (electron/studio/paths.ts).
-// ─────────────────────────────────────────────────────────────────
-
-function asStudioDocumentId(value: unknown): string {
-  if (!studioIsValidDocumentId(value)) throw new Error('Not a valid Studio document id.')
-  return value
-}
-
-ipcMain.handle('studio:listDocuments', () => studioStore.listDocuments())
-ipcMain.handle('studio:createDocument', (_e, title: unknown) =>
-  studioStore.createDocument(typeof title === 'string' && title.trim() ? title.trim() : undefined))
-ipcMain.handle('studio:readHtml', (_e, id: unknown) => studioStore.readDocumentHtml(asStudioDocumentId(id)))
-ipcMain.handle('studio:renameDocument', (_e, id: unknown, title: unknown) =>
-  studioStore.renameDocument(asStudioDocumentId(id), String(title ?? '').slice(0, 200)))
-ipcMain.handle('studio:deleteDocument', (_e, id: unknown) => studioStore.deleteDocument(asStudioDocumentId(id)))
-ipcMain.handle('studio:exportPng', (_e, documentId: unknown, artboardId: unknown) =>
-  exportArtboardPng(asStudioDocumentId(documentId), String(artboardId ?? '')))
-ipcMain.handle('studio:exportPdf', (_e, documentId: unknown) => exportDocumentPdf(asStudioDocumentId(documentId)))
-
-// The canvas edits inside the iframe, where a real HTML parser lives, and
-// sends back the affected artboard's inner HTML. Persisting goes through
-// replaceArtboardHtml — the same path the agent's studio_write_html tool
-// uses — so a user edit and an agent edit cannot produce different files.
-//
-// This handler is also the one definite signal that a write is
-// user-authored (design memory, Task 13): it's the only path a panel edit
-// reaches writeDocumentHtml through, so it's where a pending agent
-// proposal (recorded by studioTools.ts) gets checked against what the user
-// actually landed on.
-ipcMain.handle('studio:writeArtboardHtml', async (_e, documentId: unknown, artboardId: unknown, html: unknown) => {
-  const id = asStudioDocumentId(documentId)
-  if (typeof artboardId !== 'string' || !artboardId) throw new Error('An artboard id is required.')
-  if (typeof html !== 'string') throw new Error('Artboard HTML must be a string.')
-  const current = await studioStore.readDocumentHtml(id)
-  if (current === null) throw new Error(`No Studio document "${id}".`)
-  await studioStore.writeDocumentHtml(id, replaceArtboardHtml(current, artboardId, html))
-  await designMemory.checkForOverrides(html).catch(error => console.log('[FlowDesk studio] design memory check skipped:', error))
-})
-
-studioStore.studioDocumentChanged.on('changed', (documentId: string) => {
-  mainWindow?.webContents.send('studio:documentChanged', documentId)
-})
-
 ipcMain.handle('agent:getRunState', () => agentRunSnapshot())
 
 ipcMain.handle('agent:approvalResponse', (_e, requestId: unknown, approved: unknown) => {
@@ -1694,6 +1739,18 @@ ipcMain.handle('agent:approvalResponse', (_e, requestId: unknown, approved: unkn
   resolve(approved === true)
   return true
 })
+
+// Reddit bridge IPC
+ipcMain.handle('reddit:status', () => rdStatus())
+ipcMain.handle('reddit:feed', (_e, options?: unknown) => rdFeed(options && typeof options === 'object' ? options : {}))
+ipcMain.handle('reddit:postComments', (_e, subreddit: string, postId: string, limit?: number) => rdPostComments(subreddit, postId, limit))
+ipcMain.handle('reddit:search', (_e, query: string, sort?: 'relevance' | 'hot' | 'top' | 'new', limit?: number) => rdSearch(query, sort, limit))
+ipcMain.handle('reddit:votePost', (_e, postId: string, voteState: 'UP' | 'DOWN' | 'NONE') => rdVotePost(postId, voteState))
+ipcMain.handle('reddit:voteComment', (_e, commentId: string, voteState: 'UP' | 'DOWN' | 'NONE') => rdVoteComment(commentId, voteState))
+ipcMain.handle('reddit:createComment', (_e, postId: string, parentId: string, text: string) => rdCreateComment(postId, parentId, text))
+ipcMain.handle('reddit:createPost', (_e, subreddit: string, title: string, body?: string) => rdCreatePost(subreddit, title, body))
+ipcMain.handle('reddit:subscribe', (_e, subredditId: string, subscribeState: 'SUBSCRIBED' | 'UNSUBSCRIBED') => rdSubscribe(subredditId, subscribeState))
+ipcMain.handle('reddit:markRead', () => rdMarkRead())
 
 /**
  * Worker families each Agent session has needed so far. Grows, never shrinks:
@@ -1720,8 +1777,24 @@ async function runAgentMessage(input: { prompt?: unknown; sessionId?: unknown; r
   // the renderer gets while a slow provider is mid-wait — the SDK's own
   // tool_progress never fires for these custom tools. Forward each tick as
   // a tool_progress-shaped agent:event for the duration of this turn only.
-  const onWorkerProgress = (data: { tool: string; elapsedSeconds: number }) => {
-    publishAgentEvent(runId, sessionId, { type: 'tool_progress', toolUseId: data.tool, tool: data.tool, elapsedSeconds: data.elapsedSeconds })
+  const onWorkerProgress = (data: WorkerProgress) => {
+    if (data.type === 'image_progress') {
+      publishAgentEvent(runId, sessionId, {
+        type: 'tool_progress',
+        toolUseId: data.tool,
+        tool: data.tool,
+        elapsedSeconds: data.elapsedSeconds,
+        percent: data.percent,
+        stage: data.stage,
+      })
+    } else {
+      publishAgentEvent(runId, sessionId, {
+        type: 'tool_progress',
+        toolUseId: data.tool,
+        tool: data.tool,
+        elapsedSeconds: data.elapsedSeconds,
+      })
+    }
   }
   workerProgress.on('progress', onWorkerProgress)
 
@@ -2024,6 +2097,8 @@ interface CaptureBuffer {
   streamComplete?: boolean
   /** Already settled, so the later HTTP-body end must not re-emit it empty. */
   completed?: boolean
+  /** Last reported image progress stage number (1..6) */
+  imageProgressStage?: number
 }
 
 const IMAGE_EXT_BY_MIME: Record<string, string> = {
@@ -2138,6 +2213,12 @@ function emitCaptureLive(payload: { id: string; tool: string; textSoFar: string 
   notifyCaptureActivity(payload.tool, payload.textSoFar)
 }
 
+workerProgress.on('progress', (data: WorkerProgress) => {
+  if (data.type === 'image_progress') {
+    mainWindow?.webContents.send('capture:imageProgress', data)
+  }
+})
+
 /**
  * Settles one captured turn exactly once.
  *
@@ -2158,6 +2239,10 @@ async function finishCapture(id: string, entry: CaptureBuffer) {
   if (entry.pendingImages?.length) {
     await Promise.all(entry.pendingImages)
     entry.pendingImages = []
+  }
+  if (entry.imageProgressStage && entry.imageProgressStage < 6) {
+    entry.imageProgressStage = 6
+    notifyImageProgress(entry.tool, 100, 'Image generated & ready for download/display')
   }
   entry.completed = true
   console.log(`[FlowDesk capture][${entry.tool}] response complete:\n`, entry.text)
@@ -2405,6 +2490,16 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
           mainWindow?.webContents.send('capture:ids', { tool: entry.tool, ids })
         }
 
+        // Image generation stages for ChatGPT
+        const currentStage = entry.imageProgressStage || 0
+        if (currentStage < 2 && isDalleToolInvoked(evt)) {
+          entry.imageProgressStage = 2
+          notifyImageProgress(entry.tool, 35, 'DALL-E image generation tool invoked')
+        } else if (currentStage === 2) {
+          entry.imageProgressStage = 3
+          notifyImageProgress(entry.tool, 60, 'ChatGPT actively rendering image')
+        }
+
         // An image-generation turn carries its result as a structured part
         // (author role "tool", content_type "image_asset_pointer") that the
         // text extractor above correctly finds nothing in — so without this
@@ -2413,12 +2508,24 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
         // the agent waiting on an image that already exists. Confirmed live
         // (FD_CAPTURE_DEBUG, 2026-08-30): asset at 14:31:14, turn done at
         // 14:31:20, "response complete:" printed with nothing after it.
-        for (const asset of extractImageAssetsFromSSEEvent(evt)) {
+        const imageAssets = extractImageAssetsFromSSEEvent(evt)
+        if (imageAssets.length > 0 && (entry.imageProgressStage || 0) < 4) {
+          entry.imageProgressStage = 4
+          notifyImageProgress(entry.tool, 85, 'Image asset pointer received from backend')
+        }
+
+        for (const asset of imageAssets) {
           console.log(`[FlowDesk image][chatgpt] ${asset.fileId} (${asset.width}x${asset.height}) "${asset.title ?? 'untitled'}" — resolving`)
+          if ((entry.imageProgressStage || 0) < 5) {
+            entry.imageProgressStage = 5
+            notifyImageProgress(entry.tool, 95, 'FlowDesk resolving & caching generated image')
+          }
           const pending = resolveChatGPTImage(asset, _e.sender).then(saved => {
             if (saved) {
               entry.text += `${entry.text ? '\n\n' : ''}![${asset.title ?? 'generated image'}](${saved})`
               console.log(`[FlowDesk image][chatgpt] saved -> ${saved}`)
+              entry.imageProgressStage = 6
+              notifyImageProgress(entry.tool, 100, 'Image generated & ready for download/display')
             } else {
               console.error(`[FlowDesk image][chatgpt] could not download ${asset.fileId}`)
             }
@@ -2521,8 +2628,67 @@ ipcMain.on('capture:chunk', async (_e, payload: CaptureChunk) => {
   }
 })
 
+let localGatewayServer: GatewayServer | null = null
+
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  try {
+    await initSkillsRegistry({ userDataDir: app.getPath('userData') })
+    await configureRunStore(join(app.getPath('userData'), 'workflow-runs'))
+    console.log('[FlowDesk Skills] registry initialized')
+  } catch (err) {
+    console.warn('[FlowDesk Skills] failed to initialize skills registry:', err)
+  }
+  try {
+    localGatewayServer = await startLocalGateway(app.getPath('userData'), undefined, {
+      // Actions listed under requireApproval in action-policy.json. Headless
+      // there may be nobody to click, so the box closes itself and denies.
+      requestApproval: async ({ action, summary }) => {
+        const abort = new AbortController()
+        const timer = setTimeout(() => abort.abort(), APPROVAL_TIMEOUT_MS)
+        try {
+          const details = Object.entries(summary).map(([k, v]) => `${k}: ${v}`).join('\n')
+          const { response } = await dialog.showMessageBox(mainWindow, {
+            type: 'warning',
+            title: 'FlowDesk — agent action',
+            message: `An agent wants to run "${action}".`,
+            detail: `${details || 'No details.'}\n\nDenied automatically after ${APPROVAL_TIMEOUT_MS / 1000}s.`,
+            buttons: ['Allow', 'Deny'],
+            defaultId: 1,
+            cancelId: 1,
+            signal: abort.signal,
+          })
+          return response === 0 && !abort.signal.aborted
+        } finally {
+          clearTimeout(timer)
+        }
+      },
+    })
+    console.log(`[FlowDesk Gateway] listening on 127.0.0.1:${localGatewayServer.info.port}`)
+  } catch (err) {
+    console.warn('[FlowDesk Gateway] failed to start local gateway:', err)
+  }
+  // Warm the social worker windows so MCP/agent tools work straight after
+  // launch (headless included) without the user opening each platform first.
+  // tabId/partition/url must match what whatsapp.ts, linkedin.ts and reddit.ts
+  // pass to ensureBackgroundView() so their calls reuse these windows. TikTok
+  // and Flow pick partitions per account, so they are left to warm on demand.
+  const prewarmSettings = (store.get('settings') as (Partial<AppSettings> & { prewarmSocial?: boolean }) | undefined) || {}
+  if (prewarmSettings.prewarmSocial !== false) {
+    setInterval(() => { void flushAllCookies() }, 120_000).unref()
+    void prewarmBackgroundViews([
+      { tabId: 'social-whatsapp', partition: 'social-whatsapp', url: 'https://web.whatsapp.com' },
+      { tabId: 'social-linkedin', partition: 'social-linkedin', url: 'https://www.linkedin.com/feed/' },
+      { ...(rememberedView('reddit') ?? { tabId: 'social-reddit', partition: 'social-reddit' }), url: 'https://www.reddit.com' },
+    ])
+  }
+  // Radar schedules live in memory; resume every niche the user left enabled.
+  // Delayed so the TikTok view is not fought over while the app is still starting.
+  setTimeout(() => {
+    void loadNiches().then(niches => {
+      for (const n of niches) if (n.enabled) void startRadar(n.id)
+    }).catch(err => console.warn('[FlowDesk radar] could not resume niches:', err))
+  }, 60_000).unref()
   brainClient = createElectronBrainClient(app.getPath('userData'), join(__dirname, 'brainUtility.js'), envelope => executeBrainCapability(envelope, {
     hasConsent: async (scopeId, recipeId, provider) => await brainRequest('getConsent', { scopeId, recipeId, provider }) === true,
     read: request => {
@@ -2532,6 +2698,8 @@ app.whenReady().then(async () => {
         case 'model.digest_chats': return digestChats(request.input.chats)
         case 'linkedin.feed': return liFeed(request.input.limit, 0, request.input.sort)
         case 'linkedin.search': return liSearch(request.input.query, 'CONTENT', request.input.limit)
+        case 'reddit.feed': return rdFeed({ subreddit: request.input.subreddit, sort: request.input.sort, limit: request.input.limit })
+        case 'reddit.search': return rdSearch(request.input.query, request.input.sort || 'new', request.input.limit)
       }
     },
   }))
@@ -2546,6 +2714,87 @@ app.whenReady().then(async () => {
     getScopeId: () => activeBrainScopeId,
     allowWrites: () => activeBrainWritesAllowed,
   })
+  setGatewayBrainHandler(async (method, payload: any) => {
+    let scopeId = payload?.scopeId
+    if (!scopeId && brainClient) {
+      try {
+        const globalScope = await brainRequest('ensureScope', { type: 'global', externalRef: 'global', name: 'Global' }) as any
+        const { projects: brainProjects, activeProjectId: brainProjectId } = projectSnapshot()
+        const brainProject = brainProjects.find(p => p.id === brainProjectId)
+        scopeId = brainProject?.id ?? globalScope?.id
+      } catch {}
+    }
+
+    if (method === 'search') {
+      const text = payload?.text || payload?.query || ''
+      return brainRequest('search', {
+        text,
+        scopeId,
+        includeParents: true,
+        limit: payload?.limit ?? 10,
+        tokenBudget: payload?.tokenBudget ?? 1200,
+      })
+    }
+    if (method === 'remember') {
+      return brainRequest('remember', {
+        scopeId,
+        kind: payload?.kind ?? 'fact',
+        text: String(payload?.text || ''),
+      })
+    }
+    if (method === 'knowledge.search') {
+      return brainRequest('knowledge.search', {
+        scopeId,
+        query: String(payload?.query || payload?.text || ''),
+        limit: payload?.limit ?? 10,
+      })
+    }
+    if (method === 'knowledge.read') {
+      return brainRequest('knowledge.read', {
+        scopeId,
+        path: String(payload?.path || ''),
+      })
+    }
+    if (method === 'knowledge.neighbors') {
+      return brainRequest('knowledge.neighbors', {
+        scopeId,
+        path: String(payload?.path || ''),
+        depth: payload?.depth ?? 1,
+      })
+    }
+    if (method === 'knowledge.answerPack') {
+      return brainRequest('knowledge.answerPack', {
+        scopeId,
+        question: String(payload?.question || payload?.query || ''),
+        tokenBudget: payload?.tokenBudget ?? 2000,
+      })
+    }
+    if (method === 'overview') {
+      return brainRequest('overview', { scopeId })
+    }
+    if (method === 'listMemories') {
+      return brainRequest('listMemories', { scopeId })
+    }
+    if (method === 'listCandidates') {
+      return brainRequest('listCandidates', { scopeId })
+    }
+    if (method === 'decideCandidate') {
+      return brainRequest('decideCandidate', payload)
+    }
+    return brainRequest(method as any, payload ?? {})
+  })
+
+  // On startup, mark any pre-existing queued continuations as consumed so that
+  // interrupted runs from a prior session do not trigger ghost agent runs in the background.
+  try {
+    const staleContinuations = await brainRequest('listQueuedContinuations', {}) as Array<{ id: string }>
+    for (const item of staleContinuations) {
+      await brainRequest('consumeContinuation', { id: item.id })
+    }
+  } catch (err) {
+    console.log('[FlowDesk brain] startup stale continuation clear skipped:', err)
+  }
+
   continuationTimer = setInterval(() => void drainBrainContinuations(), 10_000)
   continuationTimer.unref()
   void mirrorNotebookJobs(notebookJobQueue.list())
@@ -2558,8 +2807,6 @@ app.whenReady().then(async () => {
 
   const previousRun = agentRunSnapshot()
   if (previousRun.status === 'running') finishAgentRun('interrupted')
-
-  await designMemory.loadDesignMemory().catch(error => console.log('[FlowDesk studio] design memory load skipped:', error))
 
   await migrateLegacyAgentSession().catch(error => console.log('[FlowDesk agent] session migration skipped:', error))
   createWindow()
@@ -2578,21 +2825,6 @@ app.whenReady().then(async () => {
     // filePath has backslashes and a drive letter (C:\Users\...), which
     // isn't a valid file: URL as-is; pathToFileURL handles that escaping
     // correctly on every platform.
-    return net.fetch(pathToFileURL(filePath).href)
-  })
-
-  // Serves a Studio document's own assets/<file> — the host is the
-  // document id, so a request for a different document's asset is refused
-  // outright rather than silently mixing folders together.
-  protocol.handle('studio-asset', (request) => {
-    const url = new URL(request.url)
-    const documentId = url.hostname
-    if (!studioIsValidDocumentId(documentId)) return new Response('Forbidden', { status: 403 })
-    const fileName = basename(decodeURIComponent(url.pathname.replace(/^\/+/, '')))
-    if (!fileName) return new Response('Forbidden', { status: 403 })
-    const dir = studioStore.assetsDir(documentId)
-    const filePath = join(dir, fileName)
-    if (!filePath.startsWith(dir)) return new Response('Forbidden', { status: 403 })
     return net.fetch(pathToFileURL(filePath).href)
   })
 
@@ -2673,6 +2905,11 @@ app.on('window-all-closed', () => {
   }
 })
 app.on('will-quit', () => {
+  void flushAllCookies()
+  if (localGatewayServer) {
+    void localGatewayServer.stop()
+    localGatewayServer = null
+  }
   if (continuationTimer) clearInterval(continuationTimer)
   continuationTimer = null
   brainClient?.stop()

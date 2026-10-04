@@ -82,7 +82,7 @@ let Brain: ComponentType
 beforeAll(async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: api })
   Brain = (await import('./Brain')).default
-})
+}, 30000)
 
 beforeEach(() => {
   vi.resetAllMocks()

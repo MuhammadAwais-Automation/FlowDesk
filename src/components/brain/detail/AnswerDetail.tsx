@@ -22,31 +22,31 @@ export function AnswerDetail({ pack, onSelect }: {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold">{pack.question}</h2>
-        <p className="mt-1 text-xs text-stone-500">
+        <h2 className="text-lg font-semibold text-slate-100">{pack.question}</h2>
+        <p className="mt-1 text-xs text-[#94a3b8]">
           {pack.sections.length} passage{pack.sections.length === 1 ? '' : 's'}, seedha Library se — koi model nahi chala.
         </p>
       </div>
 
       {pack.sections.length === 0
-        ? <p className="text-sm text-stone-500">{pack.evidence}</p>
+        ? <p className="text-sm text-[#94a3b8]">{pack.evidence}</p>
         : <div className="space-y-4">
             {pack.sections.map(section => <div key={`${section.path}#${section.headingPath}`}>
               <button
                 onClick={() => onSelect({ kind: 'document', path: section.path })}
-                className="block max-w-full truncate font-mono text-xs text-amber-700 hover:underline"
+                className="block max-w-full truncate font-mono text-xs text-amber-500 hover:underline"
               >{section.path}{section.headingPath && `#${section.headingPath}`}</button>
-              <p className="mt-1 whitespace-pre-wrap rounded-xl bg-stone-50 p-3 text-sm text-stone-700">{section.text}</p>
+              <p className="mt-1 whitespace-pre-wrap rounded-xl border border-[#2a3142] bg-[#1a2030] p-3 text-sm text-slate-200">{section.text}</p>
             </div>)}
           </div>}
 
-      <dl className="rounded-xl border border-stone-200 p-3 text-xs text-stone-600">
-        <div className="flex justify-between gap-3"><dt>Kaise dhoonda</dt><dd>{STRATEGY_LABEL[pack.strategy]}</dd></div>
-        <div className="mt-1 flex justify-between gap-3"><dt>Kitne documents dekhe</dt><dd>{pack.candidatesConsidered}</dd></div>
-        <div className="mt-1 flex justify-between gap-3"><dt>Agent ko kitne tokens jaate</dt><dd>~{pack.estimatedTokens}</dd></div>
+      <dl className="rounded-xl border border-[#2a3142] bg-[#1a2030] p-3 text-xs text-slate-300">
+        <div className="flex justify-between gap-3"><dt className="text-[#94a3b8]">Kaise dhoonda</dt><dd className="text-slate-200">{STRATEGY_LABEL[pack.strategy]}</dd></div>
+        <div className="mt-1 flex justify-between gap-3"><dt className="text-[#94a3b8]">Kitne documents dekhe</dt><dd className="text-slate-200">{pack.candidatesConsidered}</dd></div>
+        <div className="mt-1 flex justify-between gap-3"><dt className="text-[#94a3b8]">Agent ko kitne tokens jaate</dt><dd className="text-slate-200">~{pack.estimatedTokens}</dd></div>
         {pack.pointerFollowed && <div className="mt-1 flex justify-between gap-3">
-          <dt>Link follow kiya</dt>
-          <dd className="truncate font-mono">{pack.pointerFollowed.from} → {pack.pointerFollowed.to}</dd>
+          <dt className="text-[#94a3b8]">Link follow kiya</dt>
+          <dd className="truncate font-mono text-slate-200">{pack.pointerFollowed.from} → {pack.pointerFollowed.to}</dd>
         </div>}
       </dl>
     </div>

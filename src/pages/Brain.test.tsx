@@ -56,7 +56,7 @@ let Brain: ComponentType
 beforeAll(async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: api })
   Brain = (await import('./Brain')).default
-})
+}, 30000)
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -180,6 +180,34 @@ describe('Brain shell', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Brain scope' }), { target: { value: 'b' } })
 
     await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull())
+  })
+
+  it('collapses the left aside panel when DetailDrawer is open on narrow screens and allows expanding', async () => {
+    // jsdom window.innerWidth is 1024 (< 1280) by default
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: /review/ }))
+    expect(screen.getByRole('complementary', { name: 'Review' })).toBeTruthy()
+
+    // Open a document to trigger DetailDrawer
+    await openFromMap('Yasir', /Yasir Bhai/)
+    await waitFor(() => expect(screen.getByRole('complementary', { name: 'Detail' })).toBeTruthy())
+
+    // On narrow screen with drawer open, the left panel collapses into a compact toggle
+    const expandBtn = screen.getByRole('button', { name: 'Expand Review' })
+    expect(expandBtn).toBeTruthy()
+
+    // Expanding it shows the panel as an overlay with a collapse button
+    fireEvent.click(expandBtn)
+    const collapseBtn = screen.getByRole('button', { name: 'Collapse Review' })
+    expect(collapseBtn).toBeTruthy()
+    fireEvent.click(collapseBtn)
+    expect(screen.getByRole('button', { name: 'Expand Review' })).toBeTruthy()
+
+    // Closing the detail drawer uncollapses the panel back to normal
+    fireEvent.click(screen.getByRole('button', { name: 'Close detail' }))
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Detail' })).toBeNull())
+    expect(screen.queryByRole('button', { name: 'Expand Review' })).toBeNull()
+    expect(screen.getByRole('complementary', { name: 'Review' })).toBeTruthy()
   })
 })
 

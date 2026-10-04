@@ -44,7 +44,7 @@ export function DetailDrawer({ stack, onBack, onClear, document, neighborhood, e
   return (
     <aside
       aria-label="Detail"
-      className="flex h-full w-[420px] shrink-0 flex-col overflow-hidden rounded-xl border"
+      className="flex h-full w-[420px] max-w-[calc(100vw-32px)] shrink-0 flex-col overflow-hidden rounded-xl border"
       style={{ background: OBSERVATORY.raised, borderColor: OBSERVATORY.border, borderLeftColor: OBSERVATORY.accent, borderLeftWidth: 2 }}
     >
       <header className="flex items-center gap-2 border-b px-3 py-2.5" style={{ borderColor: OBSERVATORY.border }}>

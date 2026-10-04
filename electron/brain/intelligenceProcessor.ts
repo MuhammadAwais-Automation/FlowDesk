@@ -118,7 +118,9 @@ function matchRatio(text: string, expressions: RegExp[]) {
 }
 
 export function extractBuyerIntent(text: string): number {
-  if (/\b(looking for|hiring|seeking|recommend(?:ation)? for)\b/i.test(text)) return 1
+  if (/\[for\s*hire\]/i.test(text)) return 0
+  if (/\[hiring\]|\b(looking for|hiring|seeking|need a developer|want a developer|recommend(?:ation)? for)\b/i.test(text)) return 1
+  if (/\b(budget|paying|\$|\/hr|per hour|fixed price)\b/i.test(text) && /\b(developer|engineer|builder|programmer|freelancer)\b/i.test(text)) return 0.85
   return /\b(need|want)\s+(?:an?\s+)?(?:developer|consultant|agency|freelancer|solution)\b/i.test(text) ? 0.5 : 0
 }
 

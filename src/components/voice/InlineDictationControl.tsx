@@ -3,7 +3,7 @@ import { ChevronDown, Mic, Square, Volume2, X } from 'lucide-react'
 import type { GmailSession } from '@/types/electron'
 
 type InlineDictationProvider = 'chatgpt' | 'gemini'
-type InlineDictationSurface = 'agent' | 'universal'
+type InlineDictationSurface = 'agent'
 
 type DictationStatus = 'idle' | 'probing' | 'ready' | 'listening' | 'processing' | 'failed'
 

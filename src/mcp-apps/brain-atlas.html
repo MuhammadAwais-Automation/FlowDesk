@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlowDesk Brain Knowledge Atlas</title>
+  <style>
+    :root {
+      --bg: #090c14;
+      --panel-bg: #111726;
+      --border: #1e293b;
+      --accent: #8b5cf6;
+      --cyan: #06b6d4;
+      --text: #ffffff;
+      --text-dim: #94a3b8;
+      --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font); }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px;
+      overflow-x: hidden;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .title { font-size: 16px; font-weight: 700; }
+    .badge {
+      font-size: 11px;
+      background: rgba(139, 92, 246, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      padding: 3px 8px;
+      border-radius: 12px;
+    }
+    .graph-container {
+      background: #06080e;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      height: 280px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+    canvas { width: 100%; height: 100%; }
+    .memory-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .memory-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .kind-tag {
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .tag-decision { background: rgba(139, 92, 246, 0.2); color: var(--accent); }
+    .tag-preference { background: rgba(6, 182, 212, 0.2); color: var(--cyan); }
+    .tag-fact { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+    .mem-text { font-size: 13px; line-height: 1.4; color: #e2e8f0; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="title">Brain Knowledge Atlas</div>
+      <div style="font-size: 11px; color: var(--text-dim);">Semantic Memory & Knowledge Graph Visualizer</div>
+    </div>
+    <div class="badge">Scope: Global • Vector Index Active</div>
+  </div>
+
+  <div class="graph-container">
+    <canvas id="graph-canvas"></canvas>
+  </div>
+
+  <div class="memory-list">
+    <div class="memory-card">
+      <span class="kind-tag tag-decision">Decision</span>
+      <div class="mem-text">TikTok viral content pipeline uses native audio voiceover prompts with phonetic pronunciation tuning.</div>
+    </div>
+    <div class="memory-card">
+      <span class="kind-tag tag-preference">Preference</span>
+      <div class="mem-text">User prefers running FlowDesk in headless background daemon mode with stdio MCP tools connected.</div>
+    </div>
+    <div class="memory-card">
+      <span class="kind-tag tag-fact">Fact</span>
+      <div class="mem-text">Primary TikTok account authenticated as @alphapaws6 with automated studio video posting permissions.</div>
+    </div>
+  </div>
+
+  <script>
+    // Lightweight animated node graph
+    const canvas = document.getElementById('graph-canvas')
+    const ctx = canvas.getContext('2d')
+    let w, h
+
+    function resize() {
+      w = canvas.width = canvas.parentElement.clientWidth
+      h = canvas.height = canvas.parentElement.clientHeight
+    }
+    window.addEventListener('resize', resize)
+    resize()
+
+    const nodes = [
+      { x: w*0.5, y: h*0.5, r: 14, color: '#8b5cf6', label: 'Atlas Core', vx: 0, vy: 0 },
+      { x: w*0.3, y: h*0.3, r: 8, color: '#06b6d4', label: 'TikTok @alphapaws6', vx: 0.2, vy: -0.1 },
+      { x: w*0.7, y: h*0.3, r: 8, color: '#10b981', label: 'Google Flow Studio', vx: -0.2, vy: 0.15 },
+      { x: w*0.25, y: h*0.7, r: 7, color: '#f59e0b', label: 'WhatsApp Sessions', vx: 0.1, vy: 0.1 },
+      { x: w*0.75, y: h*0.7, r: 7, color: '#ec4899', label: 'Reddit Automation', vx: -0.1, vy: -0.2 }
+    ]
+
+    function animate() {
+      ctx.clearRect(0, 0, w, h)
+      // draw edges
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+      ctx.lineWidth = 1.5
+      for (let i = 1; i < nodes.length; i++) {
+        ctx.beginPath()
+        ctx.moveTo(nodes[0].x, nodes[0].y)
+        ctx.lineTo(nodes[i].x, nodes[i].y)
+        ctx.stroke()
+      }
+
+      // draw nodes
+      nodes.forEach((n, i) => {
+        if (i > 0) {
+          n.x += n.vx
+          n.y += n.vy
+          if (n.x < 30 || n.x > w - 30) n.vx *= -1
+          if (n.y < 30 || n.y > h - 30) n.vy *= -1
+        }
+        ctx.beginPath()
+        ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2)
+        ctx.fillStyle = n.color
+        ctx.shadowColor = n.color
+        ctx.shadowBlur = 8
+        ctx.fill()
+        ctx.shadowBlur = 0
+
+        ctx.fillStyle = '#94a3b8'
+        ctx.font = '11px sans-serif'
+        ctx.fillText(n.label, n.x + n.r + 6, n.y + 4)
+      })
+      requestAnimationFrame(animate)
+    }
+    animate()
+  </script>
+</body>
+</html>

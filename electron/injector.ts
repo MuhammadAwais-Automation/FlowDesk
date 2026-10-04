@@ -1,9 +1,12 @@
-import { WebContents } from 'electron'
+import { WebContents, clipboard } from 'electron'
 
-export type AITool = 'chatgpt' | 'claude' | 'gemini' | 'grok' | 'perplexity'
+export type AITool = 'chatgpt' | 'claude' | 'gemini' | 'grok' | 'perplexity' | 'deepseek'
 
 const SELECTORS: Record<AITool, string> = {
-  chatgpt: '#prompt-textarea',
+  // The composer lost its #prompt-textarea id (live page, 2026-09-28): it is
+  // now a bare ProseMirror div labelled "Ask ChatGPT". The old id stays first
+  // for any page still serving it.
+  chatgpt: '#prompt-textarea, div.ProseMirror[contenteditable="true"]',
   // Specifically the composer, not just any contenteditable: once the page
   // has a real viewport it renders its sidebar too, and a bare
   // [contenteditable="true"] can then resolve to a different element than
@@ -29,6 +32,7 @@ const SELECTORS: Record<AITool, string> = {
   // aria-label, id or test id to anchor to — and the only one on the page.
   // (The previous `textarea[placeholder]` guess matched nothing here at all.)
   perplexity: 'div[contenteditable="true"]',
+  deepseek: 'textarea#chat-input, textarea[placeholder*="DeepSeek"]',
 }
 
 function sleep(ms: number): Promise<void> {
@@ -97,7 +101,7 @@ async function withDebugger<T>(webContents: WebContents, fn: () => Promise<T>): 
  * the same "go underneath the app's own layer" approach the network
  * capture already relies on.
  */
-async function injectPromptCDP(webContents: WebContents, text: string, tool: AITool, submit: boolean): Promise<boolean> {
+export async function injectPromptCDP(webContents: WebContents, text: string, tool: AITool, submit: boolean): Promise<boolean> {
   const selector = SELECTORS[tool]
 
   // Wait for the composer to exist, then focus it — Input.insertText goes
@@ -135,40 +139,86 @@ async function injectPromptCDP(webContents: WebContents, text: string, tool: AIT
     // to it and ship both messages as one. Done as real key events for the
     // same reason the typing below is: clearing via JS wouldn't reach the
     // editor's own model.
-    const selectAll = { windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, key: 'a', code: 'KeyA', modifiers: 2 }
+    const mod = process.platform === 'darwin' ? 8 : 2
+    const selectAll = { windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, key: 'a', code: 'KeyA', modifiers: mod }
     await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...selectAll })
     await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...selectAll })
     const del = { windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8, key: 'Backspace', code: 'Backspace' }
     await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...del })
     await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...del })
 
-    // Per-character key events: what ProseMirror actually reacts to.
-    // Input.insertText reaches the DOM but leaves ProseMirror's own model
-    // untouched (its composer kept both the `is-empty` class and its
-    // placeholder while visibly showing the text), so the Send button never
-    // rendered and the message could never be submitted.
-    for (const ch of text) {
-      await webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
-        type: 'keyDown',
-        text: ch,
-        unmodifiedText: ch,
-        key: ch,
-      })
-      await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: ch })
+    // 1-Shot Instant Fast Paste (replacing per-character CDP loop)
+    let pasteSucceeded = false
+    let prevClipboard: string | null = null
+
+    try {
+      try {
+        prevClipboard = clipboard.readText()
+      } catch {
+        // clipboard access might throw in sandboxed environments
+      }
+
+      clipboard.writeText(text)
+
+      const ctrlV = {
+        windowsVirtualKeyCode: 86,
+        nativeVirtualKeyCode: 86,
+        key: 'v',
+        code: 'KeyV',
+        modifiers: mod,
+      }
+      await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...ctrlV })
+      await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...ctrlV })
+      pasteSucceeded = true
+    } catch (err) {
+      console.log(`[FlowDesk inject:cdp][${tool}] clipboard paste dispatch error:`, err)
     }
 
     // Confirm the text actually reached the editor rather than assuming it.
     let landed = ''
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 5; i++) {
       landed = (await webContents.executeJavaScript(readComposerSrc(selector))) ?? ''
       if (landed.trim().length > 0) break
-      await sleep(100)
+      await sleep(50)
     }
+
+    // Robust Fallback: if clipboard paste did not land, use Input.insertText + synthetic input events
     if (!landed.trim()) {
-      console.log(`[FlowDesk inject:cdp][${tool}] typed text did not land`)
+      console.log(`[FlowDesk inject:cdp][${tool}] clipboard paste did not register in composer, attempting Input.insertText fallback`)
+      try {
+        await webContents.debugger.sendCommand('Input.insertText', { text })
+        await webContents.executeJavaScript(`
+          (function() {
+            const el = document.querySelector(${JSON.stringify(selector)})
+            if (el) {
+              el.dispatchEvent(new Event('input', { bubbles: true }))
+              el.dispatchEvent(new Event('change', { bubbles: true }))
+            }
+          })()
+        `)
+      } catch (err) {
+        console.log(`[FlowDesk inject:cdp][${tool}] Input.insertText fallback error:`, err)
+      }
+
+      for (let i = 0; i < 20; i++) {
+        landed = (await webContents.executeJavaScript(readComposerSrc(selector))) ?? ''
+        if (landed.trim().length > 0) break
+        await sleep(100)
+      }
+    }
+
+    // Restore previous clipboard content if we modified it
+    if (pasteSucceeded && prevClipboard !== null && prevClipboard !== text) {
+      try {
+        clipboard.writeText(prevClipboard)
+      } catch {}
+    }
+
+    if (!landed.trim()) {
+      console.log(`[FlowDesk inject:cdp][${tool}] prompt text did not land in composer`)
       return false
     }
-    console.log(`[FlowDesk inject:cdp][${tool}] typed text landed: ${JSON.stringify(landed.slice(0, 60))}`)
+    console.log(`[FlowDesk inject:cdp][${tool}] prompt text landed (chars=${landed.length}): ${JSON.stringify(landed.slice(0, 60))}`)
 
     if (!submit) return true
 
@@ -259,8 +309,10 @@ export async function injectPrompt(webContents: WebContents, text: string, tool:
   // does — real key events, then the real Send button — and verifies both
   // that the text landed and that the composer emptied afterwards, so a
   // failed send reports as failed instead of silently stranding the caller.
-  if (tool === 'claude' || tool === 'gemini' || tool === 'grok' || tool === 'perplexity') {
-    return injectPromptCDP(webContents, text, tool, submit)
+  if (tool === 'claude' || tool === 'gemini' || tool === 'grok' || tool === 'perplexity' || tool === 'chatgpt') {
+    const cdpOk = await injectPromptCDP(webContents, text, tool, submit)
+    if (cdpOk) return true
+    console.log(`[FlowDesk inject] CDP injection not completed for ${tool}, attempting DOM injection fallback`)
   }
 
   const selector = SELECTORS[tool]
@@ -494,6 +546,12 @@ export async function getLatestAssistantText(webContents: WebContents, tool: AIT
             '[data-testid*="assistant"]',
             '.prose',
             'article'
+          ],
+          deepseek: [
+            '.ds-markdown',
+            '[data-testid*="assistant"]',
+            '.prose',
+            '.chat-message'
           ]
         }
 

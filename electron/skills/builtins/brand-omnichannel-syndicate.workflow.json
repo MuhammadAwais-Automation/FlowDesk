@@ -1,0 +1,43 @@
+{
+  "id": "brand-omnichannel-syndicate",
+  "name": "Brand Omnichannel Syndicate",
+  "version": "1.0.0",
+  "description": "Multi-platform intelligence syndicate: searches FlowDesk Brain persona, drafts LinkedIn thought leadership, and monitors niche Reddit discussions.",
+  "domains": ["brain", "linkedin", "reddit"],
+  "skills": ["brain-memory", "linkedin-post-writer", "reddit-research"],
+  "steps": [
+    {
+      "id": "query-brain",
+      "title": "Retrieve Brand Knowledge & Tone",
+      "skillId": "brain-memory",
+      "actionTool": "brain.search",
+      "params": {
+        "query": "{{inputs.topic}}"
+      }
+    },
+    {
+      "id": "linkedin-intel",
+      "title": "Scan LinkedIn Feed & Industry Pacing",
+      "skillId": "linkedin-post-writer",
+      "actionTool": "linkedin.feed",
+      "params": {
+        "limit": 3
+      },
+      "dependsOn": ["query-brain"]
+    },
+    {
+      "id": "reddit-intel",
+      "title": "Monitor Niche Subreddit Conversations",
+      "skillId": "reddit-research",
+      "actionTool": "reddit.feed",
+      "params": {
+        "subreddit": "{{inputs.subreddit}}",
+        "sort": "hot",
+        "limit": 5
+      },
+      "dependsOn": ["linkedin-intel"]
+    }
+  ],
+  "createdAt": "2026-09-20T00:00:00.000Z",
+  "updatedAt": "2026-09-20T00:00:00.000Z"
+}

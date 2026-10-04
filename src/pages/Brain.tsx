@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BrainCircuit } from 'lucide-react'
+import { BrainCircuit, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { ScopePicker, useBrainScope } from '@/components/brain/ScopePicker'
+import { ActivityPulse } from '@/components/brain/atlas/ActivityPulse'
 import { CommandBar } from '@/components/brain/atlas/CommandBar'
 import { DetailDrawer } from '@/components/brain/atlas/DetailDrawer'
 import { StatusStrip, type AtlasPanel } from '@/components/brain/atlas/StatusStrip'
@@ -26,6 +27,21 @@ const LAST_VISIT_KEY = 'brain.lastVisit'
 function weekBounds(): { from: string; to: string } {
   const now = new Date()
   return { from: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString(), to: now.toISOString() }
+}
+
+function useIsNarrowScreen(breakpoint = 1280) {
+  const [isNarrow, setIsNarrow] = useState(() => (
+    typeof window !== 'undefined' && typeof window.innerWidth === 'number' ? window.innerWidth < breakpoint : false
+  ))
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => setIsNarrow(window.innerWidth < breakpoint)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [breakpoint])
+
+  return isNarrow
 }
 
 /**
@@ -160,6 +176,22 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   }, [])
 
   const selection = stack.current
+  const isNarrow = useIsNarrowScreen(1280)
+  const isDrawerOpen = selection !== null
+  const [panelExpandedOnNarrow, setPanelExpandedOnNarrow] = useState(false)
+
+  useEffect(() => {
+    if (selection === null) {
+      setPanelExpandedOnNarrow(false)
+    }
+  }, [selection])
+
+  const handlePanelChange = useCallback((nextPanel: AtlasPanel | null) => {
+    if (nextPanel !== null && isNarrow && selection !== null) {
+      setPanelExpandedOnNarrow(true)
+    }
+    setPanel(nextPanel)
+  }, [isNarrow, selection, setPanel])
 
   // The spec gives `Esc` to both the drawer and the panels. The drawer owns its
   // own handler, so this one only fires when there is no drawer to close —
@@ -215,6 +247,24 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
   const highlighted = useMemo(() => (
     overlay && graph ? overlayPaths(overlay, { graph, since: lastVisit, events }) : chipHighlight
   ), [overlay, graph, lastVisit, events, chipHighlight])
+
+  const activeNodes = useMemo(() => {
+    const paths = new Set<string>()
+    if (askPack) {
+      for (const section of askPack.sections) paths.add(section.path)
+    }
+    for (const event of events) {
+      if (event.action === 'agent.turn') {
+        const read = event.metadata.documentsRead
+        if (Array.isArray(read)) {
+          for (const path of read) {
+            if (typeof path === 'string') paths.add(path)
+          }
+        }
+      }
+    }
+    return Array.from(paths)
+  }, [askPack, events])
 
   async function ask(question: string) {
     if (!scope) return
@@ -379,73 +429,154 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
         </Suspense>
 
         <div className="pointer-events-none absolute inset-0 flex flex-col p-3">
-          <div className="pointer-events-auto flex justify-center">
-            <CommandBar
-              graph={graph}
-              query={query}
-              onQueryChange={setQuery}
-              onOpen={openPath}
-              onAsk={question => void ask(question)}
-              asking={asking}
-            />
+          <div className="relative flex items-center justify-center">
+            <div className="pointer-events-auto">
+              <CommandBar
+                graph={graph}
+                query={query}
+                onQueryChange={setQuery}
+                onOpen={openPath}
+                onAsk={question => void ask(question)}
+                asking={asking}
+              />
+            </div>
+            <div className="pointer-events-auto absolute right-0 top-0 hidden sm:block">
+              <ActivityPulse
+                events={events}
+                asking={asking}
+                activeNodes={activeNodes}
+                onSelectNode={openPath}
+              />
+            </div>
           </div>
 
           <div className="mt-3 flex min-h-0 flex-1 gap-3">
-            {panel && (
-              <aside
-                aria-label={panel === 'timeline' ? 'Timeline' : panel === 'review' ? 'Review' : 'Health'}
-                className="pointer-events-auto w-[380px] shrink-0 overflow-y-auto rounded-xl border p-4"
-                style={{ background: OBSERVATORY.raised, borderColor: OBSERVATORY.border, borderLeftColor: OBSERVATORY.accent, borderLeftWidth: 2 }}
-              >
-                {panel === 'timeline' && (
-                  <Timeline
-                    events={events}
-                    onSelect={select}
-                    onHighlight={paths => { setChipHighlight(new Set(paths)); setFitTo(new Set(paths)) }}
-                  />
-                )}
-                {panel === 'review' && (
-                  <Review
-                    candidates={candidates}
-                    knowledgeCandidates={knowledgeCandidates}
-                    unresolvedLinks={unresolvedLinks}
-                    onReview={(id, decision) => void api.brainDecideCandidate({ id, decision })
-                      .then(() => scope && refresh(scope))
-                      .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}
-                    onReviewKnowledge={(id, decision) => void api.brainKnowledgeDecideCandidate({ id, decision })
-                      .then(() => scope && refresh(scope))
-                      .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}
-                    onCreateStub={path => void createStub(path)}
-                    onSelect={select}
-                  />
-                )}
-                {panel === 'health' && (
-                  <Health
-                    knowledgeVaultRoot={knowledgeVaultRoot}
-                    knowledgeImporting={knowledgeImporting}
-                    knowledgeImportReport={knowledgeImportReport}
-                    knowledgeManifest={knowledgeManifest}
-                    knowledgeCompacting={knowledgeCompacting}
-                    knowledgeCompactReport={knowledgeCompactReport}
-                    migrating={migrating}
-                    migrateReport={migrateReport}
-                    vectorStatus={vectorStatus}
-                    vectorBuilding={vectorBuilding}
-                    vectorReport={vectorReport}
-                    chooseVaultFolder={() => void chooseVaultFolder()}
-                    importVault={() => void importVault()}
-                    loadManifest={() => void loadManifest()}
-                    runCompaction={() => void runCompaction()}
-                    runMigration={dryRun => void runMigration(dryRun)}
-                    buildVectors={() => void buildVectors()}
-                    entityCount={entities.length}
-                    entityBackfilling={entityBackfilling}
-                    entityReport={entityReport}
-                    runEntityBackfill={() => void runEntityBackfill()}
-                  />
-                )}
-              </aside>
-            )}
+            {panel && (() => {
+              const panelTitle = panel === 'timeline' ? 'Timeline' : panel === 'review' ? 'Review' : 'Health'
+              const isAsideCollapsed = isNarrow && isDrawerOpen && !panelExpandedOnNarrow
+
+              const panelBody = (
+                <>
+                  {panel === 'timeline' && (
+                    <Timeline
+                      events={events}
+                      onSelect={select}
+                      onHighlight={paths => { setChipHighlight(new Set(paths)); setFitTo(new Set(paths)) }}
+                    />
+                  )}
+                  {panel === 'review' && (
+                    <Review
+                      candidates={candidates}
+                      knowledgeCandidates={knowledgeCandidates}
+                      unresolvedLinks={unresolvedLinks}
+                      onReview={(id, decision) => void api.brainDecideCandidate({ id, decision })
+                        .then(() => scope && refresh(scope))
+                        .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}
+                      onReviewKnowledge={(id, decision) => void api.brainKnowledgeDecideCandidate({ id, decision })
+                        .then(() => scope && refresh(scope))
+                        .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}
+                      onCreateStub={path => void createStub(path)}
+                      onSelect={select}
+                    />
+                  )}
+                  {panel === 'health' && (
+                    <Health
+                      knowledgeVaultRoot={knowledgeVaultRoot}
+                      knowledgeImporting={knowledgeImporting}
+                      knowledgeImportReport={knowledgeImportReport}
+                      knowledgeManifest={knowledgeManifest}
+                      knowledgeCompacting={knowledgeCompacting}
+                      knowledgeCompactReport={knowledgeCompactReport}
+                      migrating={migrating}
+                      migrateReport={migrateReport}
+                      vectorStatus={vectorStatus}
+                      vectorBuilding={vectorBuilding}
+                      vectorReport={vectorReport}
+                      chooseVaultFolder={() => void chooseVaultFolder()}
+                      importVault={() => void importVault()}
+                      loadManifest={() => void loadManifest()}
+                      runCompaction={() => void runCompaction()}
+                      runMigration={dryRun => void runMigration(dryRun)}
+                      buildVectors={() => void buildVectors()}
+                      entityCount={entities.length}
+                      entityBackfilling={entityBackfilling}
+                      entityReport={entityReport}
+                      runEntityBackfill={() => void runEntityBackfill()}
+                    />
+                  )}
+                </>
+              )
+
+              if (isAsideCollapsed) {
+                return (
+                  <aside
+                    aria-label={panelTitle}
+                    className="pointer-events-auto flex shrink-0 items-start"
+                  >
+                    <button
+                      type="button"
+                      aria-label={`Expand ${panelTitle}`}
+                      onClick={() => setPanelExpandedOnNarrow(true)}
+                      className="font-retro-mono flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs shadow-md transition hover:bg-white/10"
+                      style={{
+                        background: OBSERVATORY.raised,
+                        borderColor: OBSERVATORY.border,
+                        borderLeftColor: OBSERVATORY.accent,
+                        borderLeftWidth: 2,
+                        color: OBSERVATORY.text,
+                      }}
+                    >
+                      <PanelLeftOpen size={14} style={{ color: OBSERVATORY.accent }} />
+                      <span className="capitalize">{panel}</span>
+                    </button>
+                  </aside>
+                )
+              }
+
+              if (isNarrow && isDrawerOpen && panelExpandedOnNarrow) {
+                return (
+                  <aside
+                    aria-label={panelTitle}
+                    className="pointer-events-auto absolute bottom-14 left-3 top-14 z-20 w-[380px] max-w-[calc(100vw-48px)] shrink-0 overflow-y-auto rounded-xl border p-4 shadow-2xl"
+                    style={{
+                      background: OBSERVATORY.raised,
+                      borderColor: OBSERVATORY.border,
+                      borderLeftColor: OBSERVATORY.accent,
+                      borderLeftWidth: 2,
+                    }}
+                  >
+                    <div className="mb-2 flex items-center justify-between border-b pb-2" style={{ borderColor: OBSERVATORY.border }}>
+                      <span className="font-retro-mono text-xs uppercase tracking-wider" style={{ color: OBSERVATORY.muted }}>{panelTitle}</span>
+                      <button
+                        type="button"
+                        aria-label={`Collapse ${panelTitle}`}
+                        onClick={() => setPanelExpandedOnNarrow(false)}
+                        className="rounded p-1 transition hover:bg-white/10"
+                        style={{ color: OBSERVATORY.muted }}
+                      >
+                        <PanelLeftClose size={14} />
+                      </button>
+                    </div>
+                    {panelBody}
+                  </aside>
+                )
+              }
+
+              return (
+                <aside
+                  aria-label={panelTitle}
+                  className="pointer-events-auto w-[380px] max-w-[calc(100vw-48px)] shrink-0 overflow-y-auto rounded-xl border p-4"
+                  style={{
+                    background: OBSERVATORY.raised,
+                    borderColor: OBSERVATORY.border,
+                    borderLeftColor: OBSERVATORY.accent,
+                    borderLeftWidth: 2,
+                  }}
+                >
+                  {panelBody}
+                </aside>
+              )
+            })()}
 
             <div className="flex-1" />
 
@@ -470,7 +601,7 @@ function BrainScopeView({ scopes, scope, selectScope, loading: scopeLoading, err
               review={reviewCount}
               looseEnds={unresolvedLinks.length}
               panel={panel}
-              onPanel={setPanel}
+              onPanel={handlePanelChange}
               overlay={overlay}
               onOverlay={setOverlay}
             />

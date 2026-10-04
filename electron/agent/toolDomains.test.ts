@@ -12,7 +12,7 @@ describe('selectToolDomains', () => {
   it('finds the domain a question names', () => {
     expect(selectToolDomains('Yasir ko whatsapp par bhej do')).toContain('whatsapp')
     expect(selectToolDomains('ek linkedin post likho')).toContain('linkedin')
-    expect(selectToolDomains('studio mein ek banner design karo')).toContain('studio')
+    expect(selectToolDomains('reddit par upvote check karo')).toContain('reddit')
     expect(selectToolDomains('is par deep research karo')).toContain('notebooklm')
   })
 
@@ -50,6 +50,7 @@ describe('createAgentToolSet domain filtering', () => {
     expect(routed.names.length).toBeLessThan(30)
     // The three that are never routed away.
     expect(routed.names.some(name => name.includes('ask_chatgpt'))).toBe(true)
+    expect(routed.names.some(name => name.includes('ask_deepseek'))).toBe(true)
     expect(routed.names.some(name => name.includes('brain_'))).toBe(true)
     expect(routed.names.some(name => name.includes('linkedin'))).toBe(false)
   })

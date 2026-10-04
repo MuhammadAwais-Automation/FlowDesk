@@ -1,0 +1,81 @@
+{
+  "id": "tiktok-trend-to-video",
+  "name": "TikTok Trend to Video Pipeline",
+  "version": "1.0.0",
+  "description": "Autonomous growth pipeline: scouts viral TikTok outliers, crafts anchor prompt, renders 8s Google Flow video, downloads media, and publishes to TikTok Studio.",
+  "domains": [
+    "tiktok",
+    "flow"
+  ],
+  "skills": [
+    "tiktok-trend-research",
+    "video-prompt-writer",
+    "flow-video-director",
+    "tiktok-publisher"
+  ],
+  "steps": [
+    {
+      "id": "scout-trend",
+      "title": "Scout TikTok Outliers & Suggestions",
+      "skillId": "tiktok-trend-research",
+      "actionTool": "tiktok.suggest",
+      "params": {
+        "keyword": "{{inputs.topic}}"
+      }
+    },
+    {
+      "id": "craft-prompt",
+      "title": "Craft Anchor Video Prompt",
+      "skillId": "video-prompt-writer",
+      "params": {
+        "niche": "{{inputs.niche}}",
+        "referenceAnchor": "{{inputs.referenceAnchor}}",
+        "activity": "{{inputs.topic}}"
+      },
+      "dependsOn": [
+        "scout-trend"
+      ]
+    },
+    {
+      "id": "generate-video",
+      "title": "Render 8s Video in Google Flow",
+      "skillId": "flow-video-director",
+      "actionTool": "flow.generateVideo",
+      "params": {
+        "prompt": "{{craft-prompt.result.prompt}}",
+        "projectId": "{{inputs.projectId}}",
+        "modelKey": "{{inputs.modelKey}}"
+      },
+      "dependsOn": [
+        "craft-prompt"
+      ]
+    },
+    {
+      "id": "download-video",
+      "title": "Download Signed Video Asset",
+      "actionTool": "flow.downloadMedia",
+      "params": {
+        "mediaUrl": "{{generate-video.result.mediaId}}"
+      },
+      "dependsOn": [
+        "generate-video"
+      ]
+    },
+    {
+      "id": "publish-tiktok",
+      "title": "Publish Video to TikTok Studio",
+      "skillId": "tiktok-publisher",
+      "actionTool": "tiktok.apiUploadVideo",
+      "params": {
+        "filePath": "{{download-video.result.filePath}}",
+        "caption": "{{inputs.topic}} #fyp #viral #trending",
+        "privacy": "{{inputs.privacy}}"
+      },
+      "dependsOn": [
+        "download-video"
+      ]
+    }
+  ],
+  "createdAt": "2026-09-20T00:00:00.000Z",
+  "updatedAt": "2026-09-20T00:00:00.000Z"
+}

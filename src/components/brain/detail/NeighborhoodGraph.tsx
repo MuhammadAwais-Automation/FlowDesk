@@ -17,18 +17,18 @@ export function NeighborhoodGraph({ neighborhood, onOpen }: {
 }) {
   const layout = layoutNeighborhood(neighborhood, 360)
   if (layout.nodes.length <= 1) {
-    return <p className="text-sm text-stone-500">Is document ka koi link nahi — na andar, na bahar.</p>
+    return <p className="text-sm text-[#94a3b8]">Is document ka koi link nahi — na andar, na bahar.</p>
   }
   return (
     <svg viewBox={`0 0 ${layout.width} ${layout.height}`} className="mx-auto block h-auto w-full max-w-sm">
       {layout.edges.map(edge => (
-        <line key={`${edge.from}-${edge.to}`} x1={edge.x1} y1={edge.y1} x2={edge.x2} y2={edge.y2} stroke="#d6d3d1" strokeWidth={1} />
+        <line key={`${edge.from}-${edge.to}`} x1={edge.x1} y1={edge.y1} x2={edge.x2} y2={edge.y2} stroke="#334155" strokeWidth={1} />
       ))}
       {layout.nodes.map(node => (
         <g key={node.path} onClick={() => onOpen(node.path)} className="cursor-pointer">
           <title>{`${node.path} — ${node.depth} hop${node.depth === 1 ? '' : 's'}`}</title>
           <circle cx={node.x} cy={node.y} r={node.depth === 0 ? 9 : 6} fill={NODE_FILL[node.depth] ?? '#d6d3d1'} />
-          <text x={node.x} y={node.y - 12} textAnchor="middle" className="fill-stone-600 text-[9px]">
+          <text x={node.x} y={node.y - 12} textAnchor="middle" fill="#94a3b8" className="text-[9px]">
             {node.title.length > 18 ? `${node.title.slice(0, 17)}…` : node.title}
           </text>
         </g>

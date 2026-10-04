@@ -91,7 +91,10 @@ export default function Studio({ isActive }: Props) {
       api.hideView().catch(() => {})
       return
     }
-    api.switchView(`studio-${tool.id}`, partition, tool.url).catch(() => {})
+    // Same tab id electron/flow.ts uses for its hidden worker, so the MCP/agent
+    // tools and this page share one view instead of two Chromium instances
+    // fighting over the same partition's storage locks.
+    api.switchView(tool.id === 'flow' ? 'flow-worker' : `studio-${tool.id}`, partition, tool.url).catch(() => {})
     applyBounds()
   }, [isActive, tool.id, partition, applyBounds])
 

@@ -11,7 +11,7 @@ import {
   waStatus,
   waSendFile,
   MAX_ATTACHMENT_BYTES,
-} from '../whatsapp'
+} from '../whatsapp/whatsapp'
 import type { RequestApproval } from './approval'
 
 /**

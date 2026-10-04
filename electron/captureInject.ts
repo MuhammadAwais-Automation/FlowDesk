@@ -306,6 +306,36 @@ export const QWEN_SNIFFER_SRC = buildURLSnifferSrc('qwen')
 export const QWEN_MATCH_SRC = '/api/v2/chat/completions'
 export const QWEN_CAPTURE_SRC = buildCaptureInjectSrc(QWEN_MATCH_SRC, 'qwen')
 export const PERPLEXITY_CAPTURE_SRC = buildCaptureInjectSrc(PERPLEXITY_MATCH_SRC, 'perplexity')
+export const DEEPSEEK_MATCH_SRC = '/api/v0/chat/completion'
+export const DEEPSEEK_CAPTURE_SRC = buildCaptureInjectSrc(DEEPSEEK_MATCH_SRC, 'deepseek')
+
+export interface ImageProgressStage {
+  stageNumber: number
+  percent: number
+  stage: string
+}
+
+export const CHATGPT_IMAGE_STAGES: Record<number, ImageProgressStage> = {
+  1: { stageNumber: 1, percent: 15, stage: 'Prompt injected & request received by ChatGPT backend' },
+  2: { stageNumber: 2, percent: 35, stage: 'DALL-E tool invoked / image generation started' },
+  3: { stageNumber: 3, percent: 60, stage: 'Image rendering in progress' },
+  4: { stageNumber: 4, percent: 85, stage: 'Asset pointer received' },
+  5: { stageNumber: 5, percent: 95, stage: 'Fetching and saving high-res image bytes to disk' },
+  6: { stageNumber: 6, percent: 100, stage: 'Image saved as flowdesk-image:// and available' },
+}
+
+export function isDalleToolInvoked(evt: string): boolean {
+  return /t2uay3k\.sj1i4kz|"recipient"\s*:\s*"[^"]*dalle[^"]*"|"name"\s*:\s*"[^"]*dalle[^"]*"|image_gen_title|generating_image/i.test(evt)
+}
+
+export function detectImageProgressStage(evt: string, currentStage = 0): ImageProgressStage | null {
+  if (/sediment:\/\//i.test(evt)) return CHATGPT_IMAGE_STAGES[4]
+  if (isDalleToolInvoked(evt)) return CHATGPT_IMAGE_STAGES[2]
+  if (/image_asset_pointer|"content_type"\s*:\s*"image|dalle|asset_pointer/i.test(evt)) {
+    return currentStage >= 2 ? CHATGPT_IMAGE_STAGES[3] : CHATGPT_IMAGE_STAGES[2]
+  }
+  return null
+}
 
 // Discovery-only, no capture rule yet: WhatsApp Web is expected to differ
 // fundamentally from every provider above. Its transport is a WebSocket to

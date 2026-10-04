@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlowDesk TikTok Viral Studio</title>
+  <style>
+    :root {
+      --bg: #090c15;
+      --card-bg: #121727;
+      --card-border: #1f2742;
+      --accent: #ff0050;
+      --accent-cyan: #00f2fe;
+      --text: #ffffff;
+      --text-dim: #94a3b8;
+      --success: #10b981;
+      --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font); }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px;
+      overflow-x: hidden;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-cyan));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 15px;
+      color: #fff;
+    }
+    .title { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      font-weight: 600;
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+    .stats-summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-box {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-val { font-size: 20px; font-weight: 700; margin-top: 4px; }
+    .stat-val.viral { color: #f59e0b; }
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #cbd5e1;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+      gap: 16px;
+    }
+    .video-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+    }
+    .video-card:hover {
+      transform: translateY(-3px);
+      border-color: #3b4568;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .thumb-wrap {
+      position: relative;
+      width: 100%;
+      height: 200px;
+      background: #0f121e;
+      overflow: hidden;
+    }
+    .thumb-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.3s;
+    }
+    .video-card:hover .thumb-img { transform: scale(1.04); }
+    .outlier-tag {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(245, 158, 11, 0.95);
+      color: #000;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 4px 9px;
+      border-radius: 6px;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    }
+    .top-liked-tag {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(255, 0, 80, 0.9);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+    .card-body {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      flex-grow: 1;
+      justify-content: space-between;
+    }
+    .author-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .author-handle {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent-cyan);
+    }
+    .caption {
+      font-size: 13px;
+      line-height: 1.4;
+      color: #e2e8f0;
+      margin-bottom: 12px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .metrics-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-dim);
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      margin-bottom: 12px;
+    }
+    .metric-val { font-weight: 700; color: #fff; }
+    .btn-row { display: flex; gap: 8px; }
+    .btn {
+      flex: 1;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: opacity 0.2s;
+      text-decoration: none;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #e11d48);
+      color: #fff;
+    }
+    .btn-secondary {
+      background: #1c2338;
+      color: #cbd5e1;
+      border: 1px solid var(--card-border);
+    }
+    .btn:hover { opacity: 0.88; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <div class="logo">TT</div>
+      <div>
+        <div class="title">TikTok Viral Radar & Studio (AI Animation)</div>
+        <div style="font-size: 11px; color: var(--text-dim);">Live MCP App Extension • FlowDesk Headless Bridge</div>
+      </div>
+    </div>
+    <div class="status-badge">
+      <div class="status-dot"></div>
+      <span id="session-status">Logged in as @alphapaws6</span>
+    </div>
+  </div>
+
+  <div class="stats-summary">
+    <div class="stat-box">
+      <div class="stat-label">Total Outliers</div>
+      <div class="stat-val" id="total-count">15 Videos</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Peak Viral Views</div>
+      <div class="stat-val viral" id="peak-views">1.2M Views</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Top Format</div>
+      <div class="stat-val" style="font-size: 15px; color: var(--accent-cyan);">3D Meme Morph</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Viral View Ratio</div>
+      <div class="stat-val viral" id="top-vvr">🔥 5.8x</div>
+    </div>
+  </div>
+
+  <div class="section-title">
+    <span>Live Extracted Outlier Videos</span>
+    <span style="font-size: 12px; color: var(--text-dim); font-weight: normal;">Niche: AI Animation</span>
+  </div>
+
+  <div class="video-grid" id="video-grid">
+
+    <!-- Card 1 -->
+    <div class="video-card">
+      <div class="thumb-wrap">
+        <img class="thumb-img" src="https://p16-common-sign.tiktokcdn-eu.com/tos-useast8-p-0068-tx2/ocUEwlFXHEDw8xAAxcVAfvEeqdIgRnTEV0OYjB~tplv-photomode-zoomcover:720:720.jpeg?dr=10375&x-expires=1790233200&x-signature=PkbrdIgBm3krrwuZKNgkt3DwJjA%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=no1a&ftpl=1" alt="Cover" />
+        <div class="outlier-tag">🔥 1.2M Outlier</div>
+        <div class="top-liked-tag">⭐ Top Liked</div>
+      </div>
+      <div class="card-body">
+        <div class="author-row">
+          <span class="author-handle">@ofertasconpastel</span>
+          <span style="font-size: 11px; color: var(--text-dim);">3D AI Morph</span>
+        </div>
+        <div class="caption">Hyper-realistic AI animation 3D character transformation trend</div>
+        <div class="metrics-bar">
+          <div>👁️ <span class="metric-val">1.2M Views</span></div>
+          <div>❤️ <span class="metric-val">108K Likes</span></div>
+        </div>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="https://www.tiktok.com/@ofertasconpastel/video/7664436993396460830" target="_blank">▶ Watch on TikTok</a>
+          <button class="btn btn-secondary" onclick="replicatePrompt('@ofertasconpastel')">Replicate Script</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 2 -->
+    <div class="video-card">
+      <div class="thumb-wrap">
+        <img class="thumb-img" src="https://p16-common-sign.tiktokcdn-eu.com/tos-no1a-p-0037-no/owIGckQBUE3fAlGTKAe6LyAQA0IHpAefWhAqDR~tplv-photomode-zoomcover:720:720.jpeg?dr=10375&x-expires=1790233200&x-signature=jtlrAG3PMrtE42FueRz9%2BPHTWvU%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=no1a&ftpl=1" alt="Cover" />
+        <div class="outlier-tag">🔥 1.0M Outlier</div>
+        <div class="top-liked-tag">⭐ Top Liked</div>
+      </div>
+      <div class="card-body">
+        <div class="author-row">
+          <span class="author-handle">@fruitmood.1</span>
+          <span style="font-size: 11px; color: var(--text-dim);">Talking Meme</span>
+        </div>
+        <div class="caption">Animated talking AI fruit meme story format with high-retention audio hook</div>
+        <div class="metrics-bar">
+          <div>👁️ <span class="metric-val">1.0M Views</span></div>
+          <div>❤️ <span class="metric-val">84.2K Likes</span></div>
+        </div>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="https://www.tiktok.com/@fruitmood.1/video/7674283265062079766" target="_blank">▶ Watch on TikTok</a>
+          <button class="btn btn-secondary" onclick="replicatePrompt('@fruitmood.1')">Replicate Script</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 3 -->
+    <div class="video-card">
+      <div class="thumb-wrap">
+        <img class="thumb-img" src="https://p16-common-sign.tiktokcdn-eu.com/tos-no1a-p-0037-no/o0dDkFDnREFo9QCoezEIUDBApCugC005Wqfg5a~tplv-photomode-zoomcover:720:720.jpeg?dr=10375&x-expires=1790233200&x-signature=DMvN72l0MCax4aDQZeYbmO%2BNKeU%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=no1a&ftpl=1" alt="Cover" />
+        <div class="outlier-tag">🔥 776K Outlier</div>
+        <div class="top-liked-tag">⭐ Top Liked</div>
+      </div>
+      <div class="card-body">
+        <div class="author-row">
+          <span class="author-handle">@fun.animation84</span>
+          <span style="font-size: 11px; color: var(--text-dim);">Kids Cartoon</span>
+        </div>
+        <div class="caption">AI generated cute animals funny narrative animation loop</div>
+        <div class="metrics-bar">
+          <div>👁️ <span class="metric-val">776.8K Views</span></div>
+          <div>❤️ <span class="metric-val">62.5K Likes</span></div>
+        </div>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="https://www.tiktok.com/@fun.animation84/video/7663387167179312386" target="_blank">▶ Watch on TikTok</a>
+          <button class="btn btn-secondary" onclick="replicatePrompt('@fun.animation84')">Replicate Script</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 4 -->
+    <div class="video-card">
+      <div class="thumb-wrap">
+        <img class="thumb-img" src="https://p16-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/o8rOGAAqUDH8tT5fEvFEAhDuIfAji4AQIYfYkz~tplv-photomode-zoomcover:720:720.jpeg?dr=10375&x-expires=1790233200&x-signature=Mzd2isLPWq%2Bs5mVeEC260qyKiMY%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=no1a&ftpl=1" alt="Cover" />
+        <div class="outlier-tag">📈 183K Trending</div>
+      </div>
+      <div class="card-body">
+        <div class="author-row">
+          <span class="author-handle">@prince_toons</span>
+          <span style="font-size: 11px; color: var(--text-dim);">Toon Narrative</span>
+        </div>
+        <div class="caption">Dramatic toon character story animation rendered with AI tools</div>
+        <div class="metrics-bar">
+          <div>👁️ <span class="metric-val">183.2K Views</span></div>
+          <div>❤️ <span class="metric-val">14.8K Likes</span></div>
+        </div>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="https://www.tiktok.com/@prince_toons/video/7673915393194478862" target="_blank">▶ Watch on TikTok</a>
+          <button class="btn btn-secondary" onclick="replicatePrompt('@prince_toons')">Replicate Script</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 5 -->
+    <div class="video-card">
+      <div class="thumb-wrap">
+        <img class="thumb-img" src="https://p16-common-sign.tiktokcdn-eu.com/tos-useast8-p-0068-tx2/oIjqHI5LAfhIxBXV5fqFEa7VECtfxLHsVADAIW~tplv-photomode-zoomcover:720:720.jpeg?dr=10375&x-expires=1790233200&x-signature=IUAI%2FRU%2Fssv2%2F6UK47IPuAq2dqs%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=no1a&ftpl=1" alt="Cover" />
+        <div class="outlier-tag">📈 152K Trending</div>
+      </div>
+      <div class="card-body">
+        <div class="author-row">
+          <span class="author-handle">@nexivo92</span>
+          <span style="font-size: 11px; color: var(--text-dim);">AI Workflow</span>
+        </div>
+        <div class="caption">How this single prompt animated an entire story in 5 minutes #ai</div>
+        <div class="metrics-bar">
+          <div>👁️ <span class="metric-val">152.5K Views</span></div>
+          <div>❤️ <span class="metric-val">11.2K Likes</span></div>
+        </div>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="https://www.tiktok.com/@nexivo92/video/7686520201055046942" target="_blank">▶ Watch on TikTok</a>
+          <button class="btn btn-secondary" onclick="replicatePrompt('@nexivo92')">Replicate Script</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    function replicatePrompt(creator) {
+      alert(`[FlowDesk MCP Action] Generating replica script inspired by ${creator}...`);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlowDesk Social Radar (Reddit & LinkedIn)</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #131929;
+      --border: #1f2a40;
+      --reddit: #ff4500;
+      --linkedin: #0a66c2;
+      --text: #ffffff;
+      --text-dim: #94a3b8;
+      --accent-green: #10b981;
+      --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font); }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px;
+      overflow-x: hidden;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo-group {
+      display: flex;
+      gap: 4px;
+    }
+    .badge-logo {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 13px;
+      color: #fff;
+    }
+    .rd-logo { background: var(--reddit); }
+    .li-logo { background: var(--linkedin); }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
+    .tab {
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--text-dim);
+      transition: all 0.2s;
+    }
+    .tab.active-rd {
+      background: rgba(255, 69, 0, 0.15);
+      color: var(--reddit);
+      border: 1px solid rgba(255, 69, 0, 0.3);
+    }
+    .tab.active-li {
+      background: rgba(10, 102, 194, 0.15);
+      color: var(--linkedin);
+      border: 1px solid rgba(10, 102, 194, 0.3);
+    }
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+    }
+    .stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+    .stat-value { font-size: 18px; font-weight: 700; margin-top: 4px; }
+    .posts-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .post-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      transition: border-color 0.2s;
+    }
+    .post-card:hover { border-color: #334155; }
+    .post-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .post-sub { font-weight: 700; color: #f97316; }
+    .post-author { color: var(--text-dim); }
+    .post-title {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.4;
+      margin-bottom: 8px;
+    }
+    .post-snippet {
+      font-size: 12px;
+      color: #cbd5e1;
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    .post-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-dim);
+      border-top: 1px solid rgba(255,255,255,0.05);
+      padding-top: 8px;
+    }
+    .actions-group { display: flex; gap: 8px; }
+    .action-btn {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: #e2e8f0;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .action-btn:hover { background: #334155; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <div class="logo-group">
+        <div class="badge-logo rd-logo">r/</div>
+        <div class="badge-logo li-logo">in</div>
+      </div>
+      <div>
+        <div style="font-weight: 700; font-size: 15px;">Social Growth Radar</div>
+        <div style="font-size: 11px; color: var(--text-dim);">Reddit & LinkedIn Live MCP Hub</div>
+      </div>
+    </div>
+    <div style="font-size: 11px; color: var(--accent-green); background: rgba(16,185,129,0.12); padding: 3px 8px; border-radius: 10px;">
+      ● Synchronized
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active-rd" id="tab-rd" onclick="switchPlatform('reddit')">Reddit Feed</div>
+    <div class="tab" id="tab-li" onclick="switchPlatform('linkedin')">LinkedIn Network</div>
+  </div>
+
+  <div class="stats-row" id="stats-row">
+    <div class="stat-card">
+      <div class="stat-label">Total Karma</div>
+      <div class="stat-value" id="karma-val">12,480</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Unread Notifications</div>
+      <div class="stat-value" id="inbox-val">4</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Target Subreddits</div>
+      <div class="stat-value">r/AI_Coders</div>
+    </div>
+  </div>
+
+  <div class="posts-list" id="posts-list">
+    <!-- Sample items -->
+    <div class="post-card">
+      <div class="post-header">
+        <span class="post-sub">r/AI_Coders</span>
+        <span class="post-author">Posted by u/dev_architect • 2h ago</span>
+      </div>
+      <div class="post-title">How to run local AI desktop agents in headless mode with Model Context Protocol</div>
+      <div class="post-snippet">Comparing native Chromium automation bridges versus traditional headless puppeteer scripts for desktop workstations...</div>
+      <div class="post-footer">
+        <div>⬆️ 342 Upvotes • 💬 48 Comments</div>
+        <div class="actions-group">
+          <button class="action-btn" onclick="triggerVote('up')">⬆️ Upvote</button>
+          <button class="action-btn" onclick="triggerComment()">💬 Reply</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="post-card">
+      <div class="post-header">
+        <span class="post-sub">r/technology</span>
+        <span class="post-author">Posted by u/techradar • 5h ago</span>
+      </div>
+      <div class="post-title">Autonomous multi-agent systems entering production workflows</div>
+      <div class="post-snippet">Teams report 4x productivity acceleration when agents handle outbound repetitive video and content pipelines...</div>
+      <div class="post-footer">
+        <div>⬆️ 1.2K Upvotes • 💬 189 Comments</div>
+        <div class="actions-group">
+          <button class="action-btn" onclick="triggerVote('up')">⬆️ Upvote</button>
+          <button class="action-btn" onclick="triggerComment()">💬 Reply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function switchPlatform(plat) {
+      const rdTab = document.getElementById('tab-rd')
+      const liTab = document.getElementById('tab-li')
+      if (plat === 'reddit') {
+        rdTab.className = 'tab active-rd'
+        liTab.className = 'tab'
+        document.getElementById('karma-val').textContent = '12,480'
+      } else {
+        liTab.className = 'tab active-li'
+        rdTab.className = 'tab'
+        document.getElementById('karma-val').textContent = '1,850 Conn.'
+      }
+    }
+
+    function triggerVote(direction) {
+      alert(`[FlowDesk Social] Voted: ${direction}`)
+    }
+
+    function triggerComment() {
+      const text = prompt('Enter your comment text:')
+      if (text) alert(`[FlowDesk Social] Comment posted: "${text}"`)
+    }
+  </script>
+</body>
+</html>

@@ -1,8 +1,8 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import {
   Globe, Users,
-  Settings, Zap, Youtube, Calendar,
-  ChevronLeft, ChevronRight, MessagesSquare, Bot, BookOpen, Share2, Sparkles, Clapperboard, LayoutTemplate, BrainCircuit, Radar,
+  Settings, Zap, Youtube,
+  ChevronLeft, ChevronRight, Bot, BookOpen, Share2, Sparkles, BrainCircuit, Radar, Workflow, Clapperboard,
 } from 'lucide-react'
 import type { Page } from '@/types/pages'
 
@@ -20,17 +20,15 @@ interface NavItem {
 const items: NavItem[] = [
   { icon: Sparkles,        page: 'jarvis',    label: 'Jarvis Voice' },
   { icon: Globe,           page: 'browser',   label: 'AI Browser' },
-  { icon: MessagesSquare,  page: 'universalChat', label: 'Universal Chat' },
   { icon: Bot,             page: 'agent',     label: 'Agent'       },
+  { icon: Workflow,        page: 'skills',    label: 'Skills'      },
   { icon: BrainCircuit,    page: 'brain',     label: 'Brain'       },
   { icon: Radar,           page: 'intelligence', label: 'Intelligence' },
   { icon: BookOpen,        page: 'notebooklm', label: 'NotebookLM' },
   { icon: Users,           page: 'accounts',  label: 'Accounts'   },
   { icon: Youtube,         page: 'youtube',   label: 'YT Studio'  },
-  { icon: Calendar,        page: 'workspace', label: 'Workspace'  },
   { icon: Share2,          page: 'social',    label: 'Social'     },
-  { icon: Clapperboard,    page: 'studio',    label: 'Studio'     },
-  { icon: LayoutTemplate,  page: 'design',    label: 'Design'     },
+  { icon: Clapperboard,    page: 'studio',    label: 'Flow'       },
 ]
 
 interface Props {

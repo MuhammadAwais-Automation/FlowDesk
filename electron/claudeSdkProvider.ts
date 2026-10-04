@@ -28,10 +28,9 @@ async function* singleUserMessage(userText: string): AsyncIterable<SDKUserMessag
 // session — without this override the model may reference tools it doesn't
 // have here or answer as if mid-coding-session. Universal Chat is a plain
 // text-in/text-out assistant, so this keeps it conversational.
-const UNIVERSAL_CHAT_SYSTEM_PROMPT = `You are being used as a general-purpose chat assistant inside a desktop app
-called Universal Chat. Reply directly and conversationally to the user's
-message below. You have no tools and cannot access files, the shell, or the
-internet — text in, text out only.`
+const DEFAULT_ASSISTANT_SYSTEM_PROMPT = `You are a helpful general-purpose assistant inside FlowDesk.
+Reply directly and conversationally to the user's message below.
+Text in, text out only.`
 
 import { getClaudeExecutablePath } from './claudeExecutable'
 
@@ -61,7 +60,7 @@ export async function askClaudeSdk(
   for await (const message of query({
     prompt: singleUserMessage(prompt),
     options: {
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: overrides.systemPrompt ?? UNIVERSAL_CHAT_SYSTEM_PROMPT },
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: overrides.systemPrompt ?? DEFAULT_ASSISTANT_SYSTEM_PROMPT },
       tools: [],
       maxTurns: 1,
       persistSession: false,

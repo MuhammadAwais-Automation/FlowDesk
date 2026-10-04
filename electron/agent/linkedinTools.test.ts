@@ -20,7 +20,7 @@ const liListMessages = vi.fn()
 const liFindPeople = vi.fn()
 const liMarkRead = vi.fn()
 
-vi.mock('../linkedin', () => ({
+vi.mock('../linkedin/linkedin', () => ({
   liStatus: vi.fn(async () => ({ ok: true, signedIn: true })),
   liListChats: (...args: unknown[]) => liListChats(...args),
   liListMessages: (...args: unknown[]) => liListMessages(...args),

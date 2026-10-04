@@ -1,11 +1,13 @@
 import { z } from 'zod'
 
 export const socialRecipeRequestSchema = z.object({
-  recipeId: z.enum(['whatsapp.unread_intelligence', 'linkedin.community_scan', 'linkedin.opportunity_scan']),
+  recipeId: z.enum(['whatsapp.unread_intelligence', 'linkedin.community_scan', 'linkedin.opportunity_scan', 'reddit.lead_sniper']),
   scopeId: z.string().min(1),
   accountId: z.string().min(1).nullable().optional(),
   parameters: z.object({
     query: z.string().trim().max(500).optional(),
+    subreddit: z.string().trim().max(100).optional(),
+    sort: z.enum(['hot', 'new', 'top', 'rising']).optional(),
     limit: z.number().int().min(1).max(500).optional(),
     retentionDays: z.number().int().min(1).max(365).optional(),
     continuationSessionId: z.string().min(1).optional(),

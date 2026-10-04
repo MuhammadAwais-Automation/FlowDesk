@@ -9,7 +9,7 @@
  * security boundary.
  */
 export type InlineDictationProvider = 'chatgpt' | 'gemini'
-export type InlineDictationSurface = 'agent' | 'universal'
+export type InlineDictationSurface = 'agent'
 export type InlineDictationStatus =
   | 'probing'
   | 'ready'
@@ -105,7 +105,7 @@ export function resolveInlineDictationTarget(
   if (!input || typeof input !== 'object') return { ok: false, error: 'invalid_request' }
   const candidate = input as Partial<InlineDictationStartInput>
   if (candidate.provider !== 'chatgpt' && candidate.provider !== 'gemini') return { ok: false, error: 'unknown_provider' }
-  if (candidate.surface !== 'agent' && candidate.surface !== 'universal') return { ok: false, error: 'invalid_request' }
+  if (candidate.surface !== 'agent') return { ok: false, error: 'invalid_request' }
   if (typeof candidate.surfaceSessionId !== 'string' || !candidate.surfaceSessionId.trim() || candidate.surfaceSessionId.length > 200) {
     return { ok: false, error: 'invalid_request' }
   }

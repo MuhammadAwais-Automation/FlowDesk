@@ -6,8 +6,9 @@
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join, extname } from 'node:path'
-import { app } from 'electron'
-import { findViewByUrl, listViewUrls } from './sessions'
+import { app, session } from 'electron'
+import type { WebContents } from 'electron'
+import { findViewByUrl, findAnyViewByUrl, listViewUrls, ensureBackgroundView } from './sessions'
 import {
   createProjectScript, renameProjectScript, deleteProjectScript, listProjectsScript,
   listProjectMediaScript, uploadImageScript, fetchMediaUrlScript,
@@ -34,10 +35,46 @@ export interface FlowResult {
  */
 const FLOW_HOSTS = ['flow.google.com', 'labs.google'] as const
 
-function findFlowView() {
+let googlePartitionGetter: (() => string | null) | null = null
+let googleAccountsGetter: () => { email: string; partition: string }[] = () => []
+
+export function setGooglePartitionGetter(getter: () => string | null): void {
+  googlePartitionGetter = getter
+}
+
+/** Every signed-in Google account, for routing Flow work between them. */
+export function setGoogleAccountsGetter(getter: () => { email: string; partition: string }[]): void {
+  googleAccountsGetter = getter
+}
+
+/**
+ * Which account owns a project. Projects and media ids belong to one Google
+ * account, so a call about a project must run on that account's session —
+ * learned whenever a listing, creation or generation reports project ids.
+ */
+const projectOwner = new Map<string, string>() // project and media ids -> partition
+
+function defaultPartition(): string | null {
+  return googlePartitionGetter ? googlePartitionGetter() : null
+}
+
+/** An explicit account (email or partition) wins, then the project's owner, then the default. */
+function resolvePartition(projectId?: string, account?: string | null): string | null {
+  const want = String(account ?? '').trim().toLowerCase()
+  if (want) {
+    const hit = googleAccountsGetter().find(a => a.partition === want || a.email.toLowerCase().includes(want))
+    if (hit) return hit.partition
+  }
+  if (projectId && projectOwner.has(projectId)) return projectOwner.get(projectId)!
+  return defaultPartition()
+}
+
+/** A Flow page already open on screen, but only if it is signed in as `partition`. */
+function findFlowWebContents(partition: string | null): WebContents | null {
+  const wanted = partition ? session.fromPartition(`persist:${partition}`) : null
   for (const host of FLOW_HOSTS) {
-    const view = findViewByUrl(host)
-    if (view) return view
+    const v = typeof findAnyViewByUrl === 'function' ? findAnyViewByUrl(host) : findViewByUrl(host)
+    if (v && v.webContents && !v.webContents.isDestroyed() && (!wanted || v.webContents.session === wanted)) return v.webContents
   }
   return null
 }
@@ -58,16 +95,166 @@ function openUrlSummary(): string {
   return urls.length > 0 ? ` Open right now: ${[...new Set(urls)].join(', ')}.` : ' No browser views are open at all.'
 }
 
-async function call(script: string): Promise<FlowResult> {
-  const view = findFlowView()
-  if (!view) return { ok: false, error: NOT_OPEN + openUrlSummary() }
+async function waitForFlowReady(wc: WebContents, timeoutMs = 25000): Promise<boolean> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (!wc.isDestroyed()) {
+        const ready = await wc.executeJavaScript(
+          'Boolean(window.WIZ_global_data && window.WIZ_global_data.SNlM0e)'
+        )
+        if (ready) return true
+      }
+    } catch {
+      // ignore navigation transitions
+    }
+    await new Promise(r => setTimeout(r, 400))
+  }
+  return false
+}
+
+async function ensureFlowWebContents(targetProjectId?: string, partitionIn?: string | null): Promise<WebContents | null> {
+  const partition = partitionIn ?? defaultPartition()
+  let wc = findFlowWebContents(partition)
+
+  if (!wc) {
+    if (!partition) return null
+    const targetUrl = targetProjectId
+      ? `https://flow.google.com/project/${targetProjectId}`
+      : 'https://flow.google.com/'
+
+    try {
+      // The default account keeps the 'flow-worker' id the Studio page uses, so
+      // an open Studio view is reused rather than doubled.
+      const tabId = partition === defaultPartition() ? 'flow-worker' : `flow-worker-${partition}`
+      const bg = await ensureBackgroundView(tabId, partition, targetUrl)
+      wc = bg.webContents
+      await waitForFlowReady(wc)
+      return wc
+    } catch (e) {
+      console.warn('[FlowDesk flow] Failed to ensure background view:', e)
+      return null
+    }
+  }
+
+  if (targetProjectId && wc) {
+    const currentUrl = wc.getURL()
+    if (!currentUrl.includes(targetProjectId)) {
+      try {
+        await wc.loadURL(`https://flow.google.com/project/${targetProjectId}`)
+        await waitForFlowReady(wc)
+      } catch (e) {
+        console.warn(`[FlowDesk flow] Failed to navigate to project ${targetProjectId}:`, e)
+      }
+    }
+  }
+
+  return wc
+}
+
+async function call(script: string, projectId?: string, account?: string | null): Promise<FlowResult> {
+  const partition = resolvePartition(projectId, account)
+  const wc = await ensureFlowWebContents(projectId, partition)
+  if (!wc) return { ok: false, error: NOT_OPEN + openUrlSummary() }
   try {
-    const result = await view.webContents.executeJavaScript(script)
-    if (result && typeof result === 'object') return result as FlowResult
+    const result = await wc.executeJavaScript(script)
+    if (result && typeof result === 'object') {
+      const r = result as FlowResult
+      if (partition) learnOwners(r, partition)
+      return r
+    }
     return { ok: false, error: `bridge returned a non-object: ${String(result)}` }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/** Every project and media id in a result belongs to the account it came from. */
+function learnOwners(r: FlowResult, partition: string) {
+  if (!r.ok) return
+  const text = JSON.stringify(r)
+  for (const id of text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []) projectOwner.set(id, partition)
+}
+
+// ── account routing ─────────────────────────────────────────────────────────
+
+/**
+ * A refusal that another account could get past. The exact out-of-credits
+ * answer has not been captured yet (no account has run dry under a recorder),
+ * so this matches the general quota vocabulary Google APIs use plus HTTP 429.
+ */
+export function isFlowQuotaFailure(r: FlowResult): boolean {
+  if (r.ok) return false
+  return /RESOURCE_EXHAUSTED|quota|credit|insufficient|rate.?limit|HTTP 429/i.test(`${r.error ?? ''} ${r.detail ?? ''}`)
+}
+
+/** The credit balance: the first number of the nzlxg answer (959 on a live account). */
+function creditsOf(r: FlowResult): number | null {
+  const raw = r.raw
+  return r.ok && Array.isArray(raw) && typeof raw[0] === 'number' ? raw[0] : null
+}
+
+function maskAccount(email: string): string {
+  const m = email.match(/([^\s()<>]+)@([^\s()<>]+)/)
+  return m ? `${m[1].slice(0, 2)}***@${m[2]}` : '***'
+}
+
+/** Every Google account's Flow sign-in and credit balance. */
+export async function flowAccounts(): Promise<FlowResult> {
+  const accounts = googleAccountsGetter()
+  const rows: Record<string, unknown>[] = []
+  for (const a of accounts) {
+    const r = await call(getCreditsScript(), undefined, a.partition)
+    rows.push({ account: maskAccount(a.email), partition: a.partition, isDefault: a.partition === defaultPartition(), signedIn: r.ok, credits: creditsOf(r), error: r.ok ? null : r.error })
+  }
+  return { ok: true, accounts: rows }
+}
+
+/** A project to generate into on `partition`: the one titled "FlowDesk", made if missing. */
+async function autoProject(partition: string): Promise<string | null> {
+  const list = await call(listProjectsScript(), undefined, partition)
+  const hit = (Array.isArray(list.projects) ? list.projects as { projectId?: string; title?: string }[] : []).find(p => p.title === 'FlowDesk')
+  if (hit?.projectId) return hit.projectId
+  const made = await call(createProjectScript('FlowDesk'), undefined, partition)
+  return typeof made.projectId === 'string' ? made.projectId : null
+}
+
+/**
+ * Runs a generation on the project's account and, when that account is out of
+ * credits, on the next account with credits — in that account's own "FlowDesk"
+ * project, since projects do not cross accounts. The result says where it ran.
+ */
+async function generateRouted(projectId: string, account: string | null | undefined, script: (projectId: string) => string): Promise<FlowResult> {
+  const first = resolvePartition(projectId, account)
+  const accounts = googleAccountsGetter()
+  const label = (p: string | null) => maskAccount(accounts.find(a => a.partition === p)?.email ?? '')
+
+  const firstCredits = first ? creditsOf(await call(getCreditsScript(), undefined, first)) : null
+  let firstError: string | null = null
+  if (firstCredits === null || firstCredits > 0) {
+    const r = await call(script(projectId), projectId, first)
+    if (!isFlowQuotaFailure(r)) return { ...r, account: label(first), projectId: r.projectId ?? projectId }
+    firstError = String(r.error ?? 'quota')
+  } else {
+    firstError = `no credits left (${firstCredits})`
+  }
+
+  const tried: string[] = [`${label(first)}: ${firstError}`]
+  for (const a of accounts.filter(x => x.partition !== first)) {
+    const credits = creditsOf(await call(getCreditsScript(), undefined, a.partition))
+    if (credits === null || credits <= 0) { tried.push(`${maskAccount(a.email)}: ${credits === null ? 'not signed in to Flow' : 'no credits left'}`); continue }
+    const pid = await autoProject(a.partition)
+    if (!pid) { tried.push(`${maskAccount(a.email)}: could not open a project`); continue }
+    const r = await call(script(pid), pid, a.partition)
+    if (r.ok) return { ...r, account: maskAccount(a.email), projectId: pid, switchedAccount: true, switchedBecause: firstError }
+    if (!isFlowQuotaFailure(r)) return { ...r, account: maskAccount(a.email), projectId: pid }
+    tried.push(`${maskAccount(a.email)}: ${r.error}`)
+  }
+  return { ok: false, error: `no Google account could run this on Flow — ${tried.join('; ')}` }
+}
+
+export function flowEval(script: string, account?: string | null): Promise<FlowResult> {
+  return call(script, undefined, account)
 }
 
 const MAX_PROMPT_LENGTH = 4000
@@ -80,7 +267,7 @@ const MAX_PROMPT_LENGTH = 4000
  * and the captured request on the current API has no visible slot for one, so
  * offering the choice would be offering something unproven.
  */
-export function flowGenerateImage(prompt: string, projectId: string, imageModel?: ImageModel): Promise<FlowResult> {
+export function flowGenerateImage(prompt: string, projectId: string, imageModel?: ImageModel, account?: string | null): Promise<FlowResult> {
   const text = String(prompt ?? '').trim()
   if (!text) return Promise.resolve({ ok: false, error: 'refusing to generate an image without a prompt' })
   if (text.length > MAX_PROMPT_LENGTH) {
@@ -88,17 +275,17 @@ export function flowGenerateImage(prompt: string, projectId: string, imageModel?
   }
   const id = String(projectId ?? '').trim()
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to generate without a projectId' })
-  return call(generateImageScript(text, id, imageModel ?? 'NANO_BANANA_2'))
+  return generateRouted(id, account, pid => generateImageScript(text, pid, imageModel ?? 'NANO_BANANA_2'))
 }
 
-export function flowListProjects(): Promise<FlowResult> {
-  return call(listProjectsScript())
+export function flowListProjects(account?: string | null): Promise<FlowResult> {
+  return call(listProjectsScript(), undefined, account)
 }
 
 /** Creates a new Flow project. Returns the new projectId, for use with flowGenerateImage. */
-export function flowCreateProject(projectTitle: string): Promise<FlowResult> {
+export function flowCreateProject(projectTitle: string, account?: string | null): Promise<FlowResult> {
   const title = String(projectTitle ?? '').trim() || new Date().toLocaleString()
-  return call(createProjectScript(title))
+  return call(createProjectScript(title), undefined, account)
 }
 
 export interface MediaBytesResult {
@@ -108,25 +295,26 @@ export interface MediaBytesResult {
   contentType?: string
 }
 
-export function flowGenerateVideo(prompt: string, projectId: string, modelKey: string): Promise<FlowResult> {
+export function flowGenerateVideo(prompt: string, projectId: string, modelKey: string, account?: string | null): Promise<FlowResult> {
   const text = String(prompt ?? '').trim()
   if (!text) return Promise.resolve({ ok: false, error: 'refusing to generate a video without a prompt' })
   const id = String(projectId ?? '').trim()
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to generate without a projectId' })
   const model = String(modelKey ?? '').trim()
   if (!model) return Promise.resolve({ ok: false, error: 'refusing to generate without a model key — call flowVideoModels first' })
-  return call(generateVideoScript(text, id, model))
+  return generateRouted(id, account, pid => generateVideoScript(text, pid, model))
 }
 
-export function flowGetCredits(): Promise<FlowResult> {
-  return call(getCreditsScript())
+export function flowGetCredits(account?: string | null): Promise<FlowResult> {
+  return call(getCreditsScript(), undefined, account)
 }
 
 /** Looks up one media item by the id a generation returned. */
-export function flowMediaStatus(mediaId: string): Promise<FlowResult> {
+export function flowMediaStatus(mediaId: string, account?: string | null): Promise<FlowResult> {
   const id = String(mediaId ?? '').trim()
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to look up without a mediaId' })
-  return call(mediaStatusScript(id))
+  // A media id routes to the account that made it, like a project id does.
+  return call(mediaStatusScript(id), id, account)
 }
 
 /** Renames an existing project. New capability: the retired API had none. */
@@ -142,7 +330,7 @@ export function flowRenameProject(projectId: string, projectTitle: string): Prom
 export function flowListProjectMedia(projectId: string): Promise<FlowResult> {
   const id = String(projectId ?? '').trim()
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to list media without a projectId' })
-  return call(listProjectMediaScript(id))
+  return call(listProjectMediaScript(id), id)
 }
 
 /** The video model keys Flow accepts, read from Flow rather than hardcoded. */
@@ -176,7 +364,7 @@ export async function flowUploadImage(localFilePath: string, projectId: string):
   }
   const mimeType = MIME_BY_EXT[extname(path).toLowerCase()] ?? 'image/jpeg'
   const fileName = path.split(/[\/]/).pop() ?? 'image.jpg'
-  return call(uploadImageScript(bytes.toString('base64'), id, mimeType, fileName))
+  return call(uploadImageScript(bytes.toString('base64'), id, mimeType, fileName), id)
 }
 
 export interface MediaBytesResult {
@@ -205,12 +393,41 @@ async function fetchMediaBytes(mediaUrl: string): Promise<MediaBytesResult> {
   }
 }
 
-/** Saves one media item to disk, given its URL from a listing. */
+/** Saves one media item to disk, given its URL from a listing or direct mediaId. */
 export async function flowDownloadMedia(mediaUrl: string): Promise<FlowResult> {
-  const url = String(mediaUrl ?? '').trim()
-  if (!url) return { ok: false, error: 'refusing to download without a media URL' }
+  const target = String(mediaUrl ?? '').trim()
+  if (!target) return { ok: false, error: 'refusing to download without a media URL or mediaId' }
 
-  const fetched = await fetchMediaBytes(url)
+  let downloadUrl = target
+
+  // If a UUID / mediaId is passed, look up its direct signed CDN URL via API
+  if (!target.startsWith('http://') && !target.startsWith('https://')) {
+    const status = await flowMediaStatus(target)
+    if (!status.ok) return { ok: false, error: `could not get media status for ${target}: ${status.error}` }
+    const vUrl = (status as any).videoUrl || (status as any).imageUrl
+    if (!vUrl) return { ok: false, error: `media ${target} is not ready or has no download URL yet (status: ${(status as any).status})` }
+    downloadUrl = vUrl
+  }
+
+  // Direct fast CDN fetch via Node
+  if (downloadUrl.startsWith('https://flow-content.google/') || downloadUrl.startsWith('https://lh3.googleusercontent.com/')) {
+    try {
+      const res = await fetch(downloadUrl)
+      if (!res.ok) return { ok: false, error: `fetch failed: HTTP ${res.status}` }
+      const bytes = Buffer.from(await res.arrayBuffer())
+      const isMp4 = downloadUrl.includes('/video/') || res.headers.get('content-type')?.includes('mp4')
+      const ext = isMp4 ? 'mp4' : 'jpg'
+      const dir = join(app.getPath('downloads'), 'FlowDesk Studio')
+      await mkdir(dir, { recursive: true })
+      const filePath = join(dir, `flow-${Date.now()}.${ext}`)
+      await writeFile(filePath, bytes)
+      return { ok: true, downloaded: true, filePath, byteSize: bytes.length, url: downloadUrl }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  }
+
+  const fetched = await fetchMediaBytes(downloadUrl)
   if (!fetched.ok || !fetched.bytes) return { ok: false, error: fetched.error }
 
   const ext = fetched.contentType?.includes('png') ? 'png'
@@ -240,7 +457,7 @@ export function flowGenerateVideoFromImage(prompt: string, projectId: string, me
   if (!media) return Promise.resolve({ ok: false, error: 'refusing to generate without a source mediaId' })
   const model = String(modelKey ?? '').trim()
   if (!model) return Promise.resolve({ ok: false, error: 'refusing to generate without a model key -- call flowVideoModels first' })
-  return call(generateVideoFromImageScript(text, id, media, model))
+  return call(generateVideoFromImageScript(text, id, media, model), id)
 }
 
 /** Extends an existing video from its first 240 frames -- the only range captured. */
@@ -253,6 +470,6 @@ export function flowExtendVideo(prompt: string, projectId: string, sourceVideoId
   if (!source) return Promise.resolve({ ok: false, error: 'refusing to extend without a source video id' })
   const scene = String(sceneId ?? '').trim()
   if (!scene) return Promise.resolve({ ok: false, error: 'refusing to extend without a scene id' })
-  return call(extendVideoScript(text, id, source, scene))
+  return call(extendVideoScript(text, id, source, scene), id)
 }
 

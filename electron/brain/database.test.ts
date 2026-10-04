@@ -294,7 +294,9 @@ describe('BrainDatabase', () => {
     expect(brain.countOpportunities({ scopeId: scope.id, status: 'new' })).toBe(520)
     expect(brain.countOpportunities({ scopeId: scope.id, status: 'qualified' })).toBe(0)
     brain.close()
-  })
+    // 520 separate on-disk upserts: ~4s alone, but past the 5s default when the
+    // whole suite runs in parallel. Not a hang — just a big fixture.
+  }, 20_000)
 
   it('lists, reviews and resolves evidence only inside the selected scope', () => {
     const brain = createBrain()
@@ -585,13 +587,40 @@ describe('BrainDatabase', () => {
     brain.registerRecipe({ id: 'notebooklm.research', version: 1, title: 'NotebookLM Research', steps: ['capture', 'normalize', 'summarize'] })
     const first = brain.enqueueJob({ recipeId: 'notebooklm.research', recipeVersion: 1, scopeId: scope.id, accountId: 'a1', parameters: { query: 'market' }, continuation: { sessionId: 'session-1', mode: 'interactive', contextBudget: 1200 } })
     const duplicate = brain.enqueueJob({ recipeId: 'notebooklm.research', recipeVersion: 1, scopeId: scope.id, accountId: 'a1', parameters: { query: 'market' }, continuation: { sessionId: 'session-1', mode: 'interactive', contextBudget: 1200 } })
-    expect(duplicate.id).toBe(first.id)
+    expect(duplicate).toEqual(first)
 
-    brain.completeJob(first.id, { recordCount: 12, artifactRefs: ['artifact://report'] })
+    const completed = brain.completeJob(first.id, { recordCount: 12, artifactRefs: ['artifact://report'] })
+    const completedDuplicate = brain.enqueueJob({ recipeId: 'notebooklm.research', recipeVersion: 1, scopeId: scope.id, accountId: 'a1', parameters: { query: 'market' }, continuation: { sessionId: 'session-1', mode: 'interactive', contextBudget: 1200 } })
+    expect(completedDuplicate).toEqual(completed)
     brain.completeJob(first.id, { recordCount: 12, artifactRefs: ['artifact://report'] })
     expect(brain.listOutboxEvents('job.completed')).toHaveLength(1)
     expect(brain.listContinuations(first.id)).toHaveLength(1)
     brain.close()
+  })
+
+  it.each(['failed', 'cancelled'] as const)('requeues a %s job with the same idempotency key', terminalStatus => {
+    const brain = createBrain()
+    try {
+      const scope = brain.ensureScope({ type: 'session', externalRef: `requeue-${terminalStatus}`, name: `Requeue ${terminalStatus}` })
+      brain.registerRecipe({ id: 'test.requeue', version: 1, title: 'Requeue', steps: ['capture'] })
+      const input = {
+        recipeId: 'test.requeue', recipeVersion: 1, scopeId: scope.id,
+        parameters: { query: 'same-key' },
+        continuation: { sessionId: `session-${terminalStatus}`, mode: 'interactive' as const, contextBudget: 1200 },
+      }
+      const first = brain.enqueueJob(input)
+      expect(brain.claimNextJob()?.jobId).toBe(first.id)
+      if (terminalStatus === 'failed') expect(brain.failJob(first.id, 'temporary failure')).toBe(true)
+      else expect(brain.cancelJob(first.id)).toBe(true)
+
+      const requeued = brain.enqueueJob(input)
+
+      expect(requeued).toMatchObject({ id: first.id, status: 'queued', result: null })
+      expect(brain.listContinuations(first.id)).toMatchObject([{ status: 'waiting' }])
+      expect(brain.claimNextJob()).toMatchObject({ jobId: first.id, attempts: 1 })
+    } finally {
+      brain.close()
+    }
   })
 
   it('leases steps, checkpoints progress and recovers expired work after restart', () => {

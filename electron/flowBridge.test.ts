@@ -158,6 +158,7 @@ describe('videoModelsScript', () => {
 describe('mediaStatusScript', () => {
   it('looks a media id up with the captured argument shape', () => {
     expect(mediaStatusScript('8136473e')).toContain("callBatch('jwpduf'")
-    expect(mediaStatusScript('8136473e')).toContain('[null, null, [["8136473e"]]]')
+    expect(mediaStatusScript('8136473e')).toContain('var id = "8136473e"')
+    expect(mediaStatusScript('8136473e')).toContain('[null, null, [[id]]]')
   })
 })

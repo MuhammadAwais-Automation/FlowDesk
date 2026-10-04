@@ -6,7 +6,8 @@
  * string is built in exactly one place.
  */
 
-import { findViewByUrl } from './sessions'
+import type { WebContents } from 'electron'
+import { findAnyViewByUrl, ensureBackgroundView } from './sessions'
 import { feedScript, reactScript, commentScript, replyScript, shareScript, followScript, hideScript, type ReactionType, type SharePrivacy } from './facebookBridge'
 
 export interface FacebookResult {
@@ -18,8 +19,20 @@ export interface FacebookResult {
 const NOT_OPEN =
   'Facebook is not open. Open the Social page in FlowDesk, select Facebook and sign in, then retry.'
 
+// Visible tab first, else the hidden background window — the MCP/agent path
+// must work without the Social page ever being opened.
+async function getFacebookView(): Promise<{ webContents: WebContents } | null> {
+  const existing = findAnyViewByUrl('facebook.com')
+  if (existing) return existing
+  try {
+    return await ensureBackgroundView('social-facebook', 'social-facebook', 'https://www.facebook.com')
+  } catch {
+    return null
+  }
+}
+
 async function call(script: string): Promise<FacebookResult> {
-  const view = findViewByUrl('facebook.com')
+  const view = await getFacebookView()
   if (!view) return { ok: false, error: NOT_OPEN }
   try {
     const result = await view.webContents.executeJavaScript(script)

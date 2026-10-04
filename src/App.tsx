@@ -4,19 +4,17 @@ import AIBrowser from '@/pages/AIBrowser'
 import { useThemeStore } from '@/store/useThemeStore'
 import type { Page } from '@/types/pages'
 
-const UniversalChat = lazy(() => import('@/pages/UniversalChat'))
 const Agent = lazy(() => import('@/pages/Agent'))
 const NotebookLM = lazy(() => import('@/pages/NotebookLM'))
 const Accounts = lazy(() => import('@/pages/Accounts'))
 const Settings = lazy(() => import('@/pages/Settings'))
 const YTStudio = lazy(() => import('@/pages/YTStudio'))
-const Workspace = lazy(() => import('@/pages/Workspace'))
 const Social = lazy(() => import('@/pages/Social'))
-const Studio = lazy(() => import('@/pages/Studio'))
 const Jarvis = lazy(() => import('@/pages/Jarvis'))
-const StudioCanvas = lazy(() => import('@/pages/StudioCanvas'))
 const Brain = lazy(() => import('@/pages/Brain'))
 const Intelligence = lazy(() => import('@/pages/Intelligence'))
+const Skills = lazy(() => import('@/pages/Skills'))
+const Studio = lazy(() => import('@/pages/Studio'))
 
 // Safety check — if preload didn't load, show helpful error
 const api = window.electronAPI
@@ -44,7 +42,7 @@ export default function App() {
   // This prevents the native view from covering the new page during the transition.
   function navigateTo(page: Page) {
     if (api) {
-      if (page !== 'browser' && page !== 'youtube' && page !== 'workspace' && page !== 'social' && page !== 'studio') {
+      if (page !== 'browser' && page !== 'youtube' && page !== 'social' && page !== 'studio') {
         api.hideView().catch(() => {})
       }
     }
@@ -67,19 +65,17 @@ export default function App() {
 
   function renderPage() {
     switch (currentPage) {
-      case 'universalChat': return <UniversalChat />
       case 'agent': return <Agent />
+      case 'skills': return <Skills />
       case 'brain': return <Brain />
       case 'intelligence': return <Intelligence />
       case 'notebooklm': return <NotebookLM />
       case 'accounts': return <Accounts />
       case 'settings': return <Settings />
       case 'youtube': return <YTStudio isActive={currentPage === 'youtube'} />
-      case 'workspace': return <Workspace isActive={currentPage === 'workspace'} />
       case 'social': return <Social isActive={currentPage === 'social'} />
       case 'studio': return <Studio isActive={currentPage === 'studio'} />
       case 'jarvis': return <Jarvis />
-      case 'design': return <StudioCanvas isActive={currentPage === 'design'} />
       default: return null
     }
   }

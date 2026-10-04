@@ -1,4 +1,4 @@
-import { MessageCircle, Linkedin, Facebook } from 'lucide-react'
+import { MessageCircle, Linkedin, Facebook, Flame, Video } from 'lucide-react'
 
 export interface SocialPlatform {
   id: string
@@ -47,6 +47,23 @@ export const SOCIAL_PLATFORMS: SocialPlatform[] = [
     partition: 'social-facebook',
     accent: '#0866FF',
   },
+  {
+    id: 'reddit',
+    label: 'Reddit',
+    url: 'https://www.reddit.com',
+    icon: Flame,
+    partition: 'social-reddit',
+    accent: '#FF4500',
+  },
+  {
+    id: 'tiktok',
+    label: 'TikTok',
+    url: 'https://www.tiktok.com',
+    icon: Video,
+    partition: 'social-tiktok',
+    accent: '#FE2C55',
+  },
 ]
+
 
 export const DEFAULT_PLATFORM_ID = SOCIAL_PLATFORMS[0].id

@@ -38,12 +38,12 @@ export function CommandBar({ graph, query, onQueryChange, onOpen, onAsk, asking 
   }, [])
 
   return (
-    <div className="w-[520px] max-w-[calc(100vw-120px)]">
+    <div className="relative w-full max-w-[460px]">
       <div
-        className="flex items-center gap-2.5 rounded-xl border px-3 py-2.5"
+        className="flex items-center gap-2.5 rounded-xl border px-3 py-2.5 shadow-md backdrop-blur-sm"
         style={{ background: OBSERVATORY.raised, borderColor: OBSERVATORY.border }}
       >
-        <Search size={15} style={{ color: OBSERVATORY.dim }} />
+        <Search size={15} className="shrink-0" style={{ color: OBSERVATORY.dim }} />
         <input
           ref={input}
           type="search"
@@ -56,19 +56,19 @@ export function CommandBar({ graph, query, onQueryChange, onOpen, onAsk, asking 
             if (event.key === 'Enter' && query.trim()) onAsk(query.trim())
             if (event.key === 'Escape') onQueryChange('')
           }}
-          className="font-retro-sans flex-1 bg-transparent text-sm outline-none placeholder:opacity-60"
+          className="font-retro-sans min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:opacity-60"
           style={{ color: OBSERVATORY.text }}
         />
         {asking
-          ? <span className="font-retro-mono text-[11px]" style={{ color: OBSERVATORY.accent }}>Poochh raha hai…</span>
-          : <span className="font-retro-mono flex items-center gap-1 text-[11px]" style={{ color: OBSERVATORY.dim }}>
+          ? <span className="font-retro-mono shrink-0 text-[11px]" style={{ color: OBSERVATORY.accent }}>Poochh raha hai…</span>
+          : <span className="font-retro-mono shrink-0 flex items-center gap-1 text-[11px]" style={{ color: OBSERVATORY.dim }}>
               <CornerDownLeft size={11} /> ask
             </span>}
       </div>
 
       {results.length > 0 && (
         <div
-          className="mt-1.5 overflow-hidden rounded-xl border"
+          className="absolute left-0 right-0 top-full z-30 mt-1.5 max-h-72 overflow-y-auto rounded-xl border shadow-xl"
           style={{ background: OBSERVATORY.raised, borderColor: OBSERVATORY.border }}
         >
           {results.map(result => (

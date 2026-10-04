@@ -1,0 +1,68 @@
+{
+  "id": "alpha-paws-auto-short",
+  "name": "Alpha Paws Auto Short",
+  "version": "1.0.0",
+  "description": "Autonomous multi-skill video pipeline: inspects brand persona in FlowDesk Brain, generates 8s vertical AI video in Google Flow, downloads asset locally, and publishes directly to TikTok Studio.",
+  "domains": [
+    "brain",
+    "flow",
+    "tiktok"
+  ],
+  "skills": [
+    "flow-video-director",
+    "tiktok-publisher"
+  ],
+  "steps": [
+    {
+      "id": "step1_brain_persona",
+      "title": "Brain Persona & Brand Tone Check",
+      "skillId": "general",
+      "actionTool": "brain.answerPack",
+      "params": {
+        "question": "Alpha Paws dog brand persona, visual tone, comedy hooks, and target audience guidelines"
+      }
+    },
+    {
+      "id": "step2_flow_video",
+      "title": "Generate Google Flow Vertical Video",
+      "skillId": "flow-video-director",
+      "actionTool": "flow.generateVideo",
+      "dependsOn": [
+        "step1_brain_persona"
+      ],
+      "params": {
+        "prompt": "Cinematic vertical 9:16 low-angle tracking shot of a fluffy golden retriever puppy wearing a detective trenchcoat inspecting a giant dog bone in 4k studio lighting. Style: {{step1_brain_persona.result.summary}}",
+        "projectId": "{{inputs.projectId}}",
+        "modelKey": "{{inputs.modelKey}}"
+      }
+    },
+    {
+      "id": "step3_local_download",
+      "title": "Download Signed CDN Video Asset",
+      "skillId": "flow-video-director",
+      "actionTool": "flow.downloadMedia",
+      "dependsOn": [
+        "step2_flow_video"
+      ],
+      "params": {
+        "mediaUrl": "{{step2_flow_video.result.mediaId}}"
+      }
+    },
+    {
+      "id": "step4_tiktok_publish",
+      "title": "Publish to TikTok Studio",
+      "skillId": "tiktok-publisher",
+      "actionTool": "tiktok.apiUploadVideo",
+      "dependsOn": [
+        "step3_local_download"
+      ],
+      "params": {
+        "filePath": "{{step3_local_download.result.filePath}}",
+        "caption": "Detective Puppy cracked the mystery! 🐶🔍 What case should he solve next? #AlphaPaws #DogLovers #CutePuppy #GoldenRetriever #TikTokDogs",
+        "privacy": "{{inputs.privacy}}"
+      }
+    }
+  ],
+  "createdAt": "2026-09-20T00:00:00.000Z",
+  "updatedAt": "2026-09-20T00:00:00.000Z"
+}

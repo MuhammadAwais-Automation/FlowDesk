@@ -14,15 +14,17 @@ import {
   liSearch,
   liMyPosts,
   liNotifications,
-} from '../linkedin'
-import { linkedInEventStats, recentLinkedInEvents, takeNewMessages } from '../linkedinEvents'
-import { liLikePost, liUnlikePost } from '../linkedinUiActions'
-import { liCommentOnPost, MAX_COMMENT_LENGTH } from '../linkedinComment'
-import { liReplyToComment, MAX_REPLY_LENGTH } from '../linkedinReply'
-import { liCreatorAnalytics } from '../linkedinAnalytics'
-import { liNetworkStatus } from '../linkedinNetwork'
-import { liSendConnectionRequest, inviteBudget } from '../linkedinConnect'
-import { liCreatePost, liDeletePost, liDeleteComment, MAX_POST_LENGTH } from '../linkedinPost'
+  liAccounts,
+  liSwitchAccount,
+} from '../linkedin/linkedin'
+import { linkedInEventStats, recentLinkedInEvents, takeNewMessages } from '../linkedin/linkedinEvents'
+import { liLikePost, liUnlikePost } from '../linkedin/linkedinUiActions'
+import { liCommentOnPost, MAX_COMMENT_LENGTH } from '../linkedin/linkedinComment'
+import { liReplyToComment, MAX_REPLY_LENGTH } from '../linkedin/linkedinReply'
+import { liCreatorAnalytics } from '../linkedin/linkedinAnalytics'
+import { liNetworkStatus } from '../linkedin/linkedinNetwork'
+import { liSendConnectionRequest, inviteBudget } from '../linkedin/linkedinConnect'
+import { liCreatePost, liDeletePost, liDeleteComment, MAX_POST_LENGTH } from '../linkedin/linkedinPost'
 import type { RequestApproval } from './approval'
 
 /**
@@ -76,10 +78,30 @@ const UNTRUSTED_NOTE =
 export function createLinkedInTools(requestApproval: RequestApproval) {
   return [
     tool(
+      'linkedin_accounts',
+      'List all connected LinkedIn accounts in FlowDesk (Account 1, Account 2, etc.) with authentication status, name, publicId, headline, partition, and active state.',
+      {},
+      async () => result(await liAccounts()),
+      { annotations: { readOnlyHint: true } },
+    ),
+
+    tool(
+      'linkedin_switch_account',
+      'Switch the active displayed LinkedIn account in FlowDesk window (e.g. "1", "2", "Personal", "Sales").',
+      {
+        account: z.string().describe('Target account ID, label/name, or partition.'),
+      },
+      async ({ account }) => result(await liSwitchAccount(account)),
+    ),
+
+    tool(
       'linkedin_status',
       'Check whether the LinkedIn bridge is live: whether the user is signed in, who they are signed in as, and whether the messaging API is reachable. Call this first if any other LinkedIn tool reports that LinkedIn is not open.',
-      {},
-      async () => result(await liStatus()),
+      {
+        account: z.string().optional()
+          .describe('Target LinkedIn account ID, label, or partition. Defaults to active account.'),
+      },
+      async ({ account }) => result(await liStatus(account)),
       { annotations: { readOnlyHint: true } },
     ),
 
@@ -93,8 +115,10 @@ export function createLinkedInTools(requestApproval: RequestApproval) {
           .describe('The nextCursor from a previous call, to fetch the following page.'),
         onlyUnread: z.boolean().optional()
           .describe('Return only conversations with unread messages.'),
+        account: z.string().optional()
+          .describe('Target LinkedIn account ID, label, or partition. Defaults to active account.'),
       },
-      async ({ limit, cursor, onlyUnread }) => result(await liListChats({ limit, cursor, onlyUnread })),
+      async ({ limit, cursor, onlyUnread, account }) => result(await liListChats({ limit, cursor, onlyUnread, account })),
       { annotations: { readOnlyHint: true } },
     ),
 
@@ -108,16 +132,21 @@ export function createLinkedInTools(requestApproval: RequestApproval) {
           .describe('How many messages to return. Defaults to 20.'),
         before: z.number().int().optional()
           .describe('Only messages delivered before this epoch-milliseconds timestamp. Use oldestDeliveredAt from a previous call to page backwards.'),
+        account: z.string().optional()
+          .describe('Target LinkedIn account ID, label, or partition. Defaults to active account.'),
       },
-      async ({ conversationUrn, limit, before }) => result(await liListMessages(conversationUrn, limit, before)),
+      async ({ conversationUrn, limit, before, account }) => result(await liListMessages(conversationUrn, limit, before, account)),
       { annotations: { readOnlyHint: true } },
     ),
 
     tool(
       'linkedin_unread',
       'Report how many unread LinkedIn messages there are, broken down by mailbox category (primary inbox, message requests, spam, archive, and so on).',
-      {},
-      async () => result(await liUnread()),
+      {
+        account: z.string().optional()
+          .describe('Target LinkedIn account ID, label, or partition. Defaults to active account.'),
+      },
+      async ({ account }) => result(await liUnread(account)),
       { annotations: { readOnlyHint: true } },
     ),
 
@@ -531,6 +560,8 @@ FlowDesk has recorded ${budget.today} sent today and ${budget.week} this week. L
  * ones — through the approval callback instead.
  */
 export const LINKEDIN_TOOL_BASE_NAMES = [
+  'linkedin_accounts',
+  'linkedin_switch_account',
   'linkedin_status',
   'linkedin_list_chats',
   'linkedin_list_messages',

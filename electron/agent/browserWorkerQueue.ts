@@ -29,6 +29,7 @@ const HEARTBEAT_INTERVAL_MS = 7_000
 export type WorkerProgress =
   | { type: 'heartbeat'; tool: string; elapsedSeconds: number }
   | { type: 'account_retry'; tool: string; elapsedSeconds: number; reason: AccountFailure; accountEmailMasked: string }
+  | { type: 'image_progress'; tool: string; elapsedSeconds: number; percent: number; stage: string }
 
 /**
  * FlowDesk's capture pipeline (electron/main.ts's `capture:chunk` handler)
@@ -234,6 +235,24 @@ export function notifyCaptureComplete(tool: string, text: string, error?: string
   else waiter.resolve(text)
 }
 
+export function isLikelyImagePrompt(prompt: string): boolean {
+  return /\b(generate|create|draw|make|paint|render|illustrate|design|produce)\b.*\b(image|picture|photo|illustration|graphic|art|drawing|wallpaper|poster|icon|logo|sketch|avatar)\b/i.test(prompt)
+    || /\b(image|picture|photo|illustration|graphic|art|drawing)\s+of\b/i.test(prompt)
+}
+
+export function notifyImageProgress(tool: string, percent: number, stage: string) {
+  const waiter = pendingWaiters.get(tool)
+  const elapsedSeconds = waiter ? Math.round((Date.now() - waiter.startedAt) / 1000) : 0
+  const progress: WorkerProgress = {
+    type: 'image_progress',
+    tool,
+    elapsedSeconds,
+    percent,
+    stage,
+  }
+  workerProgress.emit('progress', progress)
+}
+
 async function runOne(tool: AITool, prompt: string, account: BrowserAccount): Promise<string> {
   const staggerWait = claimDispatchSlot()
   if (staggerWait > 0) await sleep(staggerWait)
@@ -277,6 +296,10 @@ async function runOne(tool: AITool, prompt: string, account: BrowserAccount): Pr
         if (w) {
           clearWaiter(tool, w)
           reject(new Error(`Could not submit the message to ${tool}`))
+        }
+      } else {
+        if (tool === 'chatgpt' && isLikelyImagePrompt(prompt)) {
+          notifyImageProgress(tool, 15, 'Prompt injected & request received by ChatGPT backend')
         }
       }
       // else: wait for notifyCaptureComplete() to be called by main.ts's

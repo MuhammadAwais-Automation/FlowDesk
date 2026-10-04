@@ -419,6 +419,17 @@ export function startCdpRecorder(options: CdpRecorderOptions): () => void {
           postData: request?.postData ? String(request.postData).slice(0, MAX_BODY_SCAN) : undefined,
           headers: redactHeaders(request?.headers),
         })
+        // Chromium leaves postData out when the body is large or not plain
+        // text and only flags hasPostData — TikTok's /api/update/profile/ was
+        // recorded with an empty body that way. Ask for it explicitly.
+        if (!request?.postData && (request as { hasPostData?: boolean } | undefined)?.hasPostData) {
+          send('Network.getRequestPostData', { requestId: String(params.requestId) }, sessionId)
+            .then((res: { postData?: string }) => {
+              const entry = pending.get(key)
+              if (entry && res?.postData) entry.postData = String(res.postData).slice(0, MAX_BODY_SCAN)
+            })
+            .catch(() => { /* body already gone — nothing more to record */ })
+        }
         return
       }
 

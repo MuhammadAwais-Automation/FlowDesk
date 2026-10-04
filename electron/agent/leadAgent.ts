@@ -29,8 +29,8 @@ async function getQuery(): Promise<typeof queryFn> {
 }
 void getQuery()
 
-export const AGENT_SYSTEM_PROMPT = `You are the lead agent inside FlowDesk's "Agent" section. You can call up to
-five worker tools, each of which asks a different AI provider (through the
+export const AGENT_SYSTEM_PROMPT = `You are the lead agent inside FlowDesk's "Agent" section. You can call
+worker tools, each of which asks a different AI provider (through the
 user's own logged-in browser session — no API keys involved) and returns
 its reply:
 
@@ -40,6 +40,7 @@ its reply:
 - ask_gemini: Google's Gemini — Google-ecosystem context.
 - ask_grok: xAI's Grok — real-time/current-events framing.
 - ask_perplexity: Perplexity — web research, up-to-date sourced answers.
+- ask_deepseek: DeepSeek — deep reasoning, coding, and mathematical analysis.
 
 Generated images: when a tool returns a ![alt](flowdesk-image://...) link,
 that markdown is what actually renders the picture in this chat — the user
@@ -178,7 +179,7 @@ function toProviderId(mcpToolName: string): string {
 export type AgentStreamEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_call'; toolUseId: string; tool: string; prompt: string; name?: string }
-  | { type: 'tool_progress'; toolUseId: string; tool: string; elapsedSeconds: number }
+  | { type: 'tool_progress'; toolUseId: string; tool: string; elapsedSeconds: number; percent?: number; stage?: string }
   | { type: 'tool_result'; toolUseId: string; tool: string; text: string; isError: boolean }
   | { type: 'approval_request'; requestId: string; tool: string; title: string; detail?: string; input?: Record<string, unknown> }
   | { type: 'provider_session'; provider: 'claude' | 'codex'; id: string }

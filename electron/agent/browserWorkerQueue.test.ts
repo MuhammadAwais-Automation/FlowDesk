@@ -9,7 +9,7 @@ vi.mock('../sessions', () => ({
 vi.mock('../injector', () => ({ injectPrompt: vi.fn(async () => true) }))
 vi.mock('../providerUrls', () => ({ PROVIDER_URLS: { chatgpt: 'https://chatgpt.com/' } }))
 
-const { askBrowserProvider, configureBrowserWorkerQueue, notifyCaptureActivity, notifyCaptureComplete } =
+const { askBrowserProvider, configureBrowserWorkerQueue, notifyCaptureActivity, notifyCaptureComplete, notifyImageProgress, workerProgress, isLikelyImagePrompt } =
   await import('./browserWorkerQueue')
 
 beforeEach(() => vi.useFakeTimers())
@@ -126,5 +126,54 @@ describe('account failover', () => {
 
     await expect(call).rejects.toThrow('Composer selector changed')
     expect(vi.mocked(ensureBackgroundView)).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('image progress tracking', () => {
+  it('detects likely image prompts', () => {
+    expect(isLikelyImagePrompt('generate an image of a cybernetic cat')).toBe(true)
+    expect(isLikelyImagePrompt('create a wallpaper with mountains and rivers')).toBe(true)
+    expect(isLikelyImagePrompt('draw a picture of a sailboat at sunset')).toBe(true)
+    expect(isLikelyImagePrompt('photo of a red apple on a desk')).toBe(true)
+    expect(isLikelyImagePrompt('what is the capital of France?')).toBe(false)
+    expect(isLikelyImagePrompt('write a function in TypeScript')).toBe(false)
+  })
+
+  it('emits image_progress stage 1 when prompt injection succeeds for an image prompt', async () => {
+    vi.setSystemTime(30_000_000)
+    const progressEvents: any[] = []
+    const listener = (p: any) => progressEvents.push(p)
+    workerProgress.on('progress', listener)
+
+    const call = askBrowserProvider('chatgpt' as never, 'generate an image of a futuristic skyline')
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    expect(progressEvents.some(p => p.type === 'image_progress' && p.percent === 15)).toBe(true)
+
+    notifyCaptureComplete('chatgpt', '![skyline](flowdesk-image://skyline.png)')
+    await expect(call).resolves.toContain('flowdesk-image://skyline.png')
+
+    workerProgress.off('progress', listener)
+  })
+
+  it('emits image_progress accurately via notifyImageProgress', () => {
+    const progressEvents: any[] = []
+    const listener = (p: any) => progressEvents.push(p)
+    workerProgress.on('progress', listener)
+
+    notifyImageProgress('chatgpt', 35, 'DALL-E image generation tool invoked')
+    notifyImageProgress('chatgpt', 60, 'ChatGPT actively rendering image')
+    notifyImageProgress('chatgpt', 85, 'Image asset pointer received from backend')
+    notifyImageProgress('chatgpt', 95, 'FlowDesk resolving & caching generated image')
+    notifyImageProgress('chatgpt', 100, 'Image generated & ready for download/display')
+
+    expect(progressEvents).toHaveLength(5)
+    expect(progressEvents[0]).toMatchObject({ type: 'image_progress', tool: 'chatgpt', percent: 35 })
+    expect(progressEvents[1]).toMatchObject({ type: 'image_progress', tool: 'chatgpt', percent: 60 })
+    expect(progressEvents[2]).toMatchObject({ type: 'image_progress', tool: 'chatgpt', percent: 85 })
+    expect(progressEvents[3]).toMatchObject({ type: 'image_progress', tool: 'chatgpt', percent: 95 })
+    expect(progressEvents[4]).toMatchObject({ type: 'image_progress', tool: 'chatgpt', percent: 100 })
+
+    workerProgress.off('progress', listener)
   })
 })

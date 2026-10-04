@@ -13,6 +13,7 @@ export const MONITORABLE_RECIPE_IDS = [
   'whatsapp.unread_intelligence',
   'linkedin.community_scan',
   'linkedin.opportunity_scan',
+  'reddit.lead_sniper',
 ] as const
 
 export type MonitorableRecipeId = (typeof MONITORABLE_RECIPE_IDS)[number]
@@ -30,11 +31,12 @@ export const MONITORABLE_RECIPE_CONTROLS: Record<MonitorableRecipeId, { sourceId
   'whatsapp.unread_intelligence': { sourceId: 'whatsapp', actionLabel: 'Scan unread' },
   'linkedin.community_scan': { sourceId: 'linkedin', actionLabel: 'Scan community' },
   'linkedin.opportunity_scan': { sourceId: 'linkedin', actionLabel: 'Scan opportunities' },
+  'reddit.lead_sniper': { sourceId: 'reddit', actionLabel: 'Snipe Reddit leads' },
 }
 
 export const INTELLIGENCE_SOURCES = [
   { id: 'notebooklm', title: 'NotebookLM', status: 'available', liveCapture: true, detail: 'Durable research and artifacts' },
   { id: 'whatsapp', title: 'WhatsApp', status: 'available', liveCapture: true, detail: 'Consent-gated unread intelligence' },
   { id: 'linkedin', title: 'LinkedIn', status: 'available', liveCapture: true, detail: 'Community and opportunity scans' },
-  { id: 'reddit', title: 'Reddit', status: 'not_connected', liveCapture: false, detail: 'Connector contract and fixtures only' },
+  { id: 'reddit', title: 'Reddit', status: 'available', liveCapture: true, detail: 'Subreddit lead sniper & hiring scans' },
 ] as const
