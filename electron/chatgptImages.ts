@@ -21,13 +21,15 @@
 import { app, BrowserWindow, session, type WebContents } from 'electron'
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { basename, extname, isAbsolute, join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { ensureBackgroundView } from './sessions'
 import { generatedImagesDir, parseSavedImageRef } from './savedImages'
+import { readLocalImage } from './localImageFile'
 import {
-  classifyRefusal, exhaustedUntil, isUsable, maskEmail, pickAccount, readTurn, QUOTA_TTL_MS,
-  type AccountQuota, type ConvNode, type PoolAccount,
+  assertSafeId, candidateAccounts, isSafeId, checkDeadline, classifyRefusal, exhaustedUntil, findAccount, isUsable, jobsToPrune,
+  maskEmail, mergeQuotas, pickAccount, readFailureFatal, readTurn, runWithDeadline, withTimeout, QUOTA_TTL_MS,
+  type AccountQuota, type ConvNode, type Deadline, type PoolAccount,
 } from './chatgptImageCore'
 
 const NEW_IMAGE_CHAT = 'https://chatgpt.com/?hints=picture_v2'
@@ -37,6 +39,11 @@ const TURN_TIMEOUT_MS = 15 * 60_000
 const POLL_MS = 4_000
 const NUDGE = 'Please create the image now.'
 const UNAVAILABLE_PARK_MS = 15 * 60_000
+/** Whole-job limit: the turn wait plus room for opening, upload and saving. */
+const JOB_TIMEOUT_MS = TURN_TIMEOUT_MS + 5 * 60_000
+const UPLOAD_TIMEOUT_MS = 3 * 60_000
+const SCRIPT_TIMEOUT_MS = 30_000
+const MAX_FINISHED_JOBS = 200
 
 export interface SavedImage { url: string; path: string; width?: number; height?: number; title?: string | null }
 
@@ -49,6 +56,8 @@ export interface ImageJob {
   /** Edit inside the conversation that made the source image — same account only. */
   continueIn?: { partition: string; conversationId: string }
   preferred?: string | null
+  /** Partition the caller named explicitly: the job runs there or fails, never elsewhere. */
+  only?: string
   status: 'queued' | 'running' | 'done' | 'failed'
   /** What a running job is doing right now, for progress display. */
   stage?: string
@@ -83,20 +92,24 @@ export function poolAccounts(): PoolAccount[] {
 
 const quotas = new Map<string, AccountQuota>()
 const chatgptEmail = new Map<string, string>()
-let quotaLoaded = false
+let quotaLoad: Promise<void> | null = null
+let quotaSave: Promise<void> = Promise.resolve()
 const quotaFile = () => join(app.getPath('userData'), 'chatgpt-image-quota.json')
 
-async function loadQuotas() {
-  if (quotaLoaded) return
-  quotaLoaded = true
-  try {
-    const raw = JSON.parse(await readFile(quotaFile(), 'utf8')) as Record<string, AccountQuota>
-    for (const [p, q] of Object.entries(raw)) quotas.set(p, q)
-  } catch { /* first run */ }
+// Every caller awaits the same read, so none proceeds on an empty ledger, and
+// the file never overwrites a reading taken since startup.
+function loadQuotas(): Promise<void> {
+  quotaLoad ??= readFile(quotaFile(), 'utf8')
+    .then(text => mergeQuotas(quotas, JSON.parse(text)))
+    .catch(() => { /* first run or unreadable file */ })
+  return quotaLoad
 }
 
-async function saveQuotas() {
-  await writeFile(quotaFile(), JSON.stringify(Object.fromEntries(quotas), null, 2), 'utf8').catch(() => {})
+// Writes go one after another, each with the ledger as it is then, so two
+// concurrent saves cannot interleave or land out of order.
+function saveQuotas(): Promise<void> {
+  quotaSave = quotaSave.then(() => writeFile(quotaFile(), JSON.stringify(Object.fromEntries(quotas), null, 2), 'utf8')).catch(() => {})
+  return quotaSave
 }
 
 // ── page scripts ────────────────────────────────────────────────────────────
@@ -123,6 +136,7 @@ function quotaScript(): string {
 }
 
 export function conversationScript(conversationId: string): string {
+  assertSafeId(conversationId, 'conversation id')
   return `(async function () {
     try {
       ${SESSION_JS}
@@ -151,6 +165,7 @@ export function conversationScript(conversationId: string): string {
 
 /** `status` of GET /backend-api/conversation/{id}/stream_status ("COMPLETE" once a turn is over), or null. */
 function streamStatusScript(conversationId: string): string {
+  assertSafeId(conversationId, 'conversation id')
   return `(async function () {
     try {
       ${SESSION_JS}
@@ -161,6 +176,8 @@ function streamStatusScript(conversationId: string): string {
 }
 
 function downloadUrlScript(fileId: string, conversationId: string): string {
+  assertSafeId(fileId, 'file id')
+  assertSafeId(conversationId, 'conversation id')
   const path = `/backend-api/files/download/${fileId}?conversation_id=${encodeURIComponent(conversationId)}&inline=false`
   return `(async function () {
     try {
@@ -203,7 +220,9 @@ const composerText = (wc: WebContents) => wc.executeJavaScript(
 export async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, timeoutMs: number, stepMs = 300): Promise<T | null> {
   const end = Date.now() + timeoutMs
   while (Date.now() < end) {
-    const v = await fn().catch(() => null)
+    // A page script that never answers (hung fetch, page mid-reload) must not
+    // hold the wait past its own limit.
+    const v = await withTimeout(fn(), Math.max(end - Date.now(), stepMs), 'wait timed out').catch(() => null)
     if (v) return v as T
     await sleep(stepMs)
   }
@@ -212,8 +231,6 @@ export async function waitFor<T>(fn: () => Promise<T | null | undefined | false>
 
 export interface UploadedFile { id: string; size: number; name: string; mime: string; width: number | null; height: number | null }
 
-const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }
-
 /**
  * Uploads a local image over the API, the chain captured live (probe cg-26,
  * 2026-10-04): POST /backend-api/files -> { upload_url, file_id }; PUT the
@@ -221,12 +238,15 @@ const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg
  * streams events until "file.processing.file_ready". None of these carry
  * Sentinel tokens. The returned file is attached to the next message by
  * setSendOverrides({ _attachments }).
+ *
+ * The file goes through readLocalImage: a plain local absolute path, an image
+ * extension, at most 25 MB, and bytes that really are PNG/JPEG/GIF/WebP — so an
+ * agent cannot use an edit to send an arbitrary file to ChatGPT.
  */
 async function uploadFile(wc: WebContents, path: string): Promise<UploadedFile> {
-  const name = basename(path)
-  const mime = MIME[extname(path).slice(1).toLowerCase()] ?? 'image/png'
-  const b64 = (await readFile(path)).toString('base64')
-  const r = await wc.executeJavaScript(`(async function () {
+  const { bytes, mime, name } = await readLocalImage(path)
+  const b64 = bytes.toString('base64')
+  const r = await withTimeout(wc.executeJavaScript(`(async function () {
     try {
       ${SESSION_JS}
       if (!__s || !__s.accessToken) return { ok: false, error: 'signed out' }
@@ -254,7 +274,7 @@ async function uploadFile(wc: WebContents, path: string): Promise<UploadedFile> 
       if (!/file_ready/.test(events)) return { ok: false, error: 'upload not processed: ' + events.slice(-300) }
       return { ok: true, file: { id: j1.file_id, size: blob.size, name: NAME, mime: MIME, width: dim.width, height: dim.height } }
     } catch (e) { return { ok: false, error: String(e && e.message || e) } }
-  })()`) as { ok: boolean; file?: UploadedFile; error?: string }
+  })()`) as Promise<{ ok: boolean; file?: UploadedFile; error?: string }>, UPLOAD_TIMEOUT_MS, `image upload did not finish within ${UPLOAD_TIMEOUT_MS / 60_000} minutes`)
   if (!r?.ok || !r.file) throw new Error(`image upload failed: ${r?.error ?? 'no answer'}`)
   return r.file
 }
@@ -265,13 +285,13 @@ export async function typeAndSend(wc: WebContents, prompt: string): Promise<void
   ), 20_000)
   if (!focused) throw new Error('ChatGPT composer not found — the page may be signed out or still loading')
 
-  await withCdp(wc, async send => {
+  await withTimeout(withCdp(wc, async send => {
     const mod = process.platform === 'darwin' ? 8 : 2
     const key = (k: object) => Promise.all([send('Input.dispatchKeyEvent', { type: 'keyDown', ...k }), send('Input.dispatchKeyEvent', { type: 'keyUp', ...k })])
     await key({ windowsVirtualKeyCode: 65, key: 'a', code: 'KeyA', modifiers: mod })
     await key({ windowsVirtualKeyCode: 8, key: 'Backspace', code: 'Backspace' })
     await send('Input.insertText', { text: prompt })
-  })
+  }), SCRIPT_TIMEOUT_MS, 'typing into the ChatGPT composer timed out')
   const want = prompt.replace(/\s+/g, ' ').trim().slice(0, 40)
   const landed = await waitFor(async () => {
     const t = await composerText(wc)
@@ -348,9 +368,9 @@ export async function saveImage(wc: WebContents, partition: string, conversation
   let lastError = ''
   for (let attempt = 0; attempt < 4 && !res; attempt++) {
     if (attempt) await sleep(3_000 * attempt)
-    const url = await wc.executeJavaScript(downloadUrlScript(img.fileId, conversationId)).catch(() => null) as string | null
+    const url = await withTimeout(wc.executeJavaScript(downloadUrlScript(img.fileId, conversationId)) as Promise<string | null>, SCRIPT_TIMEOUT_MS, 'download link timed out').catch(() => null)
     if (!url) { lastError = 'no download link'; continue }
-    const r = await session.fromPartition(`persist:${partition}`).fetch(url).catch(() => null)
+    const r = await withTimeout(session.fromPartition(`persist:${partition}`).fetch(url), 60_000, 'download timed out').catch(() => null)
     if (r?.ok) res = r
     else lastError = `HTTP ${r?.status ?? 'network error'}`
   }
@@ -361,7 +381,7 @@ export async function saveImage(wc: WebContents, partition: string, conversation
   const dir = generatedImagesDir()
   await mkdir(dir, { recursive: true })
   const path = join(dir, fileName)
-  await writeFile(path, Buffer.from(await res.arrayBuffer()))
+  await writeFile(path, Buffer.from(await withTimeout(res.arrayBuffer(), 2 * 60_000, `image ${img.fileId} download stalled`)))
   await appendFile(originsFile(), JSON.stringify({ file: fileName, partition, conversationId, fileId: img.fileId }) + '\n', 'utf8').catch(() => {})
   return { url: `flowdesk-image://${fileName}`, path, width: img.width, height: img.height, title: img.title }
 }
@@ -383,32 +403,59 @@ class AccountRefused extends Error {
   constructor(public reason: 'quota' | 'unavailable' | 'login', message: string) { super(message) }
 }
 
-async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
+type ConvRead = { ok: boolean; nodes?: ConvNode[]; error?: string }
+
+/** One read of the conversation, bounded so a hung page script cannot stall the poll. */
+export function readConversation(wc: WebContents, conversationId: string): Promise<ConvRead | null> {
+  return withTimeout(wc.executeJavaScript(conversationScript(conversationId)) as Promise<ConvRead>, SCRIPT_TIMEOUT_MS, 'conversation read timed out').catch(() => null)
+}
+
+/** Ids of every node already in the chat, read before a send so the old turns can be told apart from the new one. */
+export async function knownNodeIds(wc: WebContents, conversationId: string): Promise<Set<string>> {
+  const conv = await waitFor(async () => {
+    const c = await readConversation(wc, conversationId)
+    return c?.ok && c.nodes ? c : null
+  }, 20_000, 1_000)
+  if (!conv?.nodes) throw new Error(`could not read conversation ${conversationId} before sending; nothing was sent`)
+  return new Set(conv.nodes.map(n => n.id))
+}
+
+async function execute(job: ImageJob, acc: PoolAccount, d: Deadline): Promise<void> {
+  const live = () => checkDeadline(d)
   const cont = job.continueIn && job.continueIn.partition === acc.partition ? job.continueIn : null
   job.stage = 'opening ChatGPT'
-  const wc = await workerFor(acc.partition, cont ? `https://chatgpt.com/c/${cont.conversationId}` : NEW_IMAGE_CHAT)
+  const wc = await workerFor(acc.partition, cont ? `https://chatgpt.com/c/${assertSafeId(cont.conversationId, 'conversation id')}` : NEW_IMAGE_CHAT)
+  live()
 
   job.stage = 'checking the image limit'
   const q = await readQuota(acc, wc)
+  live()
   if (!q.loggedIn) throw new AccountRefused('login', 'not signed in to ChatGPT')
   if (!isUsable(q, Date.now())) throw new AccountRefused('quota', 'no image generations left')
 
   const attachments: UploadedFile[] = []
   if (!cont && job.files.length) {
     job.stage = 'uploading the source image'
-    for (const f of job.files) attachments.push(await uploadFile(wc, f))
+    for (const f of job.files) { attachments.push(await uploadFile(wc, f)); live() }
   }
+  // In a continued chat the same prompt may have been sent before: remember
+  // what is already there so the old turn is never read as this one's answer.
+  let exclude = cont ? await knownNodeIds(wc, cont.conversationId) : undefined
+  live()
   job.stage = 'sending the prompt'
   // Force image mode in the request itself: the ?hints= URL is lost when an edit
   // continues an existing chat, and a caption-like prompt then comes back as text.
   await setSendOverrides(wc, { system_hints: ['picture_v2'], ...(attachments.length ? { _attachments: attachments } : {}) })
+  live()
   await typeAndSend(wc, job.prompt)
+  live()
   job.stage = 'ChatGPT is generating'
 
   const conversationId = cont?.conversationId ?? await waitFor(async () => {
     const m = wc.getURL().match(/\/c\/([0-9a-f-]{36})/)
     return m ? m[1] : null
   }, SUBMIT_TIMEOUT_MS, 500)
+  live()
   if (!conversationId) throw new Error('ChatGPT did not start a conversation for the prompt')
   job.conversationId = conversationId
 
@@ -425,11 +472,23 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
   let nudged = false
   let quietCount = -1
   let quietSince = Date.now()
+  let failingSince: number | null = null
   while (Date.now() < end) {
     await sleep(POLL_MS)
-    const conv = await wc.executeJavaScript(conversationScript(conversationId)).catch(() => null) as { ok: boolean; nodes?: ConvNode[]; error?: string } | null
-    if (!conv?.ok || !conv.nodes) continue
-    const turn = readTurn(conv.nodes, awaiting)
+    live()
+    const conv = await readConversation(wc, conversationId)
+    live()
+    if (!conv?.ok || !conv.nodes) {
+      // A chat that cannot be read (deleted, other account, signed out) ends
+      // the job after a bounded run of failures instead of the full timeout.
+      failingSince ??= Date.now()
+      if (readFailureFatal(failingSince, Date.now(), conv?.error)) {
+        throw new Error(`conversation ${conversationId} could not be read (${conv?.error ?? 'no answer'})`)
+      }
+      continue
+    }
+    failingSince = null
+    const turn = readTurn(conv.nodes, awaiting, exclude)
     if (turn.images.length !== lastCount) { lastCount = turn.images.length; stableSince = Date.now() }
     const settled = turn.state === 'done' || (turn.images.length > 0 && Date.now() - stableSince > 20_000)
     if (!settled) {
@@ -439,7 +498,7 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
       // that an image still rendering after the text stream closed is not cut off.
       if (conv.nodes.length !== quietCount) { quietCount = conv.nodes.length; quietSince = Date.now() }
       if (turn.images.length === 0 && Date.now() - quietSince > 90_000 &&
-        await wc.executeJavaScript(streamStatusScript(conversationId)).catch(() => null) === 'COMPLETE') {
+        await withTimeout(wc.executeJavaScript(streamStatusScript(conversationId)), SCRIPT_TIMEOUT_MS, 'stream status timed out').catch(() => null) === 'COMPLETE') {
         throw new Error(`ChatGPT ended the turn without an image${nudged ? ' (also after the follow-up)' : ''}; conversation ${conversationId}`)
       }
       continue
@@ -452,6 +511,7 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
       if (!nudged) {
         nudged = true
         awaiting = NUDGE
+        exclude = new Set(conv.nodes.map(n => n.id))
         job.stage = 'ChatGPT answered in text, asking it to draw'
         await typeAndSend(wc, NUDGE)
         lastCount = -1
@@ -460,7 +520,9 @@ async function execute(job: ImageJob, acc: PoolAccount): Promise<void> {
       throw new Error(`ChatGPT answered without an image: ${text.slice(0, 400)}`)
     }
     job.stage = `saving ${turn.images.length} image${turn.images.length === 1 ? '' : 's'}`
-    for (const img of turn.images) job.images.push(await saveImage(wc, acc.partition, conversationId, img))
+    const saved: SavedImage[] = []
+    for (const img of turn.images) { saved.push(await saveImage(wc, acc.partition, conversationId, img)); live() }
+    job.images.push(...saved)
     job.text = turn.state === 'done' ? turn.text : undefined
     return
   }
@@ -513,7 +575,9 @@ function pump() {
   const all = poolAccounts()
   for (const job of jobs.values()) {
     if (job.status !== 'queued') continue
-    let pool = all.filter(a => !job.tried.includes(a.partition))
+    const pinned = job.only ? all.find(a => a.partition === job.only) ?? null : null
+    if (job.only && !pinned) { finish(job, 'failed', 'the account this job was pinned to is no longer configured'); continue }
+    let pool = candidateAccounts(all, pinned, job.tried)
     // An edit in its own conversation must run on that conversation's account.
     if (job.continueIn) {
       const own = pool.find(a => a.partition === job.continueIn!.partition)
@@ -524,7 +588,11 @@ function pump() {
     const acc = pickAccount(pool, quotas, busy, now, job.preferred ?? getPreferred())
     if (!acc) {
       const anyLeft = pool.some(a => isUsable(quotas.get(a.partition), now))
-      if (!anyLeft) finish(job, 'failed', `no ChatGPT account can generate right now: ${describeAccounts(all)}`)
+      if (!anyLeft) {
+        finish(job, 'failed', pinned
+          ? `the chosen account cannot generate right now (it is not switched to another account): ${describeAccounts([pinned])}`
+          : `no ChatGPT account can generate right now: ${describeAccounts(all)}`)
+      }
       continue
     }
     run(job, acc)
@@ -536,7 +604,9 @@ function run(job: ImageJob, acc: PoolAccount) {
   job.status = 'running'
   job.partition = acc.partition
   job.account = label(acc)
-  execute(job, acc)
+  // A hung upload, page script or download must not hold the account forever:
+  // past the limit the job fails and the account takes the next job.
+  runWithDeadline(JOB_TIMEOUT_MS, `the job did not finish within ${JOB_TIMEOUT_MS / 60_000} minutes and was stopped`, d => execute(job, acc, d))
     .then(() => finish(job, 'done'))
     .catch(async (e: unknown) => {
       if (e instanceof AccountRefused) {
@@ -557,11 +627,25 @@ function run(job: ImageJob, acc: PoolAccount) {
       finish(job, 'failed', e instanceof Error ? e.message : String(e))
     })
     .finally(() => {
-      busy.delete(acc.partition)
-      // Refresh the count this job spent, then hand the account the next job.
-      if (job.status === 'done') void readQuota(acc).catch(() => {}).finally(pump)
-      else pump()
+      // Refresh the count this job spent while the account is still marked
+      // busy: the read uses the same window, so no new job may start in it
+      // until the read is over.
+      const release = () => { busy.delete(acc.partition); pump() }
+      if (job.status === 'done') void readQuota(acc).catch(() => {}).finally(release)
+      else release()
     })
+}
+
+/** Re-reads an idle account's quota, holding the account so no job opens its window meanwhile. */
+async function refreshIdle(acc: PoolAccount): Promise<AccountQuota | null> {
+  if (busy.has(acc.partition)) return null
+  busy.add(acc.partition)
+  try {
+    return await readQuota(acc)
+  } finally {
+    busy.delete(acc.partition)
+    pump()
+  }
 }
 
 function describeAccounts(all: PoolAccount[]): string {
@@ -584,7 +668,12 @@ export interface ImageRequest {
 }
 
 async function resolveImageFile(ref: string): Promise<{ path: string; origin: { partition: string; conversationId: string } | null }> {
-  if (isAbsolute(ref) && existsSync(ref)) return { path: ref, origin: null }
+  // A path is checked before anything touches it: UNC/device paths, other file
+  // types, oversize files and non-images are refused with the reason.
+  if (isAbsolute(ref) || ref.startsWith('\\\\') || ref.startsWith('//')) {
+    await readLocalImage(ref)
+    return { path: ref, origin: null }
+  }
   const name = parseSavedImageRef(ref)
   const path = name ? join(generatedImagesDir(), name) : ''
   if (!name || !existsSync(path)) throw new Error(`image not found: ${ref.slice(0, 120)}`)
@@ -597,7 +686,14 @@ export async function enqueueImages(req: ImageRequest): Promise<ImageJob[]> {
   if (!prompt) throw new Error('prompt is required')
   if (prompt.length > 4000) throw new Error('prompt is over 4000 characters')
   const count = Math.max(1, Math.min(20, Math.floor(req.count ?? 1)))
+  const all = poolAccounts()
+  const pinned = req.account ? findAccount(all, req.account) : null
+  if (req.account && !pinned) throw new Error(`unknown account "${req.account}" — list them with chatgpt_image_accounts`)
   const source = req.image ? await resolveImageFile(req.image) : null
+  // An explicit account keeps the job there; an edit made on another account
+  // is then uploaded to the chosen one instead of continued in its old chat.
+  const origin = source?.origin && (!pinned || source.origin.partition === pinned.partition) && isSafeId(source.origin.conversationId) ? source.origin : undefined
+  for (const id of jobsToPrune([...jobs.values()], MAX_FINISHED_JOBS)) jobs.delete(id)
   const created: ImageJob[] = []
   for (let i = 0; i < count; i++) {
     const job: ImageJob = {
@@ -605,8 +701,9 @@ export async function enqueueImages(req: ImageRequest): Promise<ImageJob[]> {
       kind: source ? 'edit' : 'generate',
       prompt,
       files: source ? [source.path] : [],
-      continueIn: source?.origin ?? undefined,
-      preferred: req.account ?? null,
+      continueIn: origin,
+      preferred: pinned?.partition ?? null,
+      only: pinned?.partition,
       status: 'queued',
       images: [],
       tried: [],
@@ -641,7 +738,7 @@ export async function imageAccounts(refresh = true) {
   if (refresh) {
     await Promise.all(all.filter(a => !busy.has(a.partition)).map(a => {
       const q = quotas.get(a.partition)
-      return !q || Date.now() - q.checkedAt > QUOTA_TTL_MS / 10 ? readQuota(a).catch(() => null) : null
+      return !q || Date.now() - q.checkedAt > QUOTA_TTL_MS / 10 ? refreshIdle(a).catch(() => null) : null
     }))
   }
   const now = Date.now()

@@ -39,13 +39,15 @@ const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase()
 
 /**
  * The result of the turn that `prompt` started. The user message is matched by
- * its text (last match wins, so a repeated prompt resolves to the newest turn)
- * and only its descendants are read, so earlier images in a continued
- * conversation are never returned as this turn's output.
+ * its text (last match wins) and only its descendants are read, so earlier
+ * images in a continued conversation are never returned as this turn's output.
+ * `exclude` holds the node ids that existed before the send: the same prompt
+ * sent twice in one chat must not resolve to the OLD turn before the new user
+ * message is saved.
  */
-export function readTurn(nodes: ConvNode[], prompt: string): TurnResult {
+export function readTurn(nodes: ConvNode[], prompt: string, exclude?: ReadonlySet<string>): TurnResult {
   const want = norm(prompt).slice(0, 80)
-  const users = nodes.filter(n => n.role === 'user' && norm(n.text).includes(want))
+  const users = nodes.filter(n => n.role === 'user' && !exclude?.has(n.id) && norm(n.text).includes(want))
   const user = users[users.length - 1]
   if (!user) return { state: 'pending', images: [] }
 
@@ -140,4 +142,153 @@ export function exhaustedUntil(resetAfter: string | null, now: number): number {
 export function maskEmail(email: string | null | undefined): string {
   const m = String(email ?? '').match(/([^\s()<>]+)@([^\s()<>]+)/)
   return m ? `${m[1].slice(0, 2)}***@${m[2]}` : '***'
+}
+
+// ── input checks ────────────────────────────────────────────────────────────
+
+/**
+ * Conversation ids (UUIDs) and file ids (file_…/file-…) go into backend URL
+ * paths. Anything else — a slash, "..", "?" — could turn a read into a request
+ * to another endpoint, so only plain id characters pass.
+ */
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+
+export function isSafeId(id: unknown): id is string {
+  return typeof id === 'string' && SAFE_ID.test(id)
+}
+
+export function assertSafeId(id: unknown, what: string): string {
+  if (!isSafeId(id)) throw new Error(`invalid ${what}: expected letters, digits, "-" or "_"`)
+  return id
+}
+
+/** A model slug as listed by GET /backend-api/models (e.g. "gpt-4o", "o4-mini", "gpt-5-1-thinking"). */
+export function isModelSlug(slug: unknown): slug is string {
+  return typeof slug === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(slug)
+}
+
+/** The pool account an explicit `account` (partition or email) names, or null. */
+export function findAccount<T extends PoolAccount>(list: T[], ref: string | null | undefined): T | null {
+  if (!ref) return null
+  const r = ref.toLowerCase()
+  return list.find(a => a.partition === ref || a.email.toLowerCase() === r) ?? null
+}
+
+/**
+ * Accounts a job or an ask may run on. An explicitly named account is the ONLY
+ * one: work the caller pinned to an account never moves to another. Without a
+ * pin, every account not yet tried.
+ */
+export function candidateAccounts<T extends PoolAccount>(all: T[], pinned: T | null, tried: string[] = []): T[] {
+  const pool = pinned ? all.filter(a => a.partition === pinned.partition) : all
+  return pool.filter(a => !tried.includes(a.partition))
+}
+
+// ── time limits ─────────────────────────────────────────────────────────────
+
+export class TimeoutError extends Error {}
+
+/** Rejects with `message` if `p` has not settled within `ms`. */
+export function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const limit = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new TimeoutError(message)), ms) })
+  return Promise.race([p, limit]).finally(() => clearTimeout(timer))
+}
+
+export interface Deadline { aborted: boolean; reason: string }
+
+/**
+ * Runs `fn` with a hard limit. On timeout the caller gets a rejection at once
+ * (so the account is freed) and `deadline.aborted` is set, so the abandoned run
+ * stops at its next step instead of typing into a window another job now owns.
+ */
+export function runWithDeadline<T>(ms: number, message: string, fn: (d: Deadline) => Promise<T>): Promise<T> {
+  const d: Deadline = { aborted: false, reason: message }
+  return withTimeout(fn(d), ms, message).catch((e: unknown) => {
+    if (e instanceof TimeoutError) d.aborted = true
+    throw e
+  })
+}
+
+export function checkDeadline(d: Deadline | undefined): void {
+  if (d?.aborted) throw new TimeoutError(d.reason)
+}
+
+/**
+ * Whether a run of failed conversation reads should end the wait. A read the
+ * server refuses outright (not found, forbidden, signed out) fails after a
+ * minute of refusals; other errors (network, page reloading) after three.
+ */
+export function readFailureFatal(failingSince: number | null, now: number, error: string | undefined): boolean {
+  if (failingSince === null) return false
+  const hard = /HTTP 40[134]\b|signed out/i.test(error ?? '')
+  return now - failingSince > (hard ? 60_000 : 3 * 60_000)
+}
+
+/** Keyed one-at-a-time runner: a later call on a key waits for the earlier one to settle. */
+export function createSerial() {
+  const tails = new Map<string, Promise<unknown>>()
+  return function serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const run = (tails.get(key) ?? Promise.resolve()).catch(() => {}).then(fn)
+    const tail = run.catch(() => {})
+    tails.set(key, tail)
+    // Drop the entry once this run is the last one, so the map does not grow.
+    void tail.then(() => { if (tails.get(key) === tail) tails.delete(key) })
+    return run
+  }
+}
+
+// ── quota ledger ────────────────────────────────────────────────────────────
+
+/**
+ * Adds quota entries read from disk without overwriting readings made since the
+ * app started (the file is older than anything in memory). Malformed entries
+ * are dropped.
+ */
+export function mergeQuotas(target: Map<string, AccountQuota>, raw: unknown): void {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
+  for (const [p, q] of Object.entries(raw as Record<string, unknown>)) {
+    if (target.has(p) || !q || typeof q !== 'object') continue
+    const e = q as Record<string, unknown>
+    if (typeof e.loggedIn !== 'boolean' || typeof e.checkedAt !== 'number') continue
+    target.set(p, {
+      loggedIn: e.loggedIn,
+      plan: typeof e.plan === 'string' ? e.plan : null,
+      remaining: typeof e.remaining === 'number' ? e.remaining : null,
+      resetAfter: typeof e.resetAfter === 'string' ? e.resetAfter : null,
+      checkedAt: e.checkedAt,
+      exhaustedUntil: typeof e.exhaustedUntil === 'number' ? e.exhaustedUntil : null,
+      error: typeof e.error === 'string' ? e.error : null,
+    })
+  }
+}
+
+// ── job results ─────────────────────────────────────────────────────────────
+
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed'
+
+/**
+ * What a batch of image jobs adds up to. `ok` means "nothing went wrong yet":
+ * true when at least one image is done or jobs are still queued/running, false
+ * only when every job failed. `state` says which.
+ */
+export function summarizeJobs(statuses: JobStatus[]): {
+  ok: boolean
+  state: 'done' | 'partial' | 'running' | 'failed'
+  progress: { total: number; done: number; running: number; queued: number; failed: number }
+} {
+  const count = (s: JobStatus) => statuses.filter(x => x === s).length
+  const progress = { total: statuses.length, done: count('done'), running: count('running'), queued: count('queued'), failed: count('failed') }
+  const pending = progress.running + progress.queued
+  const state = pending > 0 ? 'running'
+    : progress.total > 0 && progress.done === progress.total ? 'done'
+      : progress.done > 0 ? 'partial'
+        : 'failed'
+  return { ok: state !== 'failed', state, progress }
+}
+
+/** Finished jobs beyond the newest `keep` are forgotten, so the job list cannot grow without bound. */
+export function jobsToPrune<J extends { id: string; status: JobStatus; createdAt: number }>(all: J[], keep: number): string[] {
+  const finished = all.filter(j => j.status === 'done' || j.status === 'failed').sort((a, b) => b.createdAt - a.createdAt)
+  return finished.slice(keep).map(j => j.id)
 }

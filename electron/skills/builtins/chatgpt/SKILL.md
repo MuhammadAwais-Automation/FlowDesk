@@ -58,6 +58,10 @@ Prefer `chatgpt_ask`: it returns `chatId`, the account and saved images as data.
 ## Talking: `chatgpt_ask`
 
 - `prompt` (required), `chatId` (continue that chat), `account` (email or partition), `model` (slug).
+- `account` given = that account ONLY: a limit or sign-out there fails the ask; it is never moved to
+  another account. Omit `account` for automatic routing with failover.
+- `chatId` must be an id from `chatgpt_chats` / `chatgpt_search_chats`. One that exists on no account
+  fails without sending anything; asking the same question twice in a chat returns the NEW answer.
 - Returns `{ ok, account, chatId, text, images? }`. Keep `chatId` if the user may follow up.
 - A plain answer takes ~10-15 s. Two asks on the SAME account run one after the other;
   asks on different accounts run in parallel.
@@ -77,15 +81,23 @@ Prefer `chatgpt_ask`: it returns `chatId`, the account and saved images as data.
 ## Images
 
 ### Generate: `chatgpt_generate_image`
-- `prompt`, `count` (1-20, each its own job and its own chat), `account` (preferred, not exclusive), `wait`.
-- `wait: true` (default) holds up to ~14 min and returns `progress {total, done, running, queued, failed}`
+- `prompt`, `count` (1-20, each its own job and its own chat), `account`, `wait`.
+- `account` given = that account ONLY (no failover); out of quota or signed out there, the job fails.
+  Omit it to let jobs spread over accounts and move on a limit.
+- `wait: true` (default) holds up to ~14 min and returns `state`, `progress {total, done, running, queued, failed}`
   plus every saved image. For long batches use `wait: false` and poll `chatgpt_image_jobs` every 5-10 s.
+- `ok` is false only when every job failed. `state`: `done`, `partial` (some failed), `running` (accepted,
+  still going — poll, do NOT start again), `failed`.
+- A job that runs over ~20 min (hung upload or page) is stopped and fails, freeing its account.
 - One image takes ~50-80 s. A Plus account may return 2 variations for one job.
 - Image mode is forced in the request, so a caption-like prompt still draws. If ChatGPT still answers in
   text, the tool asks once more in the same chat ("Please create the image now.").
 
 ### Edit: `chatgpt_edit_image`
 - `image` = a `flowdesk-image://` link, a saved file name, or an absolute local path; `prompt` = the change.
+  A local file must really be a PNG/JPEG/GIF/WebP (checked by its bytes), at most 25 MB, on a local
+  drive — network/UNC paths and other file types are refused before anything is read or uploaded.
+- `account` pins the edit to that account; an image made on another account is uploaded to it.
 - An image FlowDesk made or downloaded is edited inside its own chat on its own account.
 - Any other file (or when that account cannot draw) is uploaded over the API to an account with quota
   and edited in a new chat. Upload ~15 s, edit ~60-80 s.
@@ -107,10 +119,12 @@ Prefer `chatgpt_ask`: it returns `chatId`, the account and saved images as data.
 
 - Accounts are the Google sessions added in FlowDesk's Accounts page. Each one signs in to ChatGPT once
   with `chatgpt_open_login {partition}` (partition from `chatgpt_image_accounts`).
-- Images: the free account with the most images left takes the next job (the preferred `account` first).
+- An explicit `account` is never swapped for another (asks and images alike); routing below applies
+  only when `account` is omitted.
+- Images: the free account with the most images left takes the next job.
   On a limit message the account is parked until its reset; on "image creation is temporarily
   unavailable" / "error on my side" it is parked 15 min. The job moves to the next account either way.
-- Text: preferred account first, then the rest; a limit or sign-out moves the ask to the next account.
+- Text: accounts in order; a limit or sign-out moves the ask to the next account.
 - `imagesLeft` is ChatGPT's own number; on Plus it was seen not to drop after use, so do not treat it as exact.
 - Two Google accounts signed in to the SAME ChatGPT account share one quota. Check that the `chatgpt`
   email in `chatgpt_image_accounts` differs per account.
@@ -124,6 +138,11 @@ Prefer `chatgpt_ask`: it returns `chatId`, the account and saved images as data.
 | `ChatGPT answered without an image: …` | ChatGPT refused (often content policy) | Rephrase; do not retry the same prompt |
 | `ChatGPT ended the turn without an answer / image` | The turn closed empty | Retry once; without `model` if one was set |
 | `chat … was not found on any account` | Wrong id | Find it with `chatgpt_chats` / `chatgpt_search_chats` |
+| `invalid chat id` / `invalid fileId` / `invalid model` | Not an id/slug at all | Use the value exactly as a list tool returned it |
+| `the chosen account cannot generate right now` | Pinned `account` is out of quota / signed out | Wait for its reset, or omit `account` |
+| `… could not be read (…)` | The chat vanished or the account signed out mid-turn | Check `chatgpt_image_accounts`, retry once |
+| `did not finish within … minutes and was stopped` | A hung page or upload | Retry once; the account is already free |
+| `Network and device paths are not allowed` / `not a PNG, JPEG, GIF or WebP` / `too large` | Bad local file for an edit | Pass a real local image ≤ 25 MB |
 
 ## Not available
 
