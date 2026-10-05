@@ -62,7 +62,7 @@ in a hidden window per account; there is no API key. Write tools were NOT exerci
 | read one conversation | `linkedin_list_messages` | `conversationUrn` from list_chats; page back with `before` = `oldestDeliveredAt`. Does not mark read. |
 | count unread | `linkedin_unread` | `totalUnread` + per mailbox category. |
 | make an account the default | `linkedin_switch_account` | Local only; changes nothing on LinkedIn. |
-| sign an account in | `social_open_login {platform:"linkedin", account}` | Opens a window; the user signs in. Never type credentials. |
+| sign an account in | `social_open_login {platform:"linkedin", account}` | Shows FlowDesk on Social → LinkedIn; the user signs in there. Never type credentials. |
 | WRITE: send a message | `linkedin_send` | Approval first (see below). |
 | WRITE: change profile text | `linkedin_update_profile` | Only the fields given change; blank name/headline/location are ignored. Approval first. |
 | WRITE: replace photo / cover | `linkedin_upload_photo` / `linkedin_upload_cover` | Local image path. Approval first. |

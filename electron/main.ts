@@ -101,7 +101,7 @@ import { join, basename, resolve, sep } from 'path'
 import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, findAnyViewByUrl, findWorkerViewByTool, prewarmBackgroundViews, flushAllCookies, rememberedView } from './sessions'
 import { attachShellLinkPolicy } from './shellLinkPolicy'
-import { addSocialAccount, isSocialPlatform, removeSocialAccount, socialAccountsStatus } from './socialAccounts'
+import { addSocialAccount, isSocialPlatform, removeSocialAccount, setSocialShowHandler, socialAccountsStatus } from './socialAccounts'
 import { startProbeRunner } from './discovery/probeRunner'
 import { APPROVAL_TIMEOUT_MS, loadPolicy, policyPaths, readActionLog, savePolicy } from './gateway/actionPolicy'
 import { initSkillsRegistry, listSkills, getSkill, saveSkill, deleteSkill, listWorkflows, getWorkflow, saveWorkflow, deleteWorkflow } from './skills/skillRegistry'
@@ -285,6 +285,24 @@ configureChatgptImages({
 })
 
 setGoogleAccountsGetter(() => (store.get('gmailSessions') as GmailSession[]).map(({ email, partition, label }) => ({ email, partition, label: label ?? null })))
+
+// social_open_login: show FlowDesk on Social → platform → account (the user
+// picks a Google account in the top bar and signs in there), not a popup.
+setSocialShowHandler((platform, account) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  const win = mainWindow
+  if (win.isMinimized()) win.restore()
+  win.show()
+  // Windows refuses focus() from a background app; a moment on top brings it forward.
+  win.setAlwaysOnTop(true)
+  win.focus()
+  setTimeout(() => { if (!win.isDestroyed()) win.setAlwaysOnTop(false) }, 300)
+  const send = () => win.webContents.send('social:show', { platform, account: account.id })
+  // A renderer still loading has not subscribed yet; send once it has.
+  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', () => setTimeout(send, 500))
+  else send()
+  return true
+})
 
 setGooglePartitionGetter(() => {
   const sessions = (store.get('gmailSessions') as GmailSession[]) || []
@@ -926,10 +944,14 @@ ipcMain.handle('social:accounts', async (_e, platform: unknown) => {
 })
 
 // Adds a slot, or with `account` renames that slot. Never signs anything in.
-ipcMain.handle('social:addAccount', (_e, platform: unknown, label: unknown, account: unknown) => {
+// With `googleAccount` (an Accounts-page Google partition) the slot lives in that session.
+ipcMain.handle('social:addAccount', (_e, platform: unknown, label: unknown, account: unknown, googleAccount: unknown) => {
   if (!isSocialPlatform(platform)) return { ok: false, error: 'unknown platform' }
   try {
-    return { ok: true, account: addSocialAccount(platform, typeof label === 'string' ? label : undefined, typeof account === 'string' ? { account } : {}) }
+    return { ok: true, account: addSocialAccount(platform, typeof label === 'string' ? label : undefined, {
+      ...(typeof account === 'string' ? { account } : {}),
+      ...(typeof googleAccount === 'string' ? { googleAccount } : {}),
+    }) }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }

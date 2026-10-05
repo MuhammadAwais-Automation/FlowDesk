@@ -1,4 +1,4 @@
-import { MessageCircle, Linkedin, Facebook, Flame, Video, Pin } from 'lucide-react'
+import { MessageCircle, Linkedin, Facebook, Flame, Video, Pin, ShoppingBag } from 'lucide-react'
 
 export interface SocialPlatform {
   id: string
@@ -70,6 +70,14 @@ export const SOCIAL_PLATFORMS: SocialPlatform[] = [
     icon: Pin,
     partition: 'social-pinterest',
     accent: '#E60023',
+  },
+  {
+    id: 'gumroad',
+    label: 'Gumroad',
+    url: 'https://gumroad.com/dashboard',
+    icon: ShoppingBag,
+    partition: 'social-gumroad',
+    accent: '#FF90E8',
   },
 ]
 

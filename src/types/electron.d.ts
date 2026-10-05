@@ -31,6 +31,8 @@ export interface SocialAccountRow {
 export interface SocialAccountsResult {
   ok: boolean
   accounts?: SocialAccountRow[]
+  /** Google accounts from the Accounts page (masked email) a slot can live in. */
+  googleAccounts?: { email: string; label: string | null; partition: string }[]
   error?: string
 }
 
@@ -297,7 +299,9 @@ export interface ElectronAPI {
   tiktokSetActiveAccount?: (account: string | number) => Promise<boolean>
   onTikTokAccountSwitched?: (cb: (accountId: string) => void) => () => void
   socialAccounts?: (platform: string) => Promise<SocialAccountsResult>
-  socialAddAccount?: (platform: string, label?: string, account?: string) => Promise<{ ok: boolean; account?: SocialAccountRow; error?: string }>
+  socialAddAccount?: (platform: string, label?: string, account?: string, googleAccount?: string) => Promise<{ ok: boolean; account?: SocialAccountRow; error?: string }>
+  /** Main asks the renderer to show Social → platform (→ account) instead of a separate login window. */
+  onSocialShow?: (cb: (target: { platform: string; account?: string }) => void) => () => void
   socialRemoveAccount?: (platform: string, account: string) => Promise<{ ok: boolean; error?: string }>
   linkedinSetActiveAccount?: (account: string | number) => Promise<boolean>
   linkedinGetAccounts?: () => Promise<unknown>

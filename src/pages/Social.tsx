@@ -18,7 +18,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { RotateCw, User, Edit2, Trash2 } from 'lucide-react'
 import { SOCIAL_PLATFORMS, DEFAULT_PLATFORM_ID } from '@/config/socialPlatforms'
-import type { GmailSession, SocialAccountRow } from '@/types/electron'
+import type { GmailSession, SocialAccountRow, SocialAccountsResult } from '@/types/electron'
 
 const RAIL_W = 64
 const TOP_H = 44
@@ -45,7 +45,7 @@ interface LinkedInAccount {
 // Platforms whose account list comes from the main-process social registry
 // (electron/socialAccounts.ts), so the switcher and the MCP/CLI tools agree on
 // which slot is which.
-const REGISTRY_SWITCHER = new Set(['pinterest', 'whatsapp', 'facebook'])
+const REGISTRY_SWITCHER = new Set(['pinterest', 'whatsapp', 'facebook', 'gumroad'])
 
 const DEFAULT_LINKEDIN_ACCOUNTS: LinkedInAccount[] = [
   { id: '1', label: 'Account 1 (Primary)', partition: 'social-linkedin' },
@@ -101,13 +101,28 @@ export default function Social({ isActive }: Props) {
     try { return JSON.parse(localStorage.getItem('socialRegistrySelected') || '{}') as Record<string, string> } catch { return {} }
   })
 
+  const [googleAccounts, setGoogleAccounts] = useState<NonNullable<SocialAccountsResult['googleAccounts']>>([])
+
   const loadRegistry = useCallback(async () => {
     if (!usesRegistry || !api.socialAccounts) return
     const res = await api.socialAccounts(platform.id).catch(() => null)
     setRegistryAccounts(res?.ok && res.accounts ? res.accounts : [])
+    setGoogleAccounts(res?.ok && res.googleAccounts ? res.googleAccounts : [])
   }, [api, platform.id, usesRegistry])
 
   useEffect(() => { void loadRegistry() }, [loadRegistry])
+
+  // social_open_login (via App.tsx): jump to that platform and account.
+  useEffect(() => {
+    const onShow = (e: Event) => {
+      const { platform: p, account } = (e as CustomEvent<{ platform: string; account?: string }>).detail
+      setActiveId(p)
+      if (account) setRegistrySelected(prev => ({ ...prev, [p]: account }))
+      void loadRegistry()
+    }
+    window.addEventListener('social-show', onShow)
+    return () => window.removeEventListener('social-show', onShow)
+  }, [loadRegistry])
 
   useEffect(() => {
     Promise.all([
@@ -228,6 +243,17 @@ export default function Social({ isActive }: Props) {
 
   async function handleAddRegistryAccount() {
     const res = await api.socialAddAccount?.(platform.id).catch(() => null)
+    if (!res?.ok || !res.account) { if (res?.error) window.alert(res.error); return }
+    await loadRegistry()
+    handleRegistryChange(res.account.id)
+  }
+
+  // A slot inside an Accounts-page Google session: "Continue with Google"
+  // then offers that account directly. Reuses the slot if one is already bound.
+  async function handleUseGoogleAccount(partition: string) {
+    const bound = platformRegistry.find(a => a.partition === partition)
+    if (bound) { handleRegistryChange(bound.id); return }
+    const res = await api.socialAddAccount?.(platform.id, undefined, undefined, partition).catch(() => null)
     if (!res?.ok || !res.account) { if (res?.error) window.alert(res.error); return }
     await loadRegistry()
     handleRegistryChange(res.account.id)
@@ -451,19 +477,31 @@ export default function Social({ isActive }: Props) {
                 <select
                   value={currentRegistry?.id ?? '1'}
                   onChange={e => {
-                    if (e.target.value === '__add_new__') {
+                    const v = e.target.value
+                    if (v === '__add_new__') {
                       void handleAddRegistryAccount()
+                    } else if (v.startsWith('__google__:')) {
+                      void handleUseGoogleAccount(v.slice('__google__:'.length))
                     } else {
-                      handleRegistryChange(e.target.value)
+                      handleRegistryChange(v)
                     }
                   }}
                   className="font-retro-sans text-xs bg-[#FAF7F0] border border-[#D6CFC0] rounded px-2 py-0.5 text-stone-800 focus:outline-none focus:ring-1 focus:ring-stone-400 cursor-pointer"
                 >
                   {platformRegistry.map(acc => (
                     <option key={acc.id} value={acc.id}>
-                      {acc.label}{acc.signedIn === false ? ' (signed out)' : ''}
+                      {acc.label}{acc.google ? ' (Google)' : ''}{acc.signedIn === false ? ' (signed out)' : ''}
                     </option>
                   ))}
+                  {googleAccounts.some(g => !platformRegistry.some(a => a.partition === g.partition)) && (
+                    <optgroup label="Google accounts (Accounts page)">
+                      {googleAccounts.filter(g => !platformRegistry.some(a => a.partition === g.partition)).map(g => (
+                        <option key={g.partition} value={`__google__:${g.partition}`}>
+                          {g.label ? `${g.label} — ${g.email}` : g.email}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                   <option value="__add_new__">+ Add New Account…</option>
                 </select>
 

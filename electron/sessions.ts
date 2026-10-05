@@ -50,7 +50,7 @@ function logCdpDecision(url: string, matchedHost: string | undefined, packaged: 
   } catch { /* discovery aid only */ }
 }
 
-const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'flow.google.com', 'labs.google', 'reddit.com', 'tiktok.com', 'chatgpt.com', 'pinterest.com']
+const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'flow.google.com', 'labs.google', 'reddit.com', 'tiktok.com', 'chatgpt.com', 'pinterest.com', 'gumroad.com']
 
 /**
  * Extra hosts to capture ALONGSIDE a matched tab host, for sites whose real
@@ -72,6 +72,8 @@ const CDP_RECORDER_EXTRA_HOSTS: Record<string, string[]> = {
   // The pin builder uploads the image off pinterest.com (media upload host
   // not yet observed), so watch the likely storage hosts too.
   'pinterest.com': ['pinimg.com', 'amazonaws.com'],
+  // Product files and covers upload straight to storage, off gumroad.com.
+  'gumroad.com': ['amazonaws.com', 'cloudfront.net'],
 }
 
 

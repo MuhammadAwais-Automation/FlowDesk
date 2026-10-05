@@ -21,7 +21,7 @@ import { getGoogleAccounts, maskAccount, matchFlowAccount } from './flow'
 import { routeLink } from './linkRouting'
 import { prepareGooglePopup, wantsGoogleChooser } from './googleSignInChooser'
 
-export const SOCIAL_PLATFORMS = ['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook', 'pinterest'] as const
+export const SOCIAL_PLATFORMS = ['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook', 'pinterest', 'gumroad'] as const
 export type SocialPlatform = typeof SOCIAL_PLATFORMS[number]
 
 export interface SocialAccount { platform: SocialPlatform; id: string; label: string; partition: string }
@@ -33,11 +33,12 @@ export const SOCIAL_HOME: Record<SocialPlatform, string> = {
   reddit: 'https://www.reddit.com',
   facebook: 'https://www.facebook.com',
   pinterest: 'https://www.pinterest.com',
+  gumroad: 'https://gumroad.com/dashboard',
 }
 
 // What each platform had before this list existed.
 const DEFAULT_IDS: Record<SocialPlatform, string[]> = {
-  whatsapp: ['1'], tiktok: ['1', '2', '3'], linkedin: ['1', '2'], reddit: ['1'], facebook: ['1'], pinterest: ['1'],
+  whatsapp: ['1'], tiktok: ['1', '2', '3'], linkedin: ['1', '2'], reddit: ['1'], facebook: ['1'], pinterest: ['1'], gumroad: ['1'],
 }
 
 // `google` = the partition of a Google account from the Accounts page. The slot
@@ -227,14 +228,21 @@ export async function socialAccountsStatus(platform?: SocialPlatform) {
 
 /** A visible window on the account's own partition, for the user to sign in once. */
 // Where signing in starts when the home page is not the login page.
-const SOCIAL_LOGIN: Partial<Record<SocialPlatform, string>> = { pinterest: 'https://www.pinterest.com/login/' }
+const SOCIAL_LOGIN: Partial<Record<SocialPlatform, string>> = { pinterest: 'https://www.pinterest.com/login/', gumroad: 'https://gumroad.com/login' }
 
 // One sign-in window per partition: asking again focuses it instead of stacking windows.
 const loginWindows = new Map<string, BrowserWindow>()
 
-export function openSocialLogin(platform: SocialPlatform, ref?: string | number | null): { ok: boolean; account?: SocialAccount; error?: string } {
+// Set by main.ts: brings FlowDesk forward on Social → platform → account. The
+// user signs in there, with the top-bar account picker, never in a separate
+// window. The window below stays only for when no app window exists (tests).
+let showSocialTab: ((platform: SocialPlatform, account: SocialAccount) => boolean) | null = null
+export function setSocialShowHandler(fn: typeof showSocialTab): void { showSocialTab = fn }
+
+export function openSocialLogin(platform: SocialPlatform, ref?: string | number | null): { ok: boolean; account?: SocialAccount; error?: string; shown?: string } {
   const acc = resolveSocialAccount(platform, ref)
   if (!acc) return { ok: false, error: `unknown ${platform} account "${ref}" — list them with social_accounts` }
+  if (showSocialTab?.(platform, acc)) return { ok: true, account: acc, shown: `FlowDesk Social → ${platform} → ${acc.label}; the user signs in there` }
   const open = loginWindows.get(acc.partition)
   if (open && !open.isDestroyed()) { open.show(); open.focus(); return { ok: true, account: acc } }
   const win = new BrowserWindow({

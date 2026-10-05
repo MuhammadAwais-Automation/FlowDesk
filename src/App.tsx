@@ -38,6 +38,22 @@ export default function App() {
     useThemeStore.getState().init()
   }, [])
 
+  // social_open_login lands here: open Social on that platform and account
+  // (Social.tsx reads the same localStorage keys and listens for the event).
+  useEffect(() => {
+    if (!api?.onSocialShow) return
+    return api.onSocialShow(({ platform, account }) => {
+      localStorage.setItem('socialActivePlatform', platform)
+      if (account) {
+        let sel: Record<string, string> = {}
+        try { sel = JSON.parse(localStorage.getItem('socialRegistrySelected') || '{}') as Record<string, string> } catch { /* fresh */ }
+        localStorage.setItem('socialRegistrySelected', JSON.stringify({ ...sel, [platform]: account }))
+      }
+      setCurrentPage('social')
+      window.dispatchEvent(new CustomEvent('social-show', { detail: { platform, account } }))
+    })
+  }, [])
+
   // Navigate and immediately hide any native WebContentsView BEFORE React re-renders.
   // This prevents the native view from covering the new page during the transition.
   function navigateTo(page: Page) {

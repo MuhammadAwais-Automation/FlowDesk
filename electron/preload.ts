@@ -159,8 +159,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Social account registry (Pinterest, WhatsApp, Facebook switchers)
   socialAccounts: (platform: string) =>
     ipcRenderer.invoke('social:accounts', platform),
-  socialAddAccount: (platform: string, label?: string, account?: string) =>
-    ipcRenderer.invoke('social:addAccount', platform, label, account),
+  socialAddAccount: (platform: string, label?: string, account?: string, googleAccount?: string) =>
+    ipcRenderer.invoke('social:addAccount', platform, label, account, googleAccount),
+  onSocialShow: (cb: (target: { platform: string; account?: string }) => void) => {
+    const listener = (_e: unknown, target: { platform: string; account?: string }) => cb(target)
+    ipcRenderer.on('social:show', listener)
+    return () => ipcRenderer.removeListener('social:show', listener)
+  },
   socialRemoveAccount: (platform: string, account: string) =>
     ipcRenderer.invoke('social:removeAccount', platform, account),
 

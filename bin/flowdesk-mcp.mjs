@@ -2165,7 +2165,7 @@ server.tool(
   async (args) => textResult(await callGatewayRpc('pinterest.deleteScheduledPin', args))
 )
 
-const SOCIAL_PLATFORM = z.enum(['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook', 'pinterest'])
+const SOCIAL_PLATFORM = z.enum(['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook', 'pinterest', 'gumroad'])
 
 server.tool(
   'social_accounts',
@@ -2190,7 +2190,7 @@ server.tool(
 
 server.tool(
   'social_open_login',
-  'Open a visible sign-in window for one social account so the user can sign in once. The user types the password; nothing is filled in.',
+  'Bring FlowDesk forward on Social -> platform -> this account so the user signs in there: the top-bar Account picker lists the Google accounts from the Accounts page, and picking one makes "Continue with Google" land on it. The user does the sign-in click; nothing is filled in.',
   {
     platform: SOCIAL_PLATFORM.describe('Platform.'),
     account: z.string().optional().describe('Account id from social_accounts (default 1).'),

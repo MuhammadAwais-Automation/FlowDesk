@@ -425,10 +425,10 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
           return { ok: true, account, next: 'sign in with social.openLogin' }
         } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
       })()
-    : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook, pinterest' },
+    : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook, pinterest, gumroad' },
   'social.openLogin': async (p) => isSocialPlatform(p.platform)
     ? openSocialLogin(p.platform, typeof p.account === 'string' || typeof p.account === 'number' ? p.account : null)
-    : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook' },
+    : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook, pinterest, gumroad' },
 
   // Facebook read. Writes stay on the agent tools (tools.call → facebook_*),
   // the single place their arguments are validated. A present-but-odd account
