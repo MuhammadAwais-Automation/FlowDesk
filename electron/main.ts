@@ -2934,6 +2934,9 @@ app.whenReady().then(async () => {
         // possibly idle page — confirmed by a real probe that watched the
         // wrong one for 200s while a real ask_chatgpt call ran elsewhere).
         if (target.startsWith('worker:')) return findWorkerViewByTool(target.slice('worker:'.length))?.webContents ?? null
+        // "tab:<tabId>" — one exact view or background window, e.g.
+        // tab:social-pinterest, when several accounts sit on the same site.
+        if (target.startsWith('tab:')) return getViewById(target.slice('tab:'.length))?.webContents ?? null
         // Fallback: any other window (e.g. a social sign-in window) whose URL matches.
         return findAnyViewByUrl(target)?.webContents
           ?? webContents.getAllWebContents().find(wc => !wc.isDestroyed() && wc.getURL().includes(target))

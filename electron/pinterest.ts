@@ -7,13 +7,17 @@
  * that is not registered fails before any page is touched.
  */
 import type { WebContents } from 'electron'
+import { readFile, stat } from 'node:fs/promises'
+import { basename, extname, isAbsolute } from 'node:path'
 import { ensureBackgroundView } from './sessions'
 import { isSignedIn, resolveSocialAccount, type SocialAccount } from './socialAccounts'
 import {
-  HUB, TREND_TYPES, checkBoardId, checkBoardUrl, checkBookmark, checkCountry, checkPinId, checkTrendType, checkUsername,
-  clampLimit, mapAudience, mapBoards, mapConversations, mapMe, mapPin, mapPins, mapSuggestions, mapTrends, mapUser,
-  matchTrends, nextBookmark, nicheReport, pinOutliers, resourceGetScript,
-  type PinSummary, type ResourceAnswer, type ResourceCall, type TrendTerm, type TrendType,
+  HUB, IMAGE_TYPES, MAX_IMAGE_BYTES, TREND_TYPES, checkBoardId, checkBoardName, checkBoardUrl, checkBookmark, checkCountry,
+  checkDescription, checkLink, checkPinId, checkPublishAt, checkText, checkTitle, checkTrendType, checkUsername,
+  clampLimit, createPinScript, mapAudience, mapBoards, mapConversations, mapMe, mapPin, mapPins, mapScheduledPins,
+  mapSuggestions, mapTrends, mapUser, matchTrends, nextBookmark, nicheReport, pinOutliers, resourceGetScript,
+  resourcePostScript,
+  type PinSummary, type ResourceAnswer, type ResourceCall, type TrendTerm, type TrendType, type WriteCall,
 } from './pinterestBridge'
 
 export interface PinterestResult {
@@ -371,5 +375,188 @@ export function pinterestNicheResearch(o: { niche?: unknown; country?: unknown; 
       searched,
       ...nicheReport(pins),
     }
+  })
+}
+
+// ── Writes ───────────────────────────────────────────────────────────────────
+// Wire format captured from the web app itself (see pinterestBridge.ts). Each
+// call is one real action on the account: callers must have the user's yes.
+
+type WriteAnswer = ResourceAnswer & { account?: string; endpoint?: string | null; step?: string }
+
+async function write(account: PinterestAccountRef, call: WriteCall, timeoutMs?: number): Promise<WriteAnswer> {
+  const out = await runPinterest(account, resourcePostScript(call), timeoutMs)
+  return { status: 0, ...out, account: typeof out.account === 'string' ? out.account : undefined }
+}
+
+function writeFailed(a: WriteAnswer, what: string): PinterestResult {
+  const why = a.error ?? (a.message ? `${a.message}` : `pinterest answered ${a.status}${a.code ? ` (code ${a.code})` : ''}`)
+  return { ok: false, account: a.account, error: `${what} failed: ${why}`, ...(a.step ? { step: a.step } : {}) }
+}
+
+const idOf = (data: unknown): string | null => {
+  const id = (data as { id?: unknown } | null)?.id
+  return typeof id === 'string' && id ? id : null
+}
+
+/** A new board on the account; secret unless `secret: false`. */
+export function pinterestCreateBoard(o: { name?: unknown; description?: unknown; secret?: unknown; account?: PinterestAccountRef } = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const name = checkBoardName(o.name)
+    const description = checkDescription(o.description)
+    const gate = await needsSignIn(o.account, 'pinterest_create_board')
+    if (gate) return gate
+    const { a: m, me } = await myProfile(o.account)
+    if (!me?.username) return failed(m, 'own profile')
+    const privacy = o.secret === false ? 'public' : 'secret'
+    const a = await write(o.account, { resource: 'BoardResource', action: 'create', options: {
+      name, description, privacy, collab_board_email: true, aux_data: { source: 'profile' },
+    }, sourceUrl: `/${me.username}/_saved/`, handler: 'www/[username]/_saved.js' })
+    if (!a.ok) return writeFailed(a, 'create board')
+    const d = (a.data ?? {}) as { url?: unknown }
+    return { ok: true, account: a.account, board: { id: idOf(a.data), name, privacy, url: typeof d.url === 'string' ? `https://www.pinterest.com${d.url}` : null } }
+  })
+}
+
+/** Saves (repins) an existing pin to one of the account's boards. */
+export function pinterestSavePin(o: { pinId?: unknown; boardId?: unknown; account?: PinterestAccountRef } = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const pinId = checkPinId(o.pinId)
+    const boardId = checkBoardId(o.boardId)
+    const gate = await needsSignIn(o.account, 'pinterest_save_pin')
+    if (gate) return gate
+    const a = await write(o.account, { resource: 'RepinResource', action: 'create', options: {
+      board_id: boardId, pin_id: pinId, description: ' ', title: '', link: null, image_url: '', image_base64: '',
+      is_buyable_pin: false, is_removable: false, media_upload_id: '',
+    }, sourceUrl: `/pin/${pinId}/`, handler: 'www/pin/[id].js' })
+    if (!a.ok) return writeFailed(a, 'save pin')
+    const id = idOf(a.data)
+    return { ok: true, account: a.account, savedPin: { id, url: id ? `https://www.pinterest.com/pin/${id}/` : null, boardId } }
+  })
+}
+
+async function loadImage(path: unknown): Promise<{ base64: string; mime: string; name: string }> {
+  if (typeof path !== 'string' || !isAbsolute(path)) throw new Error('imagePath must be an absolute path to a .png, .jpg, .jpeg or .webp file')
+  const mime = IMAGE_TYPES[extname(path).toLowerCase()]
+  if (!mime) throw new Error('imagePath must be a .png, .jpg, .jpeg or .webp file')
+  const info = await stat(path).catch(() => null)
+  if (!info?.isFile()) throw new Error(`image not found: ${path}`)
+  if (info.size > MAX_IMAGE_BYTES) throw new Error('image is larger than 20 MB')
+  return { base64: (await readFile(path)).toString('base64'), mime, name: basename(path) }
+}
+
+/**
+ * A new pin from a local image on one of the account's boards, published now
+ * or — with publishAt — scheduled (business accounts).
+ */
+export function pinterestCreatePin(o: {
+  imagePath?: unknown; boardId?: unknown; title?: unknown; description?: unknown; link?: unknown; altText?: unknown
+  publishAt?: unknown; account?: PinterestAccountRef
+} = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const boardId = checkBoardId(o.boardId)
+    const title = checkTitle(o.title, true)
+    const description = checkDescription(o.description)
+    const link = checkLink(o.link)
+    const altText = checkText(o.altText, 'altText', 500)
+    const publishAt = o.publishAt === undefined || o.publishAt === null || o.publishAt === '' ? null : checkPublishAt(o.publishAt)
+    const image = await loadImage(o.imagePath)
+    const gate = await needsSignIn(o.account, 'pinterest_create_pin')
+    if (gate) return gate
+    const out = await runPinterest(o.account, createPinScript({ boardId, title, description, link, altText, publishAt, image }), 120_000)
+    const a: WriteAnswer = { status: 0, ...out, account: typeof out.account === 'string' ? out.account : undefined }
+    if (!a.ok) return writeFailed(a, publishAt ? 'schedule pin' : 'create pin')
+    const id = idOf(a.data)
+    return publishAt
+      ? { ok: true, account: a.account, scheduledPin: { id, publishAt: new Date(publishAt * 1000).toISOString(), boardId, title } }
+      : { ok: true, account: a.account, pin: { id, url: id ? `https://www.pinterest.com/pin/${id}/` : null, boardId, title } }
+  })
+}
+
+/**
+ * Edits the account's own pin. Pinterest's edit replaces every field, so the
+ * pin is read first and only the given fields change.
+ */
+export function pinterestEditPin(o: {
+  pinId?: unknown; title?: unknown; description?: unknown; link?: unknown; altText?: unknown; boardId?: unknown; account?: PinterestAccountRef
+} = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const id = checkPinId(o.pinId)
+    const changes = {
+      ...(o.title !== undefined ? { title: checkTitle(o.title) } : {}),
+      ...(o.description !== undefined ? { description: checkDescription(o.description) } : {}),
+      ...(o.link !== undefined ? { link: checkLink(o.link) } : {}),
+      ...(o.altText !== undefined ? { alt_text: checkText(o.altText, 'altText', 500) } : {}),
+      ...(o.boardId !== undefined ? { board_id: checkBoardId(o.boardId) } : {}),
+    }
+    if (!Object.keys(changes).length) return { ok: false, error: 'nothing to change — give title, description, link, altText or boardId' }
+    const gate = await needsSignIn(o.account, 'pinterest_edit_pin')
+    if (gate) return gate
+    const cur = await resource(o.account, { resource: 'PinResource', options: { id, field_set_key: 'detailed' }, sourceUrl: `/pin/${id}/`, handler: 'www/pin/[id].js' })
+    if (!cur.ok) return failed(cur, `pin ${id}`)
+    const p = (cur.data ?? {}) as Record<string, unknown>
+    const s = (v: unknown) => (typeof v === 'string' ? v : '')
+    const a = await write(o.account, { resource: 'PinResource', action: 'update', options: {
+      id, title: s(p.title), description: s(p.description), link: s(p.link), alt_text: s(p.alt_text),
+      board_id: s((p.board as { id?: unknown } | undefined)?.id), board_section_id: null, pin_additional_note: '',
+      disable_comments: false, disable_did_it: false, is_shuffle_remixable: false, shopping_rec_disabled: false,
+      user_mention_tags: '[]', product_pins: [], idea_pin_details_template_type: null,
+      ...changes,
+    }, sourceUrl: `/pin/${id}/`, handler: 'www/pin/[id].js' })
+    if (!a.ok) return writeFailed(a, 'edit pin')
+    return { ok: true, account: a.account, pin: { id, url: `https://www.pinterest.com/pin/${id}/`, changed: Object.keys(changes) } }
+  })
+}
+
+/** Deletes one of the account's own pins. Cannot be undone. */
+export function pinterestDeletePin(o: { pinId?: unknown; account?: PinterestAccountRef } = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const id = checkPinId(o.pinId)
+    const gate = await needsSignIn(o.account, 'pinterest_delete_pin')
+    if (gate) return gate
+    const a = await write(o.account, { resource: 'PinResource', action: 'delete', options: { id }, sourceUrl: `/pin/${id}/`, handler: 'www/pin/[id].js' })
+    if (!a.ok) return writeFailed(a, 'delete pin')
+    return { ok: true, account: a.account, deletedPin: id }
+  })
+}
+
+/** Deletes one of the account's boards and every pin on it. Cannot be undone. */
+export function pinterestDeleteBoard(o: { boardId?: unknown; account?: PinterestAccountRef } = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const boardId = checkBoardId(o.boardId)
+    const gate = await needsSignIn(o.account, 'pinterest_delete_board')
+    if (gate) return gate
+    const { a: m, me } = await myProfile(o.account)
+    if (!me?.username) return failed(m, 'own profile')
+    const a = await write(o.account, { resource: 'BoardResource', action: 'delete', options: { board_id: boardId },
+      sourceUrl: `/${me.username}/_saved/`, handler: 'www/[username]/_saved.js' })
+    if (!a.ok) return writeFailed(a, 'delete board')
+    return { ok: true, account: a.account, deletedBoard: boardId }
+  })
+}
+
+/** Pins waiting to be published (business accounts). */
+export function pinterestScheduledPins(account?: PinterestAccountRef): Promise<PinterestResult> {
+  return guarded(async () => {
+    const gate = await needsSignIn(account, 'pinterest_scheduled_pins')
+    if (gate) return gate
+    const a = await resource(account, { resource: 'ScheduledPinsResource', options: { field_set_key: 'default' }, ...HUB })
+    if (!a.ok) return failed(a, 'scheduled pins')
+    return { ok: true, account: a.account, scheduledPins: mapScheduledPins(a.data) }
+  })
+}
+
+/** Cancels a scheduled pin before it publishes. */
+export function pinterestDeleteScheduledPin(o: { scheduledPinId?: unknown; account?: PinterestAccountRef } = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const id = checkPinId(o.scheduledPinId)
+    const gate = await needsSignIn(o.account, 'pinterest_delete_scheduled_pin')
+    if (gate) return gate
+    const { a: m, me } = await myProfile(o.account)
+    if (!me?.username) return failed(m, 'own profile')
+    const a = await write(o.account, { resource: 'ApiResource', action: 'delete', options: { url: `/v3/scheduledpins/${id}/`, data: {} },
+      sourceUrl: `/${me.username}/scheduled-pin/${id}/`, handler: 'www/[username]/scheduled-pin/[scheduled_pin_id].js' })
+    if (!a.ok) return writeFailed(a, 'delete scheduled pin')
+    return { ok: true, account: a.account, deletedScheduledPin: id }
   })
 }

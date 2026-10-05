@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import {  checkBoardUrl, checkBookmark, checkCountry, checkPinId, checkTrendType, checkUsername, clampLimit, mapAudience, mapBoards,  mapConversations, mapMe, mapPin, mapPins, mapSuggestions, mapTrends, mapUser, matchTrends, nextBookmark, nicheReport,  pinOutliers, resourceGetScript, type PinSummary,} from './pinterestBridge'
+import {
+  checkBoardName, checkBoardUrl, checkBookmark, checkCountry, checkLink, checkPinId, checkPublishAt, checkTitle, checkTrendType,
+  checkUsername, clampLimit, createPinScript, mapAudience, mapBoards, mapConversations, mapMe, mapPin, mapPins, mapScheduledPins,
+  mapSuggestions, mapTrends, mapUser, matchTrends, nextBookmark, nicheReport, pinOutliers, resourceGetScript, resourcePostScript,
+  type PinSummary,
+} from './pinterestBridge'
 
 const rawPin = (id: string, saves: number | null, extra: Record<string, unknown> = {}) => ({
   type: 'pin', id, title: `t${id}`, description: 'd', link: 'https://example.com', repin_count: 3, comment_count: 1,
@@ -150,5 +155,44 @@ describe('pinterest signed-in reads (shapes from probes/pin-40..42)', () => {
     expect(r.topDomains.map(d => d.domain).sort()).toEqual(['example.com', 'shop.example.com'])
     expect(r.topWords.find(w => w.word === 'logo')).toEqual({ word: 'logo', pins: 1 })
     expect(nicheReport([]).medianSaves).toBeNull()
+  })
+})
+
+describe('pinterest writes (wire format from the 2026-10-05 capture)', () => {
+  // The page scripts must at least parse; a syntax error would only show up live.
+  const parses = (script: string) => expect(() => new Function(`return ${script}`)).not.toThrow()
+
+  it('posts a form body with source_url, data and the csrf header', () => {
+    const s = resourcePostScript({ resource: 'BoardResource', action: 'create', options: { name: 'x', privacy: 'secret' }, sourceUrl: '/me/_saved/', handler: 'www/[username]/_saved.js' })
+    parses(s)
+    expect(s).toContain("'/resource/' + c.resource + '/' + c.action + '/'")
+    expect(s).toContain("'X-CSRFToken': csrf")
+    expect(s).toContain('"resource":"BoardResource","action":"create"')
+  })
+
+  it('builds the pin-builder upload sequence and keeps user text as data', () => {
+    const s = createPinScript({ boardId: '1', title: '"); alert(1); ("', description: '', link: '', altText: '', publishAt: null, image: { base64: 'AA==', mime: 'image/png', name: 'a.png' } })
+    parses(s)
+    for (const step of ['/v3/media/uploads/register/batch/', '/v3/media/uploads/', '/v3/storypins/', '/v3/scheduledpins/']) expect(s).toContain(step)
+    expect(s).not.toContain('alert(1); ("\n')
+  })
+
+  it('validates write input before any request', () => {
+    expect(checkBoardName('  Logos ')).toBe('Logos')
+    expect(() => checkBoardName('')).toThrow(/empty/)
+    expect(() => checkBoardName('x'.repeat(51))).toThrow(/longer than 50/)
+    expect(() => checkTitle('', true)).toThrow(/title is empty/)
+    expect(checkLink('https://shop.example.com/a')).toBe('https://shop.example.com/a')
+    expect(checkLink(undefined)).toBe('')
+    expect(() => checkLink('javascript:alert(1)')).toThrow(/http/)
+    const now = Date.parse('2026-10-05T12:00:00Z')
+    expect(checkPublishAt('2026-10-06T12:00:00Z', now)).toBe(Date.parse('2026-10-06T12:00:00Z') / 1000)
+    expect(() => checkPublishAt('2026-10-05T12:05:00Z', now)).toThrow(/15 minutes/)
+    expect(() => checkPublishAt('soon', now)).toThrow(/ISO date/)
+  })
+
+  it('maps scheduled pins', () => {
+    expect(mapScheduledPins([{ id: '39', title: 'Logo pack', description: 'd', link: '', board: { name: 'Logos' }, scheduled_ts: 1791270000 }, { title: 'no id' }]))
+      .toEqual([{ id: '39', title: 'Logo pack', description: 'd', link: null, board: 'Logos', publishAt: new Date(1791270000 * 1000).toISOString() }])
   })
 })

@@ -99,9 +99,10 @@ import { askBrowserProvider, workerProgress } from '../agent/browserWorkerQueue'
 import { radarCollectOnce, radarReportFor, radarStatus, startRadar, stopRadar } from '../tiktok/tiktokRadar'
 import { loadNiches, removeNiche, upsertNiche } from '../tiktok/tiktokRadarStore'
 import {
-  pinterestAudience, pinterestBoardPins, pinterestInbox, pinterestMe, pinterestMyBoards, pinterestNicheResearch, pinterestNotifications,
-  pinterestOutlier, pinterestPin, pinterestRelated, pinterestSearch, pinterestStatus, pinterestSuggest, pinterestTrends, pinterestUser,
-  pinterestUserBoards, pinterestUserPins,
+  pinterestAudience, pinterestBoardPins, pinterestCreateBoard, pinterestCreatePin, pinterestDeleteBoard, pinterestDeletePin,
+  pinterestDeleteScheduledPin, pinterestEditPin, pinterestInbox, pinterestMe, pinterestMyBoards, pinterestNicheResearch,
+  pinterestNotifications, pinterestOutlier, pinterestPin, pinterestRelated, pinterestSavePin, pinterestScheduledPins, pinterestSearch,
+  pinterestStatus, pinterestSuggest, pinterestTrends, pinterestUser, pinterestUserBoards, pinterestUserPins,
 } from '../pinterest'
 
 // Any non-empty account value is passed on as text, so an odd value is refused as unknown instead of meaning account 1.
@@ -400,6 +401,19 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'pinterest.inbox': async (p) => pinterestInbox(pinAccount(p)),
   'pinterest.notifications': async (p) => pinterestNotifications(pinAccount(p)),
   'pinterest.nicheResearch': async (p) => pinterestNicheResearch({ niche: p.niche, country: p.country, queries: p.queries, account: pinAccount(p) }),
+  'pinterest.scheduledPins': async (p) => pinterestScheduledPins(pinAccount(p)),
+  'pinterest.createBoard': async (p) => pinterestCreateBoard({ name: p.name, description: p.description, secret: p.secret, account: pinAccount(p) }),
+  'pinterest.savePin': async (p) => pinterestSavePin({ pinId: p.pinId, boardId: p.boardId, account: pinAccount(p) }),
+  'pinterest.createPin': async (p) => pinterestCreatePin({
+    imagePath: p.imagePath, boardId: p.boardId, title: p.title, description: p.description, link: p.link, altText: p.altText,
+    publishAt: p.publishAt, account: pinAccount(p),
+  }),
+  'pinterest.editPin': async (p) => pinterestEditPin({
+    pinId: p.pinId, title: p.title, description: p.description, link: p.link, altText: p.altText, boardId: p.boardId, account: pinAccount(p),
+  }),
+  'pinterest.deletePin': async (p) => pinterestDeletePin({ pinId: p.pinId, account: pinAccount(p) }),
+  'pinterest.deleteBoard': async (p) => pinterestDeleteBoard({ boardId: p.boardId, account: pinAccount(p) }),
+  'pinterest.deleteScheduledPin': async (p) => pinterestDeleteScheduledPin({ scheduledPinId: p.scheduledPinId, account: pinAccount(p) }),
   'social.accounts': async (p) => socialAccountsStatus(isSocialPlatform(p.platform) ? p.platform : undefined),
   'social.addAccount': async (p) => isSocialPlatform(p.platform)
     ? (() => {

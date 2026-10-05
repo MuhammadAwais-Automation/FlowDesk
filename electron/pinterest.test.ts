@@ -17,7 +17,10 @@ vi.mock('./socialAccounts', () => ({
   isSignedIn: async () => signedIn,
 }))
 
-const { pinterestNicheResearch, pinterestPin, pinterestSearch, pinterestStatus, pinterestTrends, pinterestUser, pinterestUserPins } = await import('./pinterest')
+const {
+  pinterestCreateBoard, pinterestCreatePin, pinterestDeleteBoard, pinterestEditPin, pinterestNicheResearch, pinterestPin, pinterestSavePin,
+  pinterestSearch, pinterestStatus, pinterestTrends, pinterestUser, pinterestUserPins,
+} = await import('./pinterest')
 
 describe('pinterest account routing', () => {
   beforeEach(() => { opened.length = 0; signedIn = false; answer = { ok: true, status: 200, code: 0, data: [], bookmark: null } })
@@ -58,6 +61,20 @@ describe('pinterest account routing', () => {
     expect(opened).toEqual([])
     expect((await pinterestTrends({ country: 'USA' })).error).toMatch(/two-letter/)
     expect((await pinterestNicheResearch({ niche: '  ' })).error).toBe('niche is empty')
+    expect(opened).toEqual([])
+  })
+
+  it('refuses writes with bad input, or on a signed-out account, before opening a page', async () => {
+    expect((await pinterestCreateBoard({ name: '' })).error).toMatch(/board name is empty/)
+    expect((await pinterestSavePin({ pinId: '123', boardId: 'abc' })).error).toMatch(/invalid board id/)
+    expect((await pinterestEditPin({ pinId: '123' })).error).toMatch(/nothing to change/)
+    expect((await pinterestDeleteBoard({ boardId: '1', account: '7' })).error).toMatch(/unknown pinterest account/)
+    expect((await pinterestCreatePin({ boardId: '1', title: 't', imagePath: 'relative.png' })).error).toMatch(/absolute path/)
+    expect((await pinterestCreatePin({ boardId: '1', title: 't', imagePath: 'C:/x/file.gif' })).error).toMatch(/\.png, \.jpg/)
+    expect((await pinterestCreatePin({ boardId: '1', title: 't', imagePath: 'C:/nope/missing.png' })).error).toMatch(/image not found/)
+    expect((await pinterestCreatePin({ boardId: '1', title: 't', imagePath: 'C:/x/a.png', publishAt: 'tomorrow' })).error).toMatch(/ISO date/)
+    const out = await pinterestCreateBoard({ name: 'Logos' })
+    expect(String(out.error)).toContain('needs a signed-in Pinterest account')
     expect(opened).toEqual([])
   })
 })

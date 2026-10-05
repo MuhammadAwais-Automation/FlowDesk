@@ -400,3 +400,159 @@ export function nicheReport(pins: PinSummary[]) {
     topWords: top(terms, n => n, 25).map(([word, pins]) => ({ word, pins })),
   }
 }
+
+// ── Writes (captured 2026-10-05: probes/out/_network-pinterest-com.json) ─────
+// POST /resource/<Name>/<create|update|delete>/ with a form body of
+// source_url + data={"options":…,"context":{}} and the page's csrftoken cookie
+// as X-CSRFToken. Every write needs the user's explicit yes before it runs.
+
+export type WriteAction = 'create' | 'update' | 'delete'
+export interface WriteCall extends ResourceCall { action: WriteAction }
+
+const PAGE_HELPERS = String.raw`
+  const html = document.documentElement.innerHTML
+  const appVersion = (html.match(/"appVersion"\s*:\s*"([0-9a-f]{6,})"/) || [])[1] || ''
+  const csrf = (document.cookie.match(/(?:^|; )csrftoken=([^;]+)/) || [])[1] || ''
+  const headers = (src, handler) => ({
+    'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json, text/javascript, */*, q=0.01',
+    'X-App-Version': appVersion, 'X-Pinterest-AppState': 'active', 'X-CSRFToken': csrf,
+    'X-Pinterest-Source-Url': src, 'X-Pinterest-PWS-Handler': handler })
+  const answer = async r => {
+    const t = await r.text()
+    let j = null
+    try { j = JSON.parse(t) } catch { return { ok: false, status: r.status, error: 'pinterest answered ' + r.status + ': ' + t.slice(0, 80) } }
+    const rr = (j && j.resource_response) || {}
+    const err = rr.error || {}
+    return { ok: r.ok && rr.code === 0, status: r.status, code: rr.code ?? null, message: err.message || rr.message || null, endpoint: rr.endpoint_name || null, data: rr.data ?? null }
+  }
+  const post = async c => {
+    const body = new URLSearchParams({ source_url: c.sourceUrl, data: JSON.stringify({ options: c.options, context: {} }) })
+    const r = await fetch('/resource/' + c.resource + '/' + c.action + '/', { method: 'POST', credentials: 'include',
+      headers: { ...headers(c.sourceUrl, c.handler), 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, body })
+    return answer(r)
+  }
+  const get = async c => {
+    const q = new URLSearchParams({ source_url: c.sourceUrl, data: JSON.stringify({ options: c.options, context: {} }), _: String(Date.now()) })
+    return answer(await fetch('/resource/' + c.resource + '/get/?' + q, { credentials: 'include', headers: headers(c.sourceUrl, c.handler) }))
+  }
+`
+
+export function resourcePostScript(call: WriteCall): string {
+  return `(async () => {
+  ${PAGE_HELPERS}
+  try { return await post(${JSON.stringify(call)}) } catch (e) { return { ok: false, status: 0, error: String(e) } }
+})()`
+}
+
+const MAX_TITLE = 100
+const MAX_DESCRIPTION = 500
+const MAX_BOARD_NAME = 50
+
+export function checkText(v: unknown, what: string, max: number, required = false): string {
+  const s = typeof v === 'string' ? v.replace(/\p{Cc}/gu, ' ').trim() : ''
+  if (required && !s) throw new Error(`${what} is empty`)
+  if (s.length > max) throw new Error(`${what} is longer than ${max} characters`)
+  return s
+}
+
+export const checkTitle = (v: unknown, required = false) => checkText(v, 'title', MAX_TITLE, required)
+export const checkDescription = (v: unknown) => checkText(v, 'description', MAX_DESCRIPTION)
+export const checkBoardName = (v: unknown) => checkText(v, 'board name', MAX_BOARD_NAME, true)
+
+export function checkLink(v: unknown): string {
+  if (v === undefined || v === null || v === '') return ''
+  if (typeof v !== 'string') throw new Error('link must be a URL')
+  let u: URL
+  try { u = new URL(v.trim()) } catch { throw new Error(`invalid link "${v}"`) }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('link must start with http:// or https://')
+  return u.toString()
+}
+
+/** Unix seconds of a future time; accepts an ISO date string or seconds/ms since 1970. */
+export function checkPublishAt(v: unknown, now = Date.now()): number {
+  const ms = typeof v === 'number' ? (v < 1e12 ? v * 1000 : v) : typeof v === 'string' ? Date.parse(v) : NaN
+  if (!Number.isFinite(ms)) throw new Error('publishAt must be an ISO date (e.g. 2026-10-07T12:00:00Z) or unix time')
+  if (ms < now + 15 * 60_000) throw new Error('publishAt must be at least 15 minutes in the future')
+  return Math.floor(ms / 1000)
+}
+
+export const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' }
+export const MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+export interface CreatePinPlan {
+  boardId: string
+  title: string
+  description: string
+  link: string
+  altText: string
+  /** Unix seconds; set = scheduled pin instead of publishing now. */
+  publishAt: number | null
+  image: { base64: string; mime: string; name: string }
+}
+
+/**
+ * The pin builder's own sequence: register the upload, POST the file to the
+ * storage URL Pinterest hands back, wait for /v3/media/uploads/ to report the
+ * image signature, then create (/v3/storypins/) or schedule (/v3/scheduledpins/).
+ */
+export function createPinScript(p: CreatePinPlan): string {
+  return `(async () => {
+  ${PAGE_HELPERS}
+  const p = ${JSON.stringify(p)}
+  const src = '/pin-creation-tool/', handler = 'www/pin-creation-tool.js'
+  const api = (action, url, data) => post({ resource: 'ApiResource', action, options: { url, data }, sourceUrl: src, handler })
+  try {
+    const bytes = Uint8Array.from(atob(p.image.base64), c => c.charCodeAt(0))
+    const blob = new Blob([bytes], { type: p.image.mime })
+    const bmp = await createImageBitmap(blob)
+    const width = bmp.width, height = bmp.height
+    bmp.close()
+    const localId = crypto.randomUUID()
+    const reg = await api('create', '/v3/media/uploads/register/batch/', { media_info_list: JSON.stringify([{ id: localId, media_type: 'image-story-pin' }]) })
+    const slot = reg.ok && reg.data && reg.data[localId]
+    if (!slot || !slot.upload_url) return { ...reg, ok: false, step: 'register upload' }
+    const form = new FormData()
+    for (const [k, v] of Object.entries(slot.upload_parameters || {})) form.append(k, v)
+    form.append('file', blob, p.image.name)
+    const up = await fetch(slot.upload_url, { method: 'POST', body: form })
+    if (!up.ok) return { ok: false, status: up.status, step: 'upload image', error: 'image upload answered ' + up.status }
+    let signature = null
+    for (let i = 0; i < 20 && !signature; i++) {
+      await new Promise(r => setTimeout(r, 1500))
+      const st = await get({ resource: 'ApiResource', options: { url: '/v3/media/uploads/', data: { upload_ids: [slot.upload_id] } }, sourceUrl: src, handler })
+      const item = st.ok && st.data && st.data[slot.upload_id]
+      if (item && item.status === 'failed') return { ok: false, step: 'process image', error: 'pinterest could not process the image (' + (item.failure_code || 'failed') + ')' }
+      signature = item && item.signature
+    }
+    if (!signature) return { ok: false, step: 'process image', error: 'pinterest did not finish processing the image within 30s' }
+    const trackingId = String(Date.now()) + String(Math.floor(Math.random() * 1e6)).padStart(6, '0')
+    const storyPin = JSON.stringify({
+      metadata: { pin_title: p.title, pin_image_signature: signature, canvas_aspect_ratio: width / height },
+      pages: [{ blocks: [{ block_style: { height: 100, width: 100, x_coord: 0, y_coord: 0 }, image_signature: signature, tracking_id: trackingId, type: 2 }],
+        clips: [{ clip_type: 0, end_time_ms: -1, is_converted_from_image: false, source_media_height: height, source_media_width: width, start_time_ms: -1 }],
+        layout: 0, style: { background_color: '#ffffff' } }],
+    })
+    if (p.publishAt) {
+      const r = await api('update', '/v3/scheduledpins/', { board_id: p.boardId, description: p.description, image_signature: signature,
+        is_comments_allowed: true, is_unified_builder: true, source_url: p.link, scheduled_ts: p.publishAt, story_pin: storyPin,
+        title: p.title, user_mention_tags: '[]' })
+      return { ...r, step: 'schedule pin' }
+    }
+    const r = await api('create', '/v3/storypins/', { alt_text: p.altText, allow_shopping_rec: true, board_id: p.boardId, description: p.description,
+      fields: ['pin.id', 'pin.image_signature', 'pin.image_square_url', 'pin.story_pin_data_id'], is_comments_allowed: true,
+      is_unified_builder: true, link: p.link, method: 'uploaded', story_pin: storyPin, user_mention_tags: '[]' })
+    return { ...r, step: 'create pin' }
+  } catch (e) { return { ok: false, status: 0, error: String(e) } }
+})()`
+}
+
+export function mapScheduledPins(data: unknown) {
+  return (Array.isArray(data) ? data : []).map(x => obj(x)).filter(x => str(x.id)).map(x => ({
+    id: x.id as string,
+    title: str(x.title),
+    description: str(x.description),
+    link: str(x.link),
+    board: str(obj(x.board).name),
+    publishAt: num(x.scheduled_ts) !== null ? new Date((x.scheduled_ts as number) * 1000).toISOString() : null,
+  }))
+}

@@ -37,8 +37,11 @@ export const DEFAULT_POLICY: ActionPolicy = {
  */
 export const EVAL_ACTIONS = ['flow_eval', 'linkedin_eval', 'tiktok_eval']
 
-/** Wipes a whole account in one call: always asks, even if the policy file leaves it out. */
-export const ALWAYS_ASK = ['tiktok_delete_all_videos']
+/**
+ * Always ask, even if the policy file leaves them out: wiping a whole account,
+ * and Pinterest deletes (a pin, a board with all its pins, a scheduled pin).
+ */
+export const ALWAYS_ASK = ['tiktok_delete_all_videos', 'pinterest_delete_pin', 'pinterest_delete_board', 'pinterest_delete_scheduled_pin']
 
 export const APPROVAL_TIMEOUT_MS = 60_000
 

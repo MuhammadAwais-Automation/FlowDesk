@@ -69,6 +69,9 @@ const CDP_RECORDER_EXTRA_HOSTS: Record<string, string[]> = {
   'labs.google': ['aisandbox-pa.googleapis.com', 'flow-content.google'],
   'reddit.com': ['gql.reddit.com', 'gateway.reddit.com', 'oauth.reddit.com', 'redditstatic.com'],
   'tiktok.com': ['www.tiktok.com', 'm.tiktok.com', 'byteoversea.com', 'ibytedtos.com', 'tiktokcdn.com', 'tiktokv.com'],
+  // The pin builder uploads the image off pinterest.com (media upload host
+  // not yet observed), so watch the likely storage hosts too.
+  'pinterest.com': ['pinimg.com', 'amazonaws.com'],
 }
 
 

@@ -34,6 +34,7 @@ const ARGS = {
   pinterest_my_boards: { limit: 3 },
   pinterest_inbox: {},
   pinterest_notifications: {},
+  pinterest_scheduled_pins: {},
   whatsapp_list_chats: { limit: 3 },
   whatsapp_api_chats: { limit: 3 },
   whatsapp_unread: { limit: 3 },

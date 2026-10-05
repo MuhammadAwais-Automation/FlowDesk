@@ -93,7 +93,7 @@ function findGatewayConfig() {
 // page (first background-view load alone can take 15s) or on generation
 // (ask.*, Flow video, TikTok upload) failed on the client while the app kept
 // working. The gateway itself has no shorter limit, so match the real work.
-const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$)/
+const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$)/
 function rpcTimeoutMs(method) {
   return LONG_RPC.test(method) ? 15 * 60_000 : 120_000
 }
@@ -2074,6 +2074,95 @@ server.tool(
   { account: PIN_ACCOUNT },
   { readOnlyHint: true, openWorldHint: false },
   async (args) => textResult(await callGatewayRpc('pinterest.notifications', args))
+)
+
+const PIN_WRITE_NOTE = 'A real action on the user’s Pinterest account: get the user’s explicit yes in chat for this exact action first.'
+const PIN_BOARD_ID = z.string().regex(/^\d{1,25}$/).describe('Board id from pinterest_my_boards.')
+
+server.tool(
+  'pinterest_scheduled_pins',
+  'Pins of the signed-in (business) account waiting to be published: id, title, board, publishAt. Read-only.',
+  { account: PIN_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: false },
+  async (args) => textResult(await callGatewayRpc('pinterest.scheduledPins', args))
+)
+
+server.tool(
+  'pinterest_create_board',
+  `Create a board on the signed-in account. Secret by default (only the account sees it); secret:false makes it public. ${PIN_WRITE_NOTE}`,
+  {
+    name: z.string().min(1).max(50),
+    description: z.string().max(500).optional(),
+    secret: z.boolean().optional().describe('Default true.'),
+    account: PIN_ACCOUNT,
+  },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.createBoard', args))
+)
+
+server.tool(
+  'pinterest_save_pin',
+  `Save (repin) an existing pin to one of the account's boards. Saves on a public board are visible to others. ${PIN_WRITE_NOTE}`,
+  { pinId: PIN_ID, boardId: PIN_BOARD_ID, account: PIN_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.savePin', args))
+)
+
+server.tool(
+  'pinterest_create_pin',
+  `Create a pin from a local image (png/jpg/webp, max 20 MB) on one of the account's boards: published now, or scheduled with publishAt (business accounts; cancel with pinterest_delete_scheduled_pin). Takes 10-40 s. Only post images the user has the rights to. ${PIN_WRITE_NOTE}`,
+  {
+    imagePath: z.string().min(3).describe('Absolute path of the image file.'),
+    boardId: PIN_BOARD_ID,
+    title: z.string().min(1).max(100),
+    description: z.string().max(500).optional(),
+    link: z.string().url().optional().describe('Where the pin leads (http/https).'),
+    altText: z.string().max(500).optional(),
+    publishAt: z.string().optional().describe('ISO date-time, at least 15 min ahead, to schedule instead of publishing now.'),
+    account: PIN_ACCOUNT,
+  },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.createPin', args))
+)
+
+server.tool(
+  'pinterest_edit_pin',
+  `Edit one of the account's own pins: title, description, link, altText or move it to another board. Fields left out stay as they are. ${PIN_WRITE_NOTE}`,
+  {
+    pinId: PIN_ID,
+    title: z.string().max(100).optional(),
+    description: z.string().max(500).optional(),
+    link: z.string().optional().describe('http/https URL, or empty to remove the link.'),
+    altText: z.string().max(500).optional(),
+    boardId: PIN_BOARD_ID.optional(),
+    account: PIN_ACCOUNT,
+  },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.editPin', args))
+)
+
+server.tool(
+  'pinterest_delete_pin',
+  `Delete one of the account's own pins. Cannot be undone; FlowDesk also asks the user to allow it in the app. ${PIN_WRITE_NOTE}`,
+  { pinId: PIN_ID, account: PIN_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.deletePin', args))
+)
+
+server.tool(
+  'pinterest_delete_board',
+  `Delete one of the account's boards with every pin on it. Cannot be undone; FlowDesk also asks the user to allow it in the app. ${PIN_WRITE_NOTE}`,
+  { boardId: PIN_BOARD_ID, account: PIN_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.deleteBoard', args))
+)
+
+server.tool(
+  'pinterest_delete_scheduled_pin',
+  `Cancel a scheduled pin before it publishes (id from pinterest_scheduled_pins). FlowDesk also asks the user to allow it in the app. ${PIN_WRITE_NOTE}`,
+  { scheduledPinId: z.string().regex(/^\d{1,25}$/).describe('Id from pinterest_scheduled_pins.'), account: PIN_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.deleteScheduledPin', args))
 )
 
 const SOCIAL_PLATFORM = z.enum(['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook', 'pinterest'])
