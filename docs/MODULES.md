@@ -137,6 +137,29 @@ ok, 0 failed. Signed in: TikTok #1 (@alphapaws6), LinkedIn #1, Reddit (1 account
    test writes only with approval on safe targets, then a verified skill.
 5. Pinterest last, capture-first.
 
+### Module 2 — status (2026-10-05)
+
+Done (steps 1–4), plus a hardening pass on Module 1 (bug fixes only, no new tools):
+- Registry `electron/socialAccounts.ts` (`social_accounts`, `social_add_account`, `social_open_login`); store
+  validated, atomic writes, max 10 slots, sandboxed sign-in window per partition.
+- `account` on every TikTok, LinkedIn, Reddit, WhatsApp, Facebook tool (agent, gateway, MCP, CLI). Unknown or
+  ambiguous account → error, never another account. Annotations (readOnly/destructive/openWorld) on all tools.
+- Skills: `whatsapp`, `tiktok`, `linkedin`, `reddit`, `facebook` (older overlapping skills point to them;
+  `reddit-engagement`, `facebook-engagement` folded in).
+- Gateway: timing-safe token, 1 MB body cap, eval blocked unless `allowEval`, `tiktok_delete_all_videos` always
+  asks; profile edits/photo/cover, single TikTok/WhatsApp deletes ask by default.
+- Live after restart (reads only): all five platforms ok on signed-in accounts; unknown-account and empty-send
+  refusals ok; MCP smoke 65 ok / 0 failed; typecheck, 1876 tests, build green.
+
+Open / accepted:
+- Writes (post, comment, send, vote, follow, upload) were not run live — they need the user's yes per action.
+  Over MCP most sends/posts are logged, not approval-gated; skills tell agents to ask in chat first.
+- Only TikTok has 2 signed-in accounts; others have one, so multi-account is unit-tested, not live-tested.
+- Duplicates kept (different endpoints/outputs, documented in skills): `*_feed`/`*_api_feed`,
+  `*_search`/`*_api_search`, `linkedin_send`/`linkedin_send_message`, `whatsapp_send`/`whatsapp_send_message`.
+- `facebook_follow` success response never seen live; Facebook has no Messenger/comment-read.
+- WhatsApp signed-out (QR) state reads as `signedIn: null`, not false.
+
 ## 5. Agle modules (sketch)
 
 - **1B** wahi pattern Gemini/Grok/Perplexity/Claude par: `*_chats`, `*_ask {account,chatId,newChat}` — pool/queue code common ho jayega.
