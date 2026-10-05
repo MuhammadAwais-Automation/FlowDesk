@@ -12,7 +12,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { extname, basename } from 'node:path'
 import { buildScript } from './linkedinBridge'
-import { call, getLinkedInView, type LinkedInResult } from './linkedin'
+import { call, getLinkedInView, linkedInAccountError, type LinkedInResult } from './linkedin'
 
 export interface LinkedInExperienceItem {
   title?: string
@@ -488,8 +488,28 @@ export async function liGetProfile(account?: string | number): Promise<LinkedInP
 /**
  * Update the profile intro (headline, name, location, summary).
  */
-export async function liUpdateProfile(data: LinkedInProfileUpdate, account?: string | number): Promise<LinkedInResult> {
-  if (!data || Object.keys(data).length === 0) {
+/**
+ * Only the fields the caller actually set. The gateway passes every key, with
+ * undefined for the ones not given, so a key count alone would let an empty
+ * update through to the edit pages. Blank name/headline/location values are
+ * dropped rather than written: wiping them is never what a caller meant.
+ */
+export function profileUpdateFields(data: LinkedInProfileUpdate | null | undefined): LinkedInProfileUpdate {
+  const out: LinkedInProfileUpdate = {}
+  if (!data) return out
+  for (const key of ['firstName', 'lastName', 'headline', 'location'] as const) {
+    const value = data[key]
+    if (typeof value === 'string' && value.trim()) out[key] = value.trim()
+  }
+  if (typeof data.summary === 'string') out.summary = data.summary
+  return out
+}
+
+export async function liUpdateProfile(input: LinkedInProfileUpdate, account?: string | number): Promise<LinkedInResult> {
+  const accountError = linkedInAccountError(account)
+  if (accountError) return { ok: false, error: accountError }
+  const data = profileUpdateFields(input)
+  if (Object.keys(data).length === 0) {
     return { ok: false, error: 'No profile fields specified to update' }
   }
 
@@ -540,6 +560,8 @@ export async function liUpdateProfile(data: LinkedInProfileUpdate, account?: str
  * Upload and apply a new profile avatar photo.
  */
 export async function liUploadProfilePhoto(imagePath: string, account?: string | number): Promise<LinkedInResult> {
+  const accountError = linkedInAccountError(account)
+  if (accountError) return { ok: false, error: accountError }
   if (!imagePath || !existsSync(imagePath)) {
     return { ok: false, error: `Image file not found: ${imagePath}` }
   }
@@ -576,6 +598,8 @@ export async function liUploadProfilePhoto(imagePath: string, account?: string |
  * Upload and apply a new background cover banner image.
  */
 export async function liUploadCoverImage(imagePath: string, account?: string | number): Promise<LinkedInResult> {
+  const accountError = linkedInAccountError(account)
+  if (accountError) return { ok: false, error: accountError }
   if (!imagePath || !existsSync(imagePath)) {
     return { ok: false, error: `Image file not found: ${imagePath}` }
   }

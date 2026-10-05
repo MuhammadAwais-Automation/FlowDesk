@@ -197,6 +197,7 @@ export async function liReplyToComment(
   commentSnippet: string,
   replyText: string,
   commenter?: string,
+  account?: string | number,
 ): Promise<LinkedInResult> {
   if (!/^[0-9]+$/.test(String(activityId))) {
     return { ok: false, error: `activityId must be the numeric id from linkedin_feed — got: ${activityId}` }
@@ -211,7 +212,7 @@ export async function liReplyToComment(
     return { ok: false, error: `reply is ${reply.length} characters; the LinkedIn limit is ${MAX_REPLY_LENGTH}` }
   }
 
-  const view = await getLinkedInView().catch(() => null)
+  const view = await getLinkedInView(account).catch(() => null)
   if (!view) return { ok: false, error: NOT_OPEN }
   const webContents = view.webContents
 

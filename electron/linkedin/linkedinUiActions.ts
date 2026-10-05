@@ -281,12 +281,12 @@ export function reactionScript(activityId: string, kind: 'create' | 'delete'): s
   })()`
 }
 
-async function react(activityId: string, kind: 'create' | 'delete'): Promise<LinkedInResult> {
+async function react(activityId: string, kind: 'create' | 'delete', account?: string | number): Promise<LinkedInResult> {
   if (!/^[0-9]+$/.test(String(activityId))) {
     return { ok: false, error: `activityId must be the numeric id from linkedin_feed — got: ${activityId}` }
   }
   try {
-    const view = await getLinkedInView()
+    const view = await getLinkedInView(account)
     const outcome = await view.webContents.executeJavaScript(reactionScript(activityId, kind)) as LinkedInResult
     return { ...outcome, activityId, permalink: permalinkFor(activityId), via: 'api' }
   } catch (e) {
@@ -295,13 +295,13 @@ async function react(activityId: string, kind: 'create' | 'delete'): Promise<Lin
 }
 
 /** Likes one post by activity id, over the API. Approval lives in the tool layer. */
-export function liLikePost(activityId: string): Promise<LinkedInResult> {
-  return react(activityId, 'create')
+export function liLikePost(activityId: string, account?: string | number): Promise<LinkedInResult> {
+  return react(activityId, 'create', account)
 }
 
 /** Removes the user's like from a post by activity id, over the API. */
-export function liUnlikePost(activityId: string): Promise<LinkedInResult> {
-  return react(activityId, 'delete')
+export function liUnlikePost(activityId: string, account?: string | number): Promise<LinkedInResult> {
+  return react(activityId, 'delete', account)
 }
 
 export const __testing = { permalinkFor, READY_SCRIPT, clickScript, unclickScript, FIND_BUTTON_FN }

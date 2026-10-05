@@ -212,8 +212,8 @@ async function readViaDom(webContents: Electron.WebContents): Promise<LinkedInRe
  * Reads the creator content-analytics summary (impressions and engagement for
  * the default window). HTTP read first; the visible DOM read only if that fails.
  */
-export async function liCreatorAnalytics(): Promise<LinkedInResult> {
-  const view = await getLinkedInView().catch(() => null)
+export async function liCreatorAnalytics(account?: string | number): Promise<LinkedInResult> {
+  const view = await getLinkedInView(account).catch(() => null)
   if (!view) return { ok: false, error: NOT_OPEN }
   const viaHttp = await readViaHttp(view.webContents)
   if (viaHttp) return viaHttp

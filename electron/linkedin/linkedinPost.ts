@@ -55,7 +55,7 @@ export interface CreatePostArgs {
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
-export async function liCreatePost(text: string, args: CreatePostArgs = {}): Promise<LinkedInResult> {
+export async function liCreatePost(text: string, args: CreatePostArgs = {}, account?: string | number): Promise<LinkedInResult> {
   const body = String(text ?? '').trim()
   if (!body && !args.imagePath) return { ok: false, error: 'refusing to create an empty post' }
   if (body.length > MAX_POST_LENGTH) {
@@ -89,7 +89,7 @@ export async function liCreatePost(text: string, args: CreatePostArgs = {}): Pro
     options.image = { base64: bytes.toString('base64'), altText: args.imageAltText ?? '' }
   }
 
-  const view = await getLinkedInView().catch(() => null)
+  const view = await getLinkedInView(account).catch(() => null)
   if (!view) return { ok: false, error: NOT_OPEN }
 
   try {
@@ -108,12 +108,12 @@ export async function liCreatePost(text: string, args: CreatePostArgs = {}): Pro
  * only place that can show the user WHICH post — and for a delete, showing the
  * post's own text is the only description they can actually check.
  */
-export async function liDeletePost(activityId: string): Promise<LinkedInResult> {
+export async function liDeletePost(activityId: string, account?: string | number): Promise<LinkedInResult> {
   if (!/^[0-9]+$/.test(String(activityId))) {
     return { ok: false, error: `activityId must be the numeric id from linkedin_my_posts — got: ${activityId}` }
   }
 
-  const view = await getLinkedInView().catch(() => null)
+  const view = await getLinkedInView(account).catch(() => null)
   if (!view) return { ok: false, error: NOT_OPEN }
 
   try {
@@ -132,7 +132,7 @@ export async function liDeletePost(activityId: string): Promise<LinkedInResult> 
  * approval happens in the tool layer above — showing the comment's own text is
  * the only description the user can actually check.
  */
-export async function liDeleteComment(activityId: string, commentId: string): Promise<LinkedInResult> {
+export async function liDeleteComment(activityId: string, commentId: string, account?: string | number): Promise<LinkedInResult> {
   if (!/^[0-9]+$/.test(String(activityId))) {
     return { ok: false, error: `activityId must be numeric — got: ${activityId}` }
   }
@@ -140,7 +140,7 @@ export async function liDeleteComment(activityId: string, commentId: string): Pr
     return { ok: false, error: `commentId must be numeric — got: ${commentId}` }
   }
 
-  const view = await getLinkedInView().catch(() => null)
+  const view = await getLinkedInView(account).catch(() => null)
   if (!view) return { ok: false, error: NOT_OPEN }
 
   try {

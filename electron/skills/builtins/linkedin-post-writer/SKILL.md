@@ -39,6 +39,8 @@ inputs:
     description: "Save as draft instead of publishing live"
 ---
 
+Every LinkedIn tool takes an optional `account` (id from `linkedin_accounts`); an unknown account is refused, never swapped. Tool choice, account routing and error meanings: the `linkedin` skill. Get the user's explicit approval for the exact content before any write.
+
 ## When to use
 - Drafting original thought-leadership posts, technical insights, or milestone updates.
 - Researching viral hook structures and post frameworks across recent niche updates.

@@ -28,6 +28,8 @@ vi.mock('../linkedin/linkedin', () => ({
   liFindPeople: (...args: unknown[]) => liFindPeople(...args),
   liSend: (...args: unknown[]) => liSend(...args),
   liMarkRead: (...args: unknown[]) => liMarkRead(...args),
+  linkedInAccountError: (account?: string) =>
+    account && account !== 'active' && !['1', '2'].includes(account) ? `unknown linkedin account "${account}"` : null,
 }))
 
 const { createLinkedInTools, LINKEDIN_TOOL_NAMES, LINKEDIN_TOOL_BASE_NAMES } = await import('./linkedinTools')
@@ -93,7 +95,7 @@ describe('the approval gate on send', () => {
     await send.handler({ conversationUrn: 'urn:li:msg_conversation:(a,b)', message: 'hello there' })
 
     expect(liSend).toHaveBeenCalledOnce()
-    expect(liSend).toHaveBeenCalledWith('urn:li:msg_conversation:(a,b)', 'hello there')
+    expect(liSend).toHaveBeenCalledWith('urn:li:msg_conversation:(a,b)', 'hello there', undefined)
   })
 
   it('shows the recipient and the full text to the user, not a summary', async () => {
@@ -182,5 +184,66 @@ describe('oversized results are truncated rather than eating the turn', () => {
     const out = await getTool(toolsWith(approveAll), 'linkedin_list_chats').handler({})
     expect(out.content[0].text).toContain('[truncated')
     expect(out.content[0].text.length).toBeLessThan(13_000)
+  })
+})
+
+describe('an explicit unknown account is refused before anything happens', () => {
+  const writes: [string, Record<string, unknown>][] = [
+    ['linkedin_send_message', { conversationUrn: 'urn:li:msg_conversation:(a,b)', message: 'hi' }],
+    ['linkedin_mark_read', {}],
+    ['linkedin_like_post', { activityId: '1' }],
+    ['linkedin_unlike_post', { activityId: '1' }],
+    ['linkedin_comment_on_post', { activityId: '1', text: 'x' }],
+    ['linkedin_reply_to_comment', { activityId: '1', commentSnippet: 'abcdefgh', replyText: 'x' }],
+    ['linkedin_create_post', { text: 'x' }],
+    ['linkedin_delete_post', { activityId: '1' }],
+    ['linkedin_delete_comment', { activityId: '1', commentId: '2' }],
+    ['linkedin_send_connection_request', { profileUrl: 'https://www.linkedin.com/in/x/', expectedName: 'X' }],
+    ['linkedin_switch_account', {}],
+  ]
+
+  it.each(writes)('%s refuses without asking for approval or sending', async (name, args) => {
+    const requestApproval = vi.fn(async (_info: ApprovalRequestInfo) => true)
+    const out = await getTool(toolsWith(requestApproval), name).handler({ ...args, account: 'nope' })
+    expect(out.isError).toBe(true)
+    expect(JSON.parse(out.content[0].text)).toEqual({ ok: false, error: 'unknown linkedin account "nope"' })
+    expect(requestApproval).not.toHaveBeenCalled()
+    expect(liSend).not.toHaveBeenCalled()
+    expect(liMarkRead).not.toHaveBeenCalled()
+  })
+
+  it('every tool except linkedin_accounts takes an optional account', () => {
+    const tools = toolsWith(approveAll) as unknown as { name: string; inputSchema: Record<string, unknown> }[]
+    const missing = tools.filter(t => t.name !== 'linkedin_accounts' && !('account' in t.inputSchema)).map(t => t.name)
+    expect(missing).toEqual([])
+  })
+
+  it('read tools refuse an unknown account and route a known one', async () => {
+    const tools = toolsWith(approveAll)
+    const out = await getTool(tools, 'linkedin_list_chats').handler({ account: 'nope' })
+    expect(out.isError).toBe(true)
+    expect(liListChats).not.toHaveBeenCalled()
+
+    await getTool(tools, 'linkedin_list_chats').handler({ account: '2' })
+    expect(liListChats).toHaveBeenCalledWith(expect.objectContaining({ account: '2' }))
+    await getTool(tools, 'linkedin_find_people').handler({ query: 'a', account: '2' })
+    expect(liFindPeople).toHaveBeenCalledWith('a', undefined, '2')
+  })
+
+  it('no account and "active" keep the default behaviour', async () => {
+    const tools = toolsWith(approveAll)
+    await getTool(tools, 'linkedin_send_message').handler({ conversationUrn: 'urn:li:msg_conversation:(a,b)', message: 'hi', account: 'active' })
+    expect(liSend).toHaveBeenCalledWith('urn:li:msg_conversation:(a,b)', 'hi', 'active')
+  })
+})
+
+describe('MCP annotations travel with every tool', () => {
+  it('every tool says whether it is read-only, and deletes are destructive', () => {
+    const tools = toolsWith(approveAll) as unknown as { name: string; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }[]
+    expect(tools.filter(t => typeof t.annotations?.readOnlyHint !== 'boolean').map(t => t.name)).toEqual([])
+    const destructive = tools.filter(t => t.annotations?.destructiveHint).map(t => t.name).sort()
+    expect(destructive).toEqual(['linkedin_delete_comment', 'linkedin_delete_post', 'linkedin_mark_read'])
+    const writes = ['linkedin_send_message', 'linkedin_create_post', 'linkedin_comment_on_post', 'linkedin_like_post', 'linkedin_send_connection_request']
+    for (const name of writes) expect(tools.find(t => t.name === name)?.annotations?.readOnlyHint).toBe(false)
   })
 })

@@ -36,6 +36,8 @@ inputs:
     description: "Comment or reply text to post"
 ---
 
+Every LinkedIn tool takes an optional `account` (id from `linkedin_accounts`); an unknown account is refused, never swapped. Tool choice, account routing and error meanings: the `linkedin` skill. Get the user's explicit approval for the exact content before any write.
+
 ## When to use
 - Monitoring the LinkedIn feed for relevant industry discussions to join.
 - Finding niche discussions via keyword search to interact with peers and prospective clients.

@@ -8,11 +8,15 @@ import {
   liUpdateProfile,
   liUploadProfilePhoto,
   liUploadCoverImage,
+  profileUpdateFields,
 } from './linkedinProfile'
+import { call, getLinkedInView } from './linkedin'
 
 vi.mock('./linkedin', () => ({
   call: vi.fn(),
   getLinkedInView: vi.fn(),
+  linkedInAccountError: (account?: string) =>
+    account && !['1', '2'].includes(account) ? `unknown linkedin account "${account}"` : null,
 }))
 
 describe('LinkedIn Profile Suite', () => {
@@ -109,6 +113,29 @@ describe('LinkedIn Profile Suite', () => {
       const res = await liUploadCoverImage('/non/existent/path/cover.jpg')
       expect(res.ok).toBe(false)
       expect(res.error).toMatch(/image file not found/i)
+    })
+  })
+
+  describe('account routing and write guards', () => {
+    it('an update whose fields are all undefined is refused without touching the page', async () => {
+      const res = await liUpdateProfile({ firstName: undefined, lastName: undefined, headline: undefined, location: undefined, summary: undefined })
+      expect(res).toEqual({ ok: false, error: 'No profile fields specified to update' })
+      expect(call).not.toHaveBeenCalled()
+    })
+
+    it('blank intro fields are dropped, set ones are trimmed and kept', () => {
+      expect(profileUpdateFields({ headline: '  Builder ', firstName: '   ', summary: '' })).toEqual({ headline: 'Builder', summary: '' })
+    })
+
+    it.each([
+      ['update', () => liUpdateProfile({ headline: 'x' }, 'ghost')],
+      ['photo', () => liUploadProfilePhoto('/non/existent.png', 'ghost')],
+      ['cover', () => liUploadCoverImage('/non/existent.png', 'ghost')],
+    ])('%s refuses an unknown account before reading files or opening a page', async (_name, run) => {
+      const res = await run()
+      expect(res).toEqual({ ok: false, error: 'unknown linkedin account "ghost"' })
+      expect(call).not.toHaveBeenCalled()
+      expect(getLinkedInView).not.toHaveBeenCalled()
     })
   })
 })

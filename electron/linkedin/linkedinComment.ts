@@ -263,7 +263,7 @@ async function listCommentIds(webContents: Electron.WebContents, activityId: str
  *
  * Approval happens in the tool layer above this.
  */
-export async function liCommentOnPost(activityId: string, text: string): Promise<LinkedInResult> {
+export async function liCommentOnPost(activityId: string, text: string, account?: string | number): Promise<LinkedInResult> {
   if (!/^[0-9]+$/.test(String(activityId))) {
     return { ok: false, error: `activityId must be the numeric id from linkedin_feed — got: ${activityId}` }
   }
@@ -273,7 +273,7 @@ export async function liCommentOnPost(activityId: string, text: string): Promise
     return { ok: false, error: `comment is ${comment.length} characters; the LinkedIn limit is ${MAX_COMMENT_LENGTH}` }
   }
 
-  const view = await getLinkedInView().catch(() => null)
+  const view = await getLinkedInView(account).catch(() => null)
   if (!view) return { ok: false, error: NOT_OPEN }
   const wc = view.webContents
 

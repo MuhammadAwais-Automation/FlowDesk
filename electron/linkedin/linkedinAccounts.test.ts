@@ -7,7 +7,13 @@ import {
   liAccounts,
   liSwitchAccount,
   setOnLinkedInAccountSwitchedListener,
+  linkedInAccountError,
+  findLinkedInAccount,
+  liStatus,
+  liSend,
+  getLinkedInView,
 } from './linkedin'
+import { ensureBackgroundView, showView } from '../sessions'
 
 vi.mock('electron', () => ({
   app: {
@@ -132,5 +138,72 @@ describe('LinkedIn Multi-Account Partition & Routing', () => {
 
     const acc2 = res.accounts.find(a => a.id === '2')
     expect(acc2?.authenticated).toBe(false)
+  })
+})
+
+describe('unknown LinkedIn accounts are refused, never invented', () => {
+  beforeEach(() => {
+    saveLinkedInAccounts([
+      { id: '1', label: 'Account 1 (Primary)', partition: 'social-linkedin' },
+      { id: '2', label: 'Account 2', partition: 'social-linkedin-2' },
+    ])
+    setActiveLinkedInAccount('1')
+    vi.mocked(ensureBackgroundView).mockClear()
+    vi.mocked(showView).mockClear()
+  })
+
+  it('finds saved accounts by id, partition and label', () => {
+    expect(findLinkedInAccount('2')?.partition).toBe('social-linkedin-2')
+    expect(findLinkedInAccount('social-linkedin')?.id).toBe('1')
+    expect(findLinkedInAccount('primary')?.id).toBe('1')
+    expect(findLinkedInAccount('7')).toBeNull()
+  })
+
+  it('accepts no account, empty and active as the default', () => {
+    expect(linkedInAccountError()).toBeNull()
+    expect(linkedInAccountError('')).toBeNull()
+    expect(linkedInAccountError('active')).toBeNull()
+    expect(linkedInAccountError('2')).toBeNull()
+  })
+
+  it('names an unknown account and the saved ones', () => {
+    expect(linkedInAccountError('social-linkedin-9')).toMatch(/^unknown linkedin account "social-linkedin-9"/)
+    expect(linkedInAccountError(7)).toContain('saved accounts: 1, 2')
+  })
+
+  it('a read on an unknown account fails before any view is opened', async () => {
+    const res = await liStatus('ghost')
+    expect(res).toEqual({ ok: false, error: expect.stringMatching(/^unknown linkedin account "ghost"/) })
+    expect(ensureBackgroundView).not.toHaveBeenCalled()
+  })
+
+  it('getLinkedInView rejects an unknown account instead of creating a partition', async () => {
+    await expect(getLinkedInView('social-linkedin-3')).rejects.toThrow(/unknown linkedin account/)
+    expect(ensureBackgroundView).not.toHaveBeenCalled()
+  })
+
+  it('switching to an unknown account changes nothing', async () => {
+    const res = await liSwitchAccount('ghost')
+    expect(res.ok).toBe(false)
+    expect(showView).not.toHaveBeenCalled()
+    expect(getActiveLinkedInAccount()).toBe('1')
+  })
+
+  it('Active in any case means the active account, not a new partition', () => {
+    setActiveLinkedInAccount('2')
+    expect(resolveLinkedInPartition('Active').partition).toBe('social-linkedin-2')
+    expect(linkedInAccountError('ACTIVE')).toBeNull()
+  })
+
+  it('refuses a partial label that names more than one account', () => {
+    expect(findLinkedInAccount('account')).toBeNull()
+    expect(linkedInAccountError('account')).toMatch(/^unknown linkedin account/)
+    expect(findLinkedInAccount('primary')?.id).toBe('1')
+  })
+
+  it('send refuses empty text and a malformed urn before any view is opened', async () => {
+    expect(await liSend('urn:li:msg_conversation:(a,b)', '   ')).toEqual({ ok: false, error: 'refusing to send empty text' })
+    expect((await liSend('not-a-urn', 'hi')).ok).toBe(false)
+    expect(ensureBackgroundView).not.toHaveBeenCalled()
   })
 })

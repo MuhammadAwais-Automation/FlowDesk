@@ -250,6 +250,7 @@ export function sendInviteScript(handle: string, expectedName: string): string {
 export async function liSendConnectionRequest(
   profileUrl: string,
   expectedName: string,
+  account?: string | number,
 ): Promise<LinkedInResult> {
   const handle = handleFromProfileUrl(profileUrl)
   if (!handle) {
@@ -270,7 +271,7 @@ export async function liSendConnectionRequest(
     }
   }
 
-  const view = await getLinkedInView().catch(() => null)
+  const view = await getLinkedInView(account).catch(() => null)
   if (!view) return { ok: false, error: NOT_OPEN }
 
   try {

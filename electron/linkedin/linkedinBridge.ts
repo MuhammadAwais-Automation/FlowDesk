@@ -960,7 +960,8 @@ export function linkedinApiFeedScript(limit = 20): string {
     var seen = {}
 
     function addPost(p) {
-      if (!p || (!p.activityId && !p.postUrn)) return
+      // Promotion slots (urn:li:inAppPromotion) carry no activity id and no text: nothing to read or score.
+      if (!p || (!p.activityId && !p.postUrn) || (!p.activityId && !p.text)) return
       var id = p.activityId || p.postUrn
       if (seen[id]) return
       seen[id] = true
@@ -1073,7 +1074,8 @@ export function linkedinOutlierScript(options: OutlierOptions = {}): string {
     var seen = {}
 
     function addPost(p) {
-      if (!p || (!p.activityId && !p.postUrn)) return
+      // Promotion slots (urn:li:inAppPromotion) carry no activity id and no text: nothing to read or score.
+      if (!p || (!p.activityId && !p.postUrn) || (!p.activityId && !p.text)) return
       var id = p.activityId || p.postUrn
       if (seen[id]) return
       seen[id] = true

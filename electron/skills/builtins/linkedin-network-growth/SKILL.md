@@ -31,6 +31,8 @@ inputs:
     description: "Reason for connecting shown in user approval dialog"
 ---
 
+Every LinkedIn tool takes an optional `account` (id from `linkedin_accounts`); an unknown account is refused, never swapped. Tool choice, account routing and error meanings: the `linkedin` skill. Get the user's explicit approval for the exact content before any write.
+
 ## When to use
 - Searching for relevant founders, engineers, creators, or leaders in your domain.
 - Auditing your own profile positioning to optimize connection acceptance.

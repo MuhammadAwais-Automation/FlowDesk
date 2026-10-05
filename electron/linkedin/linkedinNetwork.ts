@@ -142,9 +142,10 @@ export function networkStatusScript(includeReceived: boolean, limit: number): st
  * received. Read-only.
  */
 export async function liNetworkStatus(
-  options: { includeReceived?: boolean; limit?: number } = {},
+  options: { includeReceived?: boolean; limit?: number; account?: string | number } = {},
 ): Promise<LinkedInResult> {
-  const view = await getLinkedInView().catch(() => null)
+  const { account } = options
+  const view = await getLinkedInView(account).catch(() => null)
   if (!view) return { ok: false, error: NOT_OPEN }
 
   try {

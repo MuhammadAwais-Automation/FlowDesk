@@ -108,38 +108,59 @@ export function getActiveLinkedInAccount(): string {
   return activeLinkedInAccountId
 }
 
-export function resolveLinkedInPartition(account?: string | number): { tabId: string; partition: string; accountId: string } {
-  const target = account !== undefined && account !== null && String(account).trim() !== '' && account !== 'active'
-    ? String(account).trim()
-    : activeLinkedInAccountId
+/** No account, '' or 'active' all mean "the active account" and are never refused. */
+function isDefaultAccountRef(account?: string | number | null): boolean {
+  if (account === undefined || account === null) return true
+  const ref = String(account).trim().toLowerCase()
+  return ref === '' || ref === 'active'
+}
 
+/**
+ * The saved account an explicit ref names — by id ("1"), partition
+ * ("social-linkedin-2"), label, name or publicId — or null. Never invents one.
+ */
+export function findLinkedInAccount(account: string | number): LinkedInAccountConfig | null {
+  const lower = String(account).trim().toLowerCase()
+  if (!lower) return null
   const accounts = getSavedLinkedInAccounts()
-  const lower = target.toLowerCase()
-
-  // 1. Exact ID match (e.g. "1", "2")
-  const byId = accounts.find(a => a.id.toLowerCase() === lower)
-  if (byId) {
-    return { tabId: byId.partition, partition: byId.partition, accountId: byId.id }
-  }
-
-  // 2. Exact partition match (e.g. "social-linkedin", "social-linkedin-2")
-  const byPart = accounts.find(a => a.partition.toLowerCase() === lower)
-  if (byPart) {
-    return { tabId: byPart.partition, partition: byPart.partition, accountId: byPart.id }
-  }
-
-  // 3. Label/name/publicId match (e.g. "Personal", "Sales", "Awais")
-  const byLabel = accounts.find(a =>
-    a.label.toLowerCase() === lower ||
+  const exact = accounts.find(a => a.id.toLowerCase() === lower)
+    ?? accounts.find(a => a.partition.toLowerCase() === lower)
+    ?? accounts.find(a =>
+      a.label.toLowerCase() === lower ||
+      Boolean(a.name && a.name.toLowerCase() === lower) ||
+      Boolean(a.publicId && a.publicId.toLowerCase() === lower))
+  if (exact) return exact
+  // A partial label/name only counts when it names exactly one account:
+  // "account" matching both "Account 1" and "Account 2" must not pick one.
+  const partial = accounts.filter(a =>
     a.label.toLowerCase().includes(lower) ||
-    (a.name && a.name.toLowerCase().includes(lower)) ||
-    (a.publicId && a.publicId.toLowerCase() === lower)
-  )
-  if (byLabel) {
-    return { tabId: byLabel.partition, partition: byLabel.partition, accountId: byLabel.id }
+    Boolean(a.name && a.name.toLowerCase().includes(lower)))
+  return partial.length === 1 ? partial[0] : null
+}
+
+/**
+ * Refuses an explicit account that is not in the saved list, before any page
+ * is opened. Acting on the wrong account (or a freshly invented, signed-out
+ * partition) is worse than failing. Default refs pass through unchanged.
+ */
+export function linkedInAccountError(account?: string | number | null): string | null {
+  if (isDefaultAccountRef(account)) return null
+  if (findLinkedInAccount(account as string | number)) return null
+  const known = getSavedLinkedInAccounts().map(a => a.id).join(', ')
+  return `unknown linkedin account "${String(account).trim()}" — saved accounts: ${known}. Call linkedin_accounts to list them.`
+}
+
+export function resolveLinkedInPartition(account?: string | number): { tabId: string; partition: string; accountId: string } {
+  const target = isDefaultAccountRef(account) ? activeLinkedInAccountId : String(account).trim()
+
+  const found = findLinkedInAccount(target)
+  if (found) {
+    return { tabId: found.partition, partition: found.partition, accountId: found.id }
   }
 
-  // 4. Default / standard fallback
+  // Default / standard fallback. Only reached for refs that are not saved;
+  // callers acting on an explicit account go through linkedInAccountError first,
+  // so this never opens an invented partition for them.
   if (target === '1' || target === 'default' || target === 'social-linkedin') {
     return { tabId: 'social-linkedin', partition: 'social-linkedin', accountId: '1' }
   }
@@ -151,6 +172,8 @@ export function resolveLinkedInPartition(account?: string | number): { tabId: st
 }
 
 export async function getLinkedInView(account?: string | number): Promise<{ webContents: WebContents }> {
+  const accountError = linkedInAccountError(account)
+  if (accountError) throw new Error(accountError)
   const resolved = resolveLinkedInPartition(account)
   const { tabId, partition } = resolved
 
@@ -167,6 +190,8 @@ export async function getLinkedInView(account?: string | number): Promise<{ webC
 }
 
 export async function call(script: string, timeoutMs = 15000, account?: string | number): Promise<LinkedInResult> {
+  const accountError = linkedInAccountError(account)
+  if (accountError) return { ok: false, error: accountError }
   const resolved = resolveLinkedInPartition(account)
   let view: { webContents: WebContents }
   try {
@@ -186,7 +211,12 @@ export async function call(script: string, timeoutMs = 15000, account?: string |
     )
     const result = await Promise.race([execPromise, timeoutPromise])
     if (result && typeof result === 'object') {
-      return { ...(result as LinkedInResult), account: resolved.tabId, accountId: resolved.accountId }
+      const out = { ...(result as LinkedInResult), account: resolved.tabId, accountId: resolved.accountId }
+      // A 401 from /voyager/api/me is a signed-out session, not a broken tool.
+      if (!out.ok && typeof out.error === 'string' && /\/me returned 401/.test(out.error)) {
+        out.error += ` — LinkedIn account ${resolved.accountId} is not signed in; sign it in with social_open_login { platform: "linkedin", account: "${resolved.accountId}" }`
+      }
+      return out
     }
     return { ok: false, error: `bridge returned a non-object: ${String(result)}`, account: resolved.tabId, accountId: resolved.accountId }
   } catch (e) {
@@ -226,7 +256,12 @@ export function liFindPeople(query: string, pages?: number, account?: string | n
  * and can show the recipient and text before anything is sent. Callers that
  * skip that step are the bug.
  */
-export function liSend(conversationUrn: string, text: string, account?: string | number): Promise<LinkedInResult> {
+export async function liSend(conversationUrn: string, text: string, account?: string | number): Promise<LinkedInResult> {
+  // Refused here, before a page is touched; the bridge repeats both checks.
+  if (!conversationUrn.startsWith('urn:li:msg_conversation:')) {
+    return { ok: false, error: `conversationUrn must look like "urn:li:msg_conversation:(...)" — got: ${conversationUrn}` }
+  }
+  if (!text.trim()) return { ok: false, error: 'refusing to send empty text' }
   return call(sendScript(conversationUrn, text), 15000, account)
 }
 
@@ -350,6 +385,8 @@ export function setOnLinkedInAccountSwitchedListener(fn: (accountId: string) => 
 }
 
 export async function liSwitchAccount(account: string | number): Promise<LinkedInResult> {
+  const accountError = linkedInAccountError(account)
+  if (accountError) return { ok: false, error: accountError }
   const resolved = resolveLinkedInPartition(account)
   setActiveLinkedInAccount(resolved.accountId)
   showView(resolved.tabId, resolved.partition, 'https://www.linkedin.com/feed/')

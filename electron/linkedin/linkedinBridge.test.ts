@@ -300,6 +300,19 @@ Consistency beats cleverness every single day.`
   })
 
   describe('script builders parameter handling', () => {
+    it.each([
+      ['linkedinApiFeedScript', () => linkedinApiFeedScript(20)],
+      ['linkedinOutlierScript', () => linkedinOutlierScript()],
+    ])('%s drops promotion slots that have no activity id and no text', (_name, build) => {
+      const src = build()
+      const block = src.slice(src.indexOf('var posts = []'), src.indexOf('posts.push(p)') + 'posts.push(p)\n    }'.length)
+      const run = new Function(`${block}\n;return { posts, addPost }`)() as { posts: unknown[]; addPost: (p: unknown) => void }
+      run.addPost({ activityId: null, postUrn: 'urn:li:inAppPromotion:1', text: null })
+      run.addPost({ activityId: '7', postUrn: 'urn:li:activity:7', text: null })
+      run.addPost({ activityId: null, postUrn: 'urn:li:ugcPost:8', text: 'hello' })
+      expect(run.posts).toHaveLength(2)
+    })
+
     it('clamps limit in linkedinApiFeedScript', () => {
       expect(linkedinApiFeedScript(500)).toContain('var limit = 100')
       expect(linkedinApiFeedScript(-5)).toContain('var limit = 1')
