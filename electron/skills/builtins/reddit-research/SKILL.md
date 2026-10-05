@@ -2,7 +2,7 @@
 name: reddit-research
 title: "Reddit Research"
 description: "Discovers trending discussions, analyzes comment threads, and extracts viral hooks and pain points across subreddits. Use when conducting community intelligence and content research."
-version: 2.0.0
+version: 2.1.0
 domain: reddit
 tools:
   - reddit_status
@@ -26,6 +26,8 @@ inputs:
     description: "Research mode: outlier, feed, search, or comments"
 ---
 
+Every tool here takes optional `account` (id, label or partition from `social_accounts` {platform:"reddit"}); omitted = account 1, an unknown account fails with `unknown reddit account` and never falls back. Full tool map, errors and write rules: the `reddit` skill.
+
 ## When to use
 - Identifying viral outlier posts and breakout discussion topics within target subreddits.
 - Uncovering customer pain points, complaints, and high-debate topics (debate ratio >= 1.2 or frustration keywords).
@@ -33,15 +35,15 @@ inputs:
 - Reading deeply into comment trees to understand community sentiment, counter-arguments, and real experiences.
 
 ## When not to use
-- Upvoting, downvoting, or submitting comments/posts (use `reddit-engagement`).
-- Subscribing or marking inbox notifications read (use `reddit-engagement`).
+- Upvoting, downvoting, or submitting comments/posts (see the `reddit` skill; every write needs the user's approval).
+- Subscribing or marking inbox notifications read (see the `reddit` skill).
 - Scraping millions of posts for bulk data dumps (use focused sampling instead).
 
 ## Tools
 
 ### reddit_status
 - **Purpose**: Checks whether Reddit is authenticated and active, returning username, karma totals, and inbox unread count.
-- **Parameters**: None `{}`.
+- **Parameters**: `account` (optional).
 - **Success shape**:
   ```json
   {
@@ -177,11 +179,11 @@ inputs:
 - **In-Session Token Security**: Uses the existing authenticated Reddit session partition; never handles or logs raw session cookies or passwords.
 
 ## Verified facts
-- `reddit_api_feed` queries `/r/{subreddit}/{sort}.json?limit={limit}` inside the logged-in session, returning structured posts (<300ms) with scores and permalinks (`electron/redditBridge.ts:477-518`).
-- `reddit_api_search` queries `/r/{subreddit}/search.json?q={query}&restrict_sr=1` or `/search.json?q={query}` (`electron/redditBridge.ts:520-564`).
-- `reddit_api_comments` queries `/comments/{postId}.json?limit={limit}&depth=4`, parses post details, and flattens nested comment trees sorted by score (`electron/redditBridge.ts:565-624`).
-- `reddit_outlier` samples 50 posts, computes median score and comments, calculates velocity (`scorePerHour`), flags posts with `score >= minMultiplier * median`, finds debate posts with `numComments / score >= 1.2` or frustration keywords, and categorizes title hooks (`electron/redditBridge.ts:626-760`).
-- Registered MCP tools in `bin/flowdesk-mcp.mjs`: `reddit_status` (line 398), `reddit_api_feed` (line 515), `reddit_api_search` (line 526), `reddit_api_comments` (line 539), `reddit_outlier` (line 549).
+- `reddit_api_feed` queries `/r/{subreddit}/{sort}.json?limit={limit}` inside the logged-in session, returning structured posts (~0.5-1 s live) with scores and permalinks.
+- `reddit_api_search` queries `/r/{subreddit}/search.json?q={query}&restrict_sr=1` or `/search.json?q={query}`.
+- `reddit_api_comments` queries `/comments/{postId}.json?limit={limit}&depth=4`, parses post details, and flattens nested comment trees sorted by score.
+- `reddit_outlier` samples 50 posts, computes median score and comments, calculates velocity (`scorePerHour`), flags posts with `score >= minMultiplier * median`, finds debate posts with `numComments / score >= 1.2` or frustration keywords, and categorizes title hooks.
+- Registered MCP tools in `bin/flowdesk-mcp.mjs`: `reddit_status`, `reddit_api_feed`, `reddit_api_search`, `reddit_api_comments`, `reddit_outlier` (all read-only, all take `account`).
 
 ## Not verified
 - None. All 5 tools are fully implemented, tested, and actively registered in MCP.

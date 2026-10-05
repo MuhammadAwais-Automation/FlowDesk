@@ -69,8 +69,10 @@ const PRELUDE = `
         var msgs = errs.map(function (er) { return (er && (er.message || er.code)) || JSON.stringify(er) }).join('; ')
         return { ok: false, status: res.status, data: json.data, errors: errs, error: 'GraphQL errors: ' + String(msgs).slice(0, 500) }
       }
+      if (!res.ok) return { ok: false, status: res.status, data: json.data, error: 'GraphQL request failed: HTTP ' + res.status }
       return { ok: res.ok, status: res.status, data: json.data, errors: json.errors }
     } catch (e) {
+      if (!res.ok) return { ok: false, status: res.status, raw: text.slice(0, 500), error: 'GraphQL request failed: HTTP ' + res.status }
       return { ok: res.ok, status: res.status, raw: text.slice(0, 500) }
     }
   }
@@ -117,11 +119,15 @@ export interface RedditFeedOptions {
 }
 
 export function redditFeedScript(options: RedditFeedOptions = {}): string {
-  const { subreddit, sort = 'hot', limit = 25, after, timeFilter } = options
+  const { sort = 'hot', limit = 25, after } = options
+  const timeFilter = cleanTimeFilter(options.timeFilter)
+  // "r/technology" is how agents and the tool descriptions name a subreddit;
+  // passed through it became /r/r%2Ftechnology and Reddit answered 404.
+  const subreddit = cleanSubreddit(options.subreddit)
   const subPath = subreddit ? `/r/${encodeURIComponent(subreddit)}` : ''
   const queryParts = [`limit=${Math.min(Math.max(limit, 1), 100)}`]
   if (after) queryParts.push(`after=${encodeURIComponent(after)}`)
-  if (timeFilter) queryParts.push(`t=${encodeURIComponent(timeFilter)}`)
+  if (timeFilter) queryParts.push(`t=${timeFilter}`)
   const url = `${subPath}/${sort}.json?${queryParts.join('&')}`
 
   return `(async function () {
@@ -166,8 +172,12 @@ export function redditFeedScript(options: RedditFeedOptions = {}): string {
 }
 
 export function redditPostCommentsScript(subreddit: string, postId: string, limit = 50): string {
-  const cleanId = postId.replace(/^t3_/, '')
-  const url = `/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(cleanId)}.json?limit=${limit}&depth=3`
+  const cleanId = postId.trim().replace(/^t3_/, '')
+  const sub = cleanSubreddit(subreddit)
+  const clamped = Math.min(Math.max(Math.floor(Number(limit) || 50), 1), 500)
+  // /comments/<id>.json answers the same thread without the subreddit, so a
+  // missing or "r/"-prefixed subreddit no longer turns into a 404.
+  const url = `${sub ? `/r/${encodeURIComponent(sub)}` : ''}/comments/${encodeURIComponent(cleanId)}.json?limit=${clamped}&depth=3`
 
   return `(async function () {
     ${PRELUDE}
@@ -310,7 +320,7 @@ export function redditCreateCommentScript(postId: string, parentId: string, text
 }
 
 export function redditCreatePostScript(subredditName: string, title: string, textContent?: string): string {
-  const cleanSubName = subredditName.replace(/^r\//, '')
+  const cleanSubName = cleanSubreddit(subredditName)
   const contentAst = textContent ? {
     document: [
       {
@@ -354,6 +364,11 @@ export function redditSubscribeScript(subredditId: string, subscribeState: 'SUBS
     var result = await postGql('UpdateSubredditSubscriptions', vars)
     return safe(result)
   })()`
+}
+
+/** "r/Name", " name " → "Name"; empty → ''. */
+export function cleanSubreddit(sub: unknown): string {
+  return typeof sub === 'string' ? sub.trim().replace(/^\/?r\//i, '').replace(/\/+$/, '') : ''
 }
 
 export type RedditTimeFilter = 'hour' | 'day' | 'week' | 'month' | 'year' | 'all'
@@ -476,7 +491,7 @@ export interface RedditOutlierResult {
 
 export function redditApiFeedScript(options: RedditApiFeedOptions = {}): string {
   const { subreddit, sort = 'hot', limit = 25 } = options
-  const cleanSub = subreddit ? subreddit.replace(/^r\//, '') : ''
+  const cleanSub = cleanSubreddit(subreddit)
   const clampedLimit = Math.min(Math.max(limit, 1), 100)
   const url = cleanSub
     ? `/r/${encodeURIComponent(cleanSub)}/${sort}.json?limit=${clampedLimit}`
@@ -520,7 +535,7 @@ export function redditApiFeedScript(options: RedditApiFeedOptions = {}): string 
 export function redditApiSearchScript(query: string, options: RedditApiSearchOptions = {}): string {
   const { subreddit, limit = 25, sort } = options
   const time = cleanTimeFilter(options.t)
-  const cleanSub = subreddit ? subreddit.replace(/^r\//, '') : ''
+  const cleanSub = cleanSubreddit(subreddit)
   const clampedLimit = Math.min(Math.max(limit, 1), 100)
   const extra = `${sort ? `&sort=${encodeURIComponent(sort)}` : ''}${time ? `&t=${time}` : ''}`
   const url = cleanSub
@@ -624,7 +639,7 @@ export function redditApiPostCommentsScript(postId: string, limit = 50): string 
 }
 
 export function redditOutlierScript(subreddit: string, minMultiplier = 3.0, options: RedditOutlierOptions = {}): string {
-  const cleanSub = subreddit.replace(/^r\//, '')
+  const cleanSub = cleanSubreddit(subreddit)
   const mult = Number.isFinite(minMultiplier) && minMultiplier > 0 ? minMultiplier : 3.0
   const sort = options.sort === 'top' || options.sort === 'rising' ? options.sort : 'hot'
   const time = cleanTimeFilter(options.t)

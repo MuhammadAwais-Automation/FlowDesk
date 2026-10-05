@@ -15,6 +15,7 @@ import {
   redditApiSearchScript,
   redditApiPostCommentsScript,
   redditOutlierScript,
+  cleanSubreddit,
 } from './redditBridge'
 
 const allBuilders: Array<[string, () => string]> = [
@@ -478,5 +479,43 @@ describe('reddit write verification and search/outlier filters', () => {
     expect(res.sort).toBe('hot')
     expect(res.outliers[0].id).toBe('t3_a')
     expect(res.outliers[0].scorePerHour).toBeCloseTo(10, 0)
+  })
+})
+
+describe('subreddit names and URLs (live 404s on 2026-10-04)', () => {
+  const urlOf = (script: string) => (script.match(/fetch\("([^"]+)"/) || [])[1]
+
+  it('strips an "r/" prefix so r/technology does not become /r/r%2Ftechnology', () => {
+    expect(cleanSubreddit('r/technology')).toBe('technology')
+    expect(cleanSubreddit(' /r/SaaS/ ')).toBe('SaaS')
+    expect(cleanSubreddit('R/AI_Agents')).toBe('AI_Agents')
+    expect(cleanSubreddit(undefined)).toBe('')
+    expect(urlOf(redditFeedScript({ subreddit: 'r/technology', limit: 3 }))).toBe('/r/technology/hot.json?limit=3')
+  })
+
+  it('drops an unknown time filter instead of sending it', () => {
+    expect(urlOf(redditFeedScript({ subreddit: 'x', sort: 'top', timeFilter: 'bogus' as never }))).toBe('/r/x/top.json?limit=25')
+    expect(urlOf(redditFeedScript({ subreddit: 'x', sort: 'top', timeFilter: 'day' }))).toBe('/r/x/top.json?limit=25&t=day')
+  })
+
+  it('reads a thread by post id alone when the subreddit is missing or prefixed', () => {
+    expect(urlOf(redditPostCommentsScript('', 't3_abc', 5))).toBe('/comments/abc.json?limit=5&depth=3')
+    expect(urlOf(redditPostCommentsScript('r/technology', 'abc', 5))).toBe('/r/technology/comments/abc.json?limit=5&depth=3')
+    expect(urlOf(redditPostCommentsScript('technology', 'abc', 9999))).toBe('/r/technology/comments/abc.json?limit=500&depth=3')
+  })
+
+  it('reports an HTTP failure of a GraphQL write as an error string', async () => {
+    const originalFetch = globalThis.fetch
+    const originalDocument = (globalThis as { document?: unknown }).document
+    ;(globalThis as { document?: unknown }).document = { cookie: 'csrf_token=abc', querySelector: () => null }
+    globalThis.fetch = (async () => ({ ok: false, status: 403, text: async () => '{"data":null}' })) as unknown as typeof fetch
+    try {
+      const out = await (new Function(`return ${redditMarkReadScript()}`)()) as { ok: boolean; error?: string }
+      expect(out.ok).toBe(false)
+      expect(out.error).toContain('403')
+    } finally {
+      globalThis.fetch = originalFetch
+      ;(globalThis as { document?: unknown }).document = originalDocument
+    }
   })
 })
