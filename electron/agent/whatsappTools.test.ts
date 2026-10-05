@@ -33,6 +33,8 @@ vi.mock('../whatsapp/whatsapp', () => ({
   waDeleteMessage: (...args: unknown[]) => waDeleteMessage(...args),
   waDownloadMedia: (...args: unknown[]) => waDownloadMedia(...args),
   waDiagnose: (...args: unknown[]) => waDiagnose(...args),
+  unknownWhatsAppAccount: (ref?: string) =>
+    ref === undefined || ref === '1' || ref === '2' ? null : { ok: false, error: `unknown whatsapp account "${ref}"` },
 }))
 
 const { createWhatsAppTools, WHATSAPP_TOOL_NAMES } = await import('./whatsappTools')
@@ -85,7 +87,7 @@ describe('whatsapp_send_message approval gate', () => {
         input: { chatId: '65339874390087@lid', message: 'Asslam.o.alikum' },
       }),
     )
-    expect(waSend).toHaveBeenCalledWith('65339874390087@lid', 'Asslam.o.alikum')
+    expect(waSend).toHaveBeenCalledWith('65339874390087@lid', 'Asslam.o.alikum', undefined)
   })
 
   it('sends without any userApproved-style parameter from the model', async () => {
@@ -144,7 +146,7 @@ describe('whatsapp_send_file approval gate', () => {
 
     await send.handler({ chatId: '123@lid', filePath: 'C:/a.png', caption: 'x', asDocument: true })
 
-    expect(waSendFile).toHaveBeenCalledWith('123@lid', 'C:/a.png', 'x', true)
+    expect(waSendFile).toHaveBeenCalledWith('123@lid', 'C:/a.png', 'x', true, undefined)
   })
 
   it('is not marked read-only, so it can never be auto-allowed', async () => {
@@ -169,14 +171,14 @@ describe('whatsapp_delete_message approval gate', () => {
     const requestApproval = vi.fn(async () => true)
     const del = getTool(toolsWith(requestApproval), 'whatsapp_delete_message')
     await del.handler({ chatId: 'c@lid', msgId: 'M1', forEveryone: true })
-    expect(waDeleteMessage).toHaveBeenCalledWith('c@lid', 'M1', true)
+    expect(waDeleteMessage).toHaveBeenCalledWith('c@lid', 'M1', true, undefined)
   })
 
   it('does not silently upgrade a delete-for-me into a delete-for-everyone', async () => {
     const requestApproval = vi.fn(async () => true)
     const del = getTool(toolsWith(requestApproval), 'whatsapp_delete_message')
     await del.handler({ chatId: 'c@lid', msgId: 'M1', forEveryone: false })
-    expect(waDeleteMessage).toHaveBeenCalledWith('c@lid', 'M1', false)
+    expect(waDeleteMessage).toHaveBeenCalledWith('c@lid', 'M1', false, undefined)
   })
 
   it('shows a different title for forEveryone vs this-account-only, so the dialog cannot mislead the user', async () => {
@@ -196,7 +198,7 @@ describe('whatsapp_download_media', () => {
     const dl = getTool(toolsWith(requestApproval), 'whatsapp_download_media')
     const res = await dl.handler({ chatId: 'c@lid', msgId: 'M1' })
     expect(requestApproval).not.toHaveBeenCalled()
-    expect(waDownloadMedia).toHaveBeenCalledWith('c@lid', 'M1')
+    expect(waDownloadMedia).toHaveBeenCalledWith('c@lid', 'M1', undefined)
     expect(res.content[0].text).toContain('x.ogg')
   })
 })
@@ -205,13 +207,13 @@ describe('whatsapp_unread', () => {
   it('asks the bridge for unread chats only, rather than filtering after the fact', async () => {
     const tools = toolsWith(vi.fn(async () => true))
     await getTool(tools, 'whatsapp_unread').handler({ limit: 5 })
-    expect(waListChats).toHaveBeenCalledWith(5, true)
+    expect(waListChats).toHaveBeenCalledWith(5, true, undefined)
   })
 
   it('leaves whatsapp_list_chats unfiltered', async () => {
     const tools = toolsWith(vi.fn(async () => true))
     await getTool(tools, 'whatsapp_list_chats').handler({ limit: 5 })
-    expect(waListChats).toHaveBeenCalledWith(5)
+    expect(waListChats).toHaveBeenCalledWith(5, undefined, undefined)
   })
 })
 
@@ -238,5 +240,66 @@ describe('registration', () => {
     const tools = toolsWith(vi.fn(async () => true))
     expect(WHATSAPP_TOOL_NAMES).toContain('mcp__workers__whatsapp_send_message')
     expect(WHATSAPP_TOOL_NAMES).toHaveLength(tools.length)
+  })
+})
+
+describe('account routing', () => {
+  beforeEach(() => { waSendFile.mockReset() })
+
+  it('every tool takes an optional account', () => {
+    for (const t of toolsWith(vi.fn(async () => true)) as unknown as { name: string; inputSchema: Record<string, unknown> }[]) {
+      expect(Object.keys(t.inputSchema), t.name).toContain('account')
+    }
+  })
+
+  it('passes the account through to the bridge', async () => {
+    const tools = toolsWith(vi.fn(async () => true))
+    await getTool(tools, 'whatsapp_list_chats').handler({ limit: 5, account: '2' })
+    expect(waListChats).toHaveBeenCalledWith(5, undefined, '2')
+    await getTool(tools, 'whatsapp_send_message').handler({ chatId: 'c@lid', message: 'hi', account: '2' })
+    expect(waSend).toHaveBeenCalledWith('c@lid', 'hi', '2')
+  })
+
+  it.each([
+    ['whatsapp_send_message', { chatId: 'c@lid', message: 'hi' }],
+    ['whatsapp_send_file', { chatId: 'c@lid', filePath: 'C:/a.png' }],
+    ['whatsapp_delete_message', { chatId: 'c@lid', msgId: 'M1', forEveryone: false }],
+  ])('%s rejects an unknown account before asking for approval', async (name, input) => {
+    const requestApproval = vi.fn(async () => true)
+    const res = await getTool(toolsWith(requestApproval), name).handler({ ...input, account: '9' })
+    expect(res.isError).toBe(true)
+    expect(res.content[0].text).toContain('unknown whatsapp account')
+    expect(requestApproval).not.toHaveBeenCalled()
+    expect(waSend).not.toHaveBeenCalled()
+    expect(waSendFile).not.toHaveBeenCalled()
+    expect(waDeleteMessage).not.toHaveBeenCalled()
+  })
+
+  it('rejects an empty message before asking for approval', async () => {
+    const requestApproval = vi.fn(async () => true)
+    const res = await getTool(toolsWith(requestApproval), 'whatsapp_send_message').handler({ chatId: 'c@lid', message: '   ' })
+    expect(res.isError).toBe(true)
+    expect(requestApproval).not.toHaveBeenCalled()
+  })
+
+  it('names the account in the approval dialog', async () => {
+    const requestApproval = vi.fn(async () => true)
+    await getTool(toolsWith(requestApproval), 'whatsapp_send_message').handler({ chatId: 'c@lid', message: 'hi', account: '2' })
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining('account 2') }))
+  })
+})
+
+describe('MCP annotations', () => {
+  const byName = () => new Map((toolsWith(vi.fn(async () => true)) as unknown as { name: string; annotations?: Record<string, boolean> }[]).map(t => [t.name, t.annotations]))
+
+  it('marks reads read-only and writes not', () => {
+    const a = byName()
+    for (const n of ['whatsapp_status', 'whatsapp_list_chats', 'whatsapp_unread', 'whatsapp_list_messages', 'whatsapp_search_contacts', 'whatsapp_diagnose']) {
+      expect(a.get(n)?.readOnlyHint, n).toBe(true)
+    }
+    for (const n of ['whatsapp_send_message', 'whatsapp_send_file', 'whatsapp_delete_message', 'whatsapp_download_media']) {
+      expect(a.get(n)?.readOnlyHint, n).toBe(false)
+    }
+    expect(a.get('whatsapp_delete_message')?.destructiveHint).toBe(true)
   })
 })

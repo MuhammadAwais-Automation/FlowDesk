@@ -3,19 +3,48 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 let evaluate: (expression: string) => unknown = () => ({ ok: true })
 let evaluateDelayMs = 0
 let mockViewExists = true
+/** Overrides the partition the opened view is on, to test the refusal. */
+let viewPartitionOverride: string | null = null
+const opened: string[] = []
 
-vi.mock('../sessions', () => ({
-  getWhatsAppView: () => (mockViewExists ? {
-    webContents: {
-      executeJavaScript: async (expression: string) => {
-        if (evaluateDelayMs > 0) {
-          await new Promise(r => setTimeout(r, evaluateDelayMs))
-        }
-        return evaluate(expression)
-      },
+// Sessions compare by identity, the way Electron hands out one per partition.
+const sessions = new Map<string, object>()
+const sessionFor = (p: string) => { if (!sessions.has(p)) sessions.set(p, { p }); return sessions.get(p)! }
+
+vi.mock('electron', () => ({ app: { getPath: () => '.' }, session: { fromPartition: (p: string) => sessionFor(p) } }))
+vi.mock('../socialAccounts', () => {
+  const all = [
+    { platform: 'whatsapp', id: '1', label: 'Account 1', partition: 'social-whatsapp' },
+    { platform: 'whatsapp', id: '2', label: 'Shop', partition: 'social-whatsapp-2' },
+  ]
+  return {
+    SOCIAL_HOME: { whatsapp: 'https://web.whatsapp.com' },
+    resolveSocialAccount: (_p: string, ref?: string | number | null) => {
+      if (ref === undefined || ref === null || String(ref).trim() === '') return all[0]
+      const r = String(ref).trim().toLowerCase()
+      return all.find(a => a.id === r || a.partition === r || a.label.toLowerCase() === r) ?? null
     },
-  } : null),
-  ensureBackgroundView: () => null,
+  }
+})
+vi.mock('../sessions', () => ({
+  ensureBackgroundView: async (tabId: string, partition: string) => {
+    if (!mockViewExists) throw new Error('no window')
+    opened.push(tabId)
+    return {
+      webContents: {
+        session: sessionFor(`persist:${viewPartitionOverride ?? partition}`),
+        isDestroyed: () => false,
+        executeJavaScript: async (expression: string) => {
+          // The once-per-page readiness probe, answered as a ready bridge.
+          if (expression.startsWith('typeof window.__fdWaStatus')) return true
+          if (evaluateDelayMs > 0) {
+            await new Promise(r => setTimeout(r, evaluateDelayMs))
+          }
+          return evaluate(expression)
+        },
+      },
+    }
+  },
 }))
 
 const {
@@ -28,6 +57,12 @@ const {
   waSendFile,
   call,
   safePayload,
+  mediaFileName,
+  waDownloadMedia,
+  waDeleteMessage,
+  waUnreadWithMessages,
+  waSearchContacts,
+  waDiagnose,
 } = await import('./whatsapp')
 
 describe('WhatsApp Bridge - Parameter Serialization', () => {
@@ -216,5 +251,110 @@ describe('WhatsApp Bridge - Safe Payload Serialization', () => {
 
     const safe = safePayload(deep)
     expect(() => structuredClone(safe)).not.toThrow()
+  })
+})
+
+describe('WhatsApp account routing', () => {
+  let asked: string[] = []
+
+  beforeEach(() => {
+    mockViewExists = true
+    evaluateDelayMs = 0
+    viewPartitionOverride = null
+    opened.length = 0
+    asked = []
+    evaluate = expr => {
+      asked.push(expr)
+      return { ok: true, chats: [] }
+    }
+  })
+
+  it('runs on account 1 when no account is given', async () => {
+    const res = await waListChats(5)
+    expect(opened).toEqual(['social-whatsapp'])
+    expect(res.account).toBe('1')
+  })
+
+  it.each([['2'], [2], ['shop'], ['social-whatsapp-2']])('routes account %s to its own partition', async (ref) => {
+    const res = await waListChats(5, false, ref)
+    expect(opened).toEqual(['social-whatsapp-2'])
+    expect(res.account).toBe('2')
+  })
+
+  it('rejects unknown accounts on every call without touching a page', async () => {
+    const calls = [
+      waStatus('9'),
+      waListChats(5, false, '9'),
+      waListMessages('1@c.us', 5, '9'),
+      waUnreadWithMessages(5, 5, '9'),
+      waSearchContacts('bob', '9'),
+      waSend('1@c.us', 'hi', '9'),
+      waSendFile('1@c.us', 'C:/nope.txt', undefined, undefined, '9'),
+      waDeleteMessage('1@c.us', 'M1', false, '9'),
+      waDownloadMedia('1@c.us', 'M1', '9'),
+      waDiagnose('9'),
+    ]
+    for (const res of await Promise.all(calls)) {
+      expect(res.ok).toBe(false)
+      expect(String(res.error)).toContain('unknown whatsapp account "9"')
+    }
+    expect(opened).toEqual([])
+    expect(asked).toEqual([])
+  })
+
+  it('refuses a view that is not on the account partition', async () => {
+    viewPartitionOverride = 'social-whatsapp'
+    const res = await waListChats(5, false, '2')
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('not on its partition social-whatsapp-2')
+    expect(asked).toEqual([])
+  })
+
+  it('refuses an empty or whitespace message before the page', async () => {
+    const res = await waSend('1@c.us', '   ')
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('empty')
+    expect(asked).toEqual([])
+  })
+})
+
+describe('waStatus signedIn (from the page; WhatsApp has no auth cookie)', () => {
+  beforeEach(() => {
+    mockViewExists = true
+    viewPartitionOverride = null
+  })
+
+  it('is true when the store holds chats', async () => {
+    evaluate = () => ({ ok: true, ready: true, chats: 12, contacts: 40 })
+    expect(await waStatus()).toMatchObject({ ok: true, signedIn: true, account: '1' })
+  })
+
+  it('is null, with a hint, when nothing is loaded', async () => {
+    evaluate = () => ({ ok: true, ready: false, chats: 0, contacts: 0 })
+    const res = await waStatus()
+    expect(res.signedIn).toBeNull()
+    expect(res.hint).toContain('social_open_login')
+  })
+
+  it('is null when the bridge cannot be read', async () => {
+    evaluate = () => { throw new Error('window.__fdWaStatus is not a function') }
+    expect(await waStatus()).toMatchObject({ ok: false, signedIn: null })
+  })
+})
+
+describe('mediaFileName', () => {
+  it('keeps a plain message id', () => {
+    expect(mediaFileName('3EB0ABC_12-x', 'jpg')).toBe('3EB0ABC_12-x.jpg')
+  })
+
+  it('cannot climb out of the downloads folder', () => {
+    const name = mediaFileName('../../evil/..\\x', 'ogg')
+    expect(name).not.toMatch(/[\\/]/)
+    expect(name).not.toContain('..')
+    expect(name.endsWith('.ogg')).toBe(true)
+  })
+
+  it('never returns an empty name', () => {
+    expect(mediaFileName('', 'bin')).toBe('media.bin')
   })
 })

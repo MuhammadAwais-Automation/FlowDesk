@@ -382,8 +382,11 @@ export const WHATSAPP_BRIDGE_SRC = `
           }
         }
 
+        // An options object, not the chat: every caller in WhatsApp's own
+        // bundle passes { chat }, and passing the chat itself failed both
+        // loaders on every call ("reading 'msgs'"), so history never paged in.
         var call
-        try { call = Loader[fn](chat) } catch (e) { onFailure(e); return }
+        try { call = Loader[fn]({ chat: chat }) } catch (e) { onFailure(e); return }
 
         Promise.resolve(call).then(function () {
           loadedVia.push(fn)
@@ -420,7 +423,9 @@ export const WHATSAPP_BRIDGE_SRC = `
         var c = models[i]
         var name = c.name || c.formattedTitle || (c.contact && c.contact.name) || ''
         if (q && String(name).toLowerCase().indexOf(q) === -1) continue
-        out.push({ id: String(c.id), name: String(name), isGroup: !!c.isGroup })
+        // From the id, as serializeChat does: c.isGroup does not exist on
+        // this build, so every group came back as a 1:1 chat.
+        out.push({ id: String(c.id), name: String(name), isGroup: String(c.id).indexOf('@g.us') !== -1 })
         if (out.length >= 25) break
       }
       // Fall back to Contacts when no chat matches: a contact only appears in
@@ -687,6 +692,10 @@ export const WHATSAPP_BRIDGE_SRC = `
           mediaKey: m.mediaKey,
           mediaKeyTimestamp: m.mediaKeyTimestamp,
           type: m.type,
+          // WhatsApp's own media download passes the message mimetype; without
+          // it the manager checks "application/octet-stream" against the
+          // type's allowlist and rejects every image and voice note.
+          mimetype: m.mimetype || (m.mediaData && m.mediaData.mimetype) || undefined,
           signal: (typeof AbortController !== 'undefined') ? new AbortController().signal : undefined,
           // A no-op stand-in for WhatsApp's performance logger: the manager
           // annotates this object as it works and fails if it is absent.

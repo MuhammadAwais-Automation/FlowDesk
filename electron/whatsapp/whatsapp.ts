@@ -10,18 +10,28 @@
  * whatsappInject.ts for why that is the only place the data is readable at
  * all: the wire carries Noise-encrypted binary, so the page's own decrypted
  * store is the interception point.
+ *
+ * Every call names an account from the social account registry (id, label or
+ * partition; omitted = account 1) and runs only in that account's own view.
+ * An explicit account that does not exist is an error, never a fallback to
+ * whichever WhatsApp page happens to be open: reading or sending from the
+ * wrong number is worse than failing.
  */
 
 import { writeFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
-import { app, type WebContents } from 'electron'
-import { getWhatsAppView, ensureBackgroundView } from '../sessions'
+import { app, session, type WebContents } from 'electron'
+import { ensureBackgroundView } from '../sessions'
+import { resolveSocialAccount, SOCIAL_HOME, type SocialAccount } from '../socialAccounts'
 
 export interface WhatsAppResult {
   ok: boolean
   error?: string
   [key: string]: unknown
 }
+
+/** Which WhatsApp account a call means: id ("2"), partition or label. Omitted = account 1. */
+export type WhatsAppAccountRef = string | number | null | undefined
 
 export function safePayload<T>(v: T, depth = 0, seen = new WeakSet()): T {
   if (v === null || v === undefined) return v
@@ -54,33 +64,81 @@ export function safePayload<T>(v: T, depth = 0, seen = new WeakSet()): T {
   return String(v) as unknown as T
 }
 
-async function resolveWhatsAppView(): Promise<{ webContents: WebContents } | null> {
-  try {
-    const existing = getWhatsAppView()
-    if (existing) return existing
+const NOT_OPEN = 'WhatsApp is not open. Open the Social page in FlowDesk and sign in, then retry.'
 
-    if (typeof ensureBackgroundView === 'function') {
-      try {
-        const bg = await ensureBackgroundView('social-whatsapp', 'social-whatsapp', 'https://web.whatsapp.com')
-        if (bg) {
-          await new Promise(r => setTimeout(r, 4000))
-          return bg
-        }
-      } catch {
-        return null
-      }
-    }
-    return null
+/** The registry account, or an error result. Never falls back to another account. */
+function whatsappAccount(ref: WhatsAppAccountRef): SocialAccount | WhatsAppResult {
+  const acc = resolveSocialAccount('whatsapp', ref)
+  if (acc) return acc
+  return { ok: false, error: `unknown whatsapp account "${ref}" — list them with social_accounts { platform: "whatsapp" }` }
+}
+
+/** Refuses an explicit unknown account before any argument or page work. */
+export function unknownWhatsAppAccount(ref: WhatsAppAccountRef): WhatsAppResult | null {
+  const acc = whatsappAccount(ref)
+  return 'ok' in acc ? acc : null
+}
+
+function onPartition(wc: WebContents, partition: string): boolean {
+  try {
+    return !wc.isDestroyed() && wc.session === session.fromPartition(`persist:${partition}`)
   } catch {
-    return null
+    return false
   }
 }
 
-export async function call(expr: string, timeoutMs = 20000): Promise<WhatsAppResult> {
-  const view = await resolveWhatsAppView()
-  if (!view) {
-    return { ok: false, error: 'WhatsApp is not open. Open the Social page in FlowDesk and sign in, then retry.' }
+/** How long a page that just opened gets to finish its history sync. */
+const BRIDGE_WAIT_MS = 20000
+const bridgeChecked = new WeakSet<WebContents>()
+
+/**
+ * Waits once per page for the bridge to report ready. A freshly opened
+ * WhatsApp page holds 0 chats for the first ~15s while history sync runs, and
+ * a read in that window answers "no chats" rather than failing. A page that
+ * never gets ready (QR code, not signed in) is let through after the wait so
+ * the call itself reports what it sees.
+ */
+async function waitForBridge(wc: WebContents): Promise<void> {
+  if (bridgeChecked.has(wc)) return
+  const deadline = Date.now() + BRIDGE_WAIT_MS
+  while (Date.now() < deadline) {
+    try {
+      const ready = await wc.executeJavaScript('typeof window.__fdWaStatus === "function" && window.__fdWaStatus().ready === true')
+      if (ready === true) break
+    } catch { /* page still loading */ }
+    await new Promise(r => setTimeout(r, 500))
   }
+  bridgeChecked.add(wc)
+}
+
+/**
+ * The account's own view only. This used to take ANY open web.whatsapp.com
+ * page, which with two accounts reads (or sends from) the wrong number. The
+ * Social page tab and the background window both use the partition as tabId
+ * (account 1 = social-whatsapp); ensureBackgroundView returns the open UI view
+ * when there is one, waits for a background window still loading, and opens
+ * a hidden one otherwise, so the agent path works without the Social page.
+ */
+async function resolveWhatsAppView(acc: SocialAccount): Promise<{ webContents: WebContents } | string> {
+  let view: { webContents: WebContents } | null = null
+  try {
+    view = await ensureBackgroundView(acc.partition, acc.partition, SOCIAL_HOME.whatsapp)
+  } catch {
+    return NOT_OPEN
+  }
+  if (!view) return NOT_OPEN
+  if (!onPartition(view.webContents, acc.partition)) {
+    return `the open view for whatsapp account "${acc.id}" is not on its partition ${acc.partition}; refusing to use it`
+  }
+  await waitForBridge(view.webContents)
+  return view
+}
+
+export async function call(expr: string, timeoutMs = 20000, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  const acc = whatsappAccount(account)
+  if ('ok' in acc) return acc
+  const view = await resolveWhatsAppView(acc)
+  if (typeof view === 'string') return { ok: false, error: view, account: acc.id }
   let timer: NodeJS.Timeout | undefined
   try {
     const execPromise = view.webContents.executeJavaScript(expr)
@@ -88,39 +146,57 @@ export async function call(expr: string, timeoutMs = 20000): Promise<WhatsAppRes
       timer = setTimeout(() => reject(new Error(`WhatsApp bridge execution timed out after ${timeoutMs}ms`)), timeoutMs)
     })
     const res = await Promise.race([execPromise, timeoutPromise])
-    if (res && typeof res === 'object') return safePayload(res as WhatsAppResult)
-    return { ok: false, error: `bridge returned a non-object: ${String(res)}` }
+    if (res && typeof res === 'object') return { ...safePayload(res as WhatsAppResult), account: acc.id }
+    return { ok: false, error: `bridge returned a non-object: ${String(res)}`, account: acc.id }
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    return { ok: false, error: e instanceof Error ? e.message : String(e), account: acc.id }
   } finally {
     if (timer) clearTimeout(timer)
   }
 }
 
-export function waStatus(): Promise<WhatsAppResult> {
-  return call('window.__fdWaStatus()')
+/**
+ * Bridge state plus whether the account is signed in.
+ *
+ * WhatsApp keeps its session in IndexedDB, so there is no cookie to read
+ * (isSignedIn answers null) and the answer has to come from the page: a store
+ * holding chats or contacts is a signed-in account. An empty or unreadable
+ * store is "unknown" (null) rather than a guessed false — it is also what a
+ * signed-in account looks like during its first seconds of history sync.
+ */
+export async function waStatus(account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  const res = await call('window.__fdWaStatus()', 20000, account)
+  if (!res.ok) return { ...res, signedIn: null }
+  const loaded = Number(res.chats) > 0 || Number(res.contacts) > 0
+  return loaded
+    ? { ...res, signedIn: true }
+    : { ...res, signedIn: null, hint: 'No chats loaded: still syncing, or not signed in. Sign in with social_open_login { platform: "whatsapp" }.' }
 }
 
-export function waListChats(limit?: number, onlyUnread?: boolean): Promise<WhatsAppResult> {
+export function waListChats(limit?: number, onlyUnread?: boolean, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
   const safeLimit = typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined
   const safeOnlyUnread = typeof onlyUnread === 'boolean' ? onlyUnread : undefined
-  return call(`window.__fdWaListChats(${JSON.stringify({ limit: safeLimit, onlyUnread: safeOnlyUnread })})`)
+  return call(`window.__fdWaListChats(${JSON.stringify({ limit: safeLimit, onlyUnread: safeOnlyUnread })})`, 20000, account)
 }
 
-export function waApiListChats(limit?: number, onlyUnread?: boolean): Promise<WhatsAppResult> {
-  return waListChats(limit, onlyUnread)
+/** Older name for waListChats, kept for the whatsapp.api_chats RPC and tool. */
+export function waApiListChats(limit?: number, onlyUnread?: boolean, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  return waListChats(limit, onlyUnread, account)
 }
 
-export function waListMessages(chatId: string, limit?: number): Promise<WhatsAppResult> {
+export function waListMessages(chatId: string, limit?: number, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  const unknown = unknownWhatsAppAccount(account)
+  if (unknown) return Promise.resolve(unknown)
   if (!chatId || typeof chatId !== 'string') {
     return Promise.resolve({ ok: false, error: 'chatId is required and must be a string' })
   }
   const safeLimit = typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 20
-  return call(`window.__fdWaListMessages(${JSON.stringify(chatId)}, ${JSON.stringify(safeLimit)})`)
+  return call(`window.__fdWaListMessages(${JSON.stringify(chatId)}, ${JSON.stringify(safeLimit)})`, 20000, account)
 }
 
-export function waApiListMessages(chatId: string, limit?: number): Promise<WhatsAppResult> {
-  return waListMessages(chatId, limit)
+/** Older name for waListMessages, kept for the whatsapp.api_messages RPC and tool. */
+export function waApiListMessages(chatId: string, limit?: number, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  return waListMessages(chatId, limit, account)
 }
 
 /**
@@ -149,8 +225,8 @@ export const WA_MAX_EXPANDED_CHATS = 10
  * Sequential on purpose. Every call evaluates inside the same live page and
  * loads into the same message store, so parallel requests contend.
  */
-export async function waUnreadWithMessages(limit: number, messagesPerChat = 20): Promise<WhatsAppResult> {
-  const listed = await waListChats(limit, true)
+export async function waUnreadWithMessages(limit: number, messagesPerChat = 20, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  const listed = await waListChats(limit, true, account)
   if (!listed.ok || !Array.isArray(listed.chats)) return listed
 
   const chats: Array<Record<string, unknown>> = []
@@ -167,7 +243,7 @@ export async function waUnreadWithMessages(limit: number, messagesPerChat = 20):
     // dropped: its unread count and name are still a real signal, and losing
     // the whole chat would make one unreadable thread look like no thread.
     try {
-      const thread = await waListMessages(chatId, messagesPerChat)
+      const thread = await waListMessages(chatId, messagesPerChat, account)
       chats.push(thread.ok && Array.isArray(thread.messages)
         ? { ...chat, messages: thread.messages }
         : { ...chat, messages: [], messagesError: String(thread.error ?? 'unavailable') })
@@ -178,28 +254,37 @@ export async function waUnreadWithMessages(limit: number, messagesPerChat = 20):
   return { ...listed, chats }
 }
 
-export function waSearchContacts(query: string): Promise<WhatsAppResult> {
-  return call(`window.__fdWaChats(${JSON.stringify(query ?? '')})`)
+export function waSearchContacts(query: string, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  return call(`window.__fdWaChats(${JSON.stringify(query ?? '')})`, 20000, account)
 }
 
-export function waSend(chatId: string, text: string): Promise<WhatsAppResult> {
+export function waSend(chatId: string, text: string, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  const unknown = unknownWhatsAppAccount(account)
+  if (unknown) return Promise.resolve(unknown)
   if (!chatId || typeof chatId !== 'string') {
     return Promise.resolve({ ok: false, error: 'chatId is required and must be a string' })
   }
   if (text === undefined || text === null || typeof text !== 'string') {
     return Promise.resolve({ ok: false, error: 'text is required and must be a string' })
   }
-  return call(`window.__fdWaSend(${JSON.stringify(chatId)}, ${JSON.stringify(text)})`)
+  // The gateway coerces a missing text to '' and the page would send it as an
+  // empty bubble; nothing meaningful is ever an empty WhatsApp message.
+  if (!text.trim()) {
+    return Promise.resolve({ ok: false, error: 'text is empty; refusing to send an empty message' })
+  }
+  return call(`window.__fdWaSend(${JSON.stringify(chatId)}, ${JSON.stringify(text)})`, 20000, account)
 }
 
-export function waDeleteMessage(chatId: string, msgId: string, forEveryone: boolean): Promise<WhatsAppResult> {
+export function waDeleteMessage(chatId: string, msgId: string, forEveryone: boolean, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  const unknown = unknownWhatsAppAccount(account)
+  if (unknown) return Promise.resolve(unknown)
   if (!chatId || typeof chatId !== 'string') {
     return Promise.resolve({ ok: false, error: 'chatId is required and must be a string' })
   }
   if (!msgId || typeof msgId !== 'string') {
     return Promise.resolve({ ok: false, error: 'msgId is required and must be a string' })
   }
-  return call(`window.__fdWaDeleteMessage(${JSON.stringify(chatId)}, ${JSON.stringify(msgId)}, ${JSON.stringify(!!forEveryone)})`)
+  return call(`window.__fdWaDeleteMessage(${JSON.stringify(chatId)}, ${JSON.stringify(msgId)}, ${JSON.stringify(!!forEveryone)})`, 20000, account)
 }
 
 const MIME_EXT: Record<string, string> = {
@@ -208,15 +293,6 @@ const MIME_EXT: Record<string, string> = {
   'video/mp4': 'mp4', 'video/webm': 'webm', 'application/pdf': 'pdf',
 }
 
-/**
- * Download one media message and write it to disk, returning the path.
- *
- * The bytes come back from the page as base64 because that is what survives
- * an executeJavaScript round trip — but base64 is not what a caller wants to
- * be handed. An agent asked to "listen to that voice note" needs a real file
- * it can pass to a transcriber, so the encoding stays an implementation
- * detail and the tool returns a path.
- */
 /**
  * Attachments the page can actually take.
  *
@@ -300,7 +376,10 @@ export async function waSendFile(
   filePath: string,
   caption?: string,
   asDocument?: boolean,
+  account?: WhatsAppAccountRef,
 ): Promise<WhatsAppResult> {
+  const acc = whatsappAccount(account)
+  if ('ok' in acc) return acc
   if (!chatId || typeof chatId !== 'string') {
     return { ok: false, error: 'chatId is required and must be a string' }
   }
@@ -308,10 +387,8 @@ export async function waSendFile(
     return { ok: false, error: 'filePath is required and must be a string' }
   }
 
-  const view = await resolveWhatsAppView()
-  if (!view) {
-    return { ok: false, error: 'WhatsApp is not open. Open the Social page in FlowDesk and sign in, then retry.' }
-  }
+  const view = await resolveWhatsAppView(acc)
+  if (typeof view === 'string') return { ok: false, error: view, account: acc.id }
 
   let bytes: Buffer
   let size: number
@@ -356,7 +433,7 @@ export async function waSendFile(
         `window.__fdWaStageChunk(${JSON.stringify(token)}, ${JSON.stringify(chunk)}, ${JSON.stringify(mimetype)})`,
       )
       if (!staged?.ok) {
-        return { ok: false, error: `staging the file failed: ${staged?.error ?? 'unknown error'}` }
+        return { ok: false, error: `staging the file failed: ${staged?.error ?? 'unknown error'}`, account: acc.id }
       }
     }
 
@@ -374,27 +451,48 @@ export async function waSendFile(
       })})`,
       30000,
     )
-    return safePayload(res)
+    return { ...safePayload(res), account: acc.id }
   } catch (e) {
     // Staged bytes are a copy of the user's file sitting in page memory. If
     // the send never got far enough to clear them itself, clear them here.
     try { await webContents.executeJavaScript(`window.__fdWaDiscardFile(${JSON.stringify(token)})`) } catch { /* view gone */ }
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    return { ok: false, error: e instanceof Error ? e.message : String(e), account: acc.id }
   }
 }
 
-export async function waDownloadMedia(chatId: string, msgId: string): Promise<WhatsAppResult> {
+/**
+ * The file name a downloaded message is saved under. msgId is caller input
+ * and ends up in a path, so anything but a plain id character is replaced:
+ * "../../x" must not climb out of the downloads folder.
+ */
+export function mediaFileName(msgId: string, ext: string): string {
+  const safeId = msgId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 120) || 'media'
+  return `${safeId}.${ext}`
+}
+
+/**
+ * Download one media message and write it to disk, returning the path.
+ *
+ * The bytes come back from the page as base64 because that is what survives
+ * an executeJavaScript round trip — but base64 is not what a caller wants to
+ * be handed. An agent asked to "listen to that voice note" needs a real file
+ * it can pass to a transcriber, so the encoding stays an implementation
+ * detail and the tool returns a path.
+ */
+export async function waDownloadMedia(chatId: string, msgId: string, account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  const unknown = unknownWhatsAppAccount(account)
+  if (unknown) return unknown
   if (!chatId || typeof chatId !== 'string') {
     return { ok: false, error: 'chatId is required and must be a string' }
   }
   if (!msgId || typeof msgId !== 'string') {
     return { ok: false, error: 'msgId is required and must be a string' }
   }
-  const res = await call(`window.__fdWaDownloadMedia(${JSON.stringify(chatId)}, ${JSON.stringify(msgId)})`)
+  const res = await call(`window.__fdWaDownloadMedia(${JSON.stringify(chatId)}, ${JSON.stringify(msgId)})`, 20000, account)
   if (!res.ok) return res
 
   const base64 = res.base64 as string | undefined
-  if (!base64) return { ok: false, error: 'bridge returned no bytes' }
+  if (!base64) return { ok: false, error: 'bridge returned no bytes', account: res.account }
 
   const mimetype = (res.mimetype as string | null) ?? ''
   // Strip codec parameters: WhatsApp reports voice notes as
@@ -404,13 +502,14 @@ export async function waDownloadMedia(chatId: string, msgId: string): Promise<Wh
 
   const dir = join(app.getPath('downloads'), 'FlowDesk WhatsApp')
   await mkdir(dir, { recursive: true })
-  const path = join(dir, `${msgId}.${ext}`)
+  const path = join(dir, mediaFileName(msgId, ext))
   await writeFile(path, Buffer.from(base64, 'base64'))
 
   // Deliberately does not return base64: the caller has a path, and echoing
   // a megabyte of encoded audio back through a tool result helps nobody.
   return {
     ok: true,
+    account: res.account,
     path,
     type: res.type,
     mimetype: mimetype || null,
@@ -430,11 +529,13 @@ export async function waDownloadMedia(chatId: string, msgId: string): Promise<Wh
  * a tool lets whoever hits the failure ask about it straight away, while the
  * broken state is still there to look at.
  */
-export async function waDiagnose(): Promise<WhatsAppResult> {
+export async function waDiagnose(account?: WhatsAppAccountRef): Promise<WhatsAppResult> {
+  const unknown = unknownWhatsAppAccount(account)
+  if (unknown) return unknown
   const [status, diag, media] = await Promise.all([
-    call('window.__fdWaStatus()'),
-    call('window.__fdWaDiag()'),
-    call('window.__fdWaMediaProbe()'),
+    call('window.__fdWaStatus()', 20000, account),
+    call('window.__fdWaDiag()', 20000, account),
+    call('window.__fdWaMediaProbe()', 20000, account),
   ])
-  return { ok: true, status, chatAndModules: diag, media }
+  return { ok: true, account: status.account, status, chatAndModules: diag, media }
 }

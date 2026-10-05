@@ -6,8 +6,25 @@ import { describe, expect, it, vi } from 'vitest'
  * away. `evaluate` decides what the page would have answered.
  */
 let evaluate: (expression: string) => unknown = () => ({ ok: false })
+const pageSession = {}
+vi.mock('electron', () => ({ app: { getPath: () => '.' }, session: { fromPartition: () => pageSession } }))
+vi.mock('../socialAccounts', () => ({
+  SOCIAL_HOME: { whatsapp: 'https://web.whatsapp.com' },
+  resolveSocialAccount: (_p: string, ref?: string | number | null) =>
+    ref === undefined || ref === null || ref === '' || ref === '1'
+      ? { platform: 'whatsapp', id: '1', label: 'Account 1', partition: 'social-whatsapp' }
+      : null,
+}))
 vi.mock('../sessions', () => ({
-  getWhatsAppView: () => ({ webContents: { executeJavaScript: async (expression: string) => evaluate(expression) } }),
+  ensureBackgroundView: async () => ({
+    webContents: {
+      session: pageSession,
+      isDestroyed: () => false,
+      // The once-per-page readiness probe is answered as a ready bridge.
+      executeJavaScript: async (expression: string) =>
+        expression.startsWith('typeof window.__fdWaStatus') ? true : evaluate(expression),
+    },
+  }),
 }))
 
 const { waUnreadWithMessages, WA_MAX_EXPANDED_CHATS } = await import('./whatsapp')

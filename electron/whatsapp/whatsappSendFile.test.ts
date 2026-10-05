@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('../sessions', () => ({ getWhatsAppView: () => null, ensureBackgroundView: () => null }))
+vi.mock('electron', () => ({ app: { getPath: () => '.' }, session: { fromPartition: () => ({}) } }))
+vi.mock('../socialAccounts', () => ({
+  SOCIAL_HOME: { whatsapp: 'https://web.whatsapp.com' },
+  resolveSocialAccount: (_p: string, ref?: string | number | null) =>
+    ref === undefined || ref === null || ref === '' || ref === '1'
+      ? { platform: 'whatsapp', id: '1', label: 'Account 1', partition: 'social-whatsapp' }
+      : null,
+}))
+vi.mock('../sessions', () => ({ ensureBackgroundView: async () => { throw new Error('no window in tests') } }))
 
 const { mimetypeFor, shouldSendAsDocument, waSendFile, MAX_ATTACHMENT_BYTES } = await import('./whatsapp')
 

@@ -158,3 +158,74 @@ describe('__fdWaSend server ack', () => {
     expect(res).toMatchObject({ ok: false, step: 'ack', acked: false, ack: -1 })
   })
 })
+
+describe('bridge calls verified against WhatsApp\'s own bundle (2026-10-04)', () => {
+  /** A sandbox with fake WhatsApp modules; returns the bridge's window. */
+  function bridge(modules: Record<string, unknown>) {
+    const sandbox: Record<string, unknown> = {
+      postMessage() {},
+      require(name: string) {
+        if (name in modules) return modules[name]
+        throw new Error('no module ' + name)
+      },
+      setInterval: () => 0,
+      clearInterval() {},
+      setTimeout: (fn: () => void, ms: number) => (ms >= 30000 ? 0 : setTimeout(fn, 0)),
+      AbortController,
+    }
+    sandbox.window = sandbox
+    vm.runInNewContext(WHATSAPP_BRIDGE_SRC, sandbox)
+    return sandbox as Record<string, (...args: unknown[]) => unknown>
+  }
+
+  it('pages history with an options object, as every caller in WhatsApp does', async () => {
+    const msgs: unknown[] = [{ id: { id: 'A', fromMe: false }, type: 'chat', body: 'x' }]
+    const chat = { id: '1@lid', noEarlierMsgs: false, msgs: { getModelsArray: () => msgs } }
+    const loaderArgs: unknown[] = []
+    const loader = async (arg: { chat?: unknown }) => {
+      loaderArgs.push(arg)
+      // The real loaders read arg.chat.msgs and throw when handed the chat.
+      if (!arg || !arg.chat) throw new Error("Cannot read properties of undefined (reading 'msgs')")
+      msgs.unshift({ id: { id: 'B' + msgs.length, fromMe: false }, type: 'chat', body: 'y' })
+    }
+    const w = bridge({
+      WAWebCollections: { Msg: { on() {} }, Chat: { get: () => chat, length: 1 }, Contact: { get: () => null, length: 0 } },
+      WAWebChatLoadMessages: { loadRecentMsgs: loader, loadEarlierMsgs: loader },
+    })
+    const res = await w.__fdWaListMessages('1@lid', 3) as { ok: boolean; returned: number; _via: { loaded: string[] } }
+    expect(loaderArgs[0]).toEqual({ chat })
+    expect(res.ok).toBe(true)
+    expect(res.returned).toBe(3)
+    expect(res._via.loaded.join(' ')).not.toContain('failed')
+  })
+
+  it('marks groups by their @g.us id in a name search', () => {
+    const models = [{ id: '120363000000000000@g.us', name: 'Team' }, { id: '5@lid', name: 'Teammate' }]
+    const w = bridge({
+      WAWebCollections: { Msg: { on() {} }, Chat: { getModelsArray: () => models, length: 2 }, Contact: { getModelsArray: () => [], length: 0 } },
+    })
+    const res = w.__fdWaChats('team') as { chats: { id: string; isGroup: boolean }[] }
+    expect(res.chats).toEqual([
+      { id: '120363000000000000@g.us', name: 'Team', isGroup: true },
+      { id: '5@lid', name: 'Teammate', isGroup: false },
+    ])
+  })
+
+  it('passes the message mimetype to the download manager', async () => {
+    const m = { id: { id: 'M1' }, type: 'image', mimetype: 'image/jpeg', directPath: '/p', mediaKey: 'k' }
+    const chat = { id: '1@lid', msgs: { getModelsArray: () => [m] } }
+    let seen: Record<string, unknown> | null = null
+    const w = bridge({
+      WAWebCollections: { Msg: { on() {} }, Chat: { get: () => chat, length: 1 }, Contact: { get: () => null, length: 0 } },
+      WAWebDownloadManager: {
+        downloadManager: {
+          downloadAndMaybeDecrypt: async (args: Record<string, unknown>) => { seen = args; return new Uint8Array([1, 2, 3]) },
+        },
+      },
+    })
+    // Only the request shape is asserted: the byte path relies on realm-bound
+    // instanceof checks that a vm sandbox cannot satisfy.
+    await w.__fdWaDownloadMedia('1@lid', 'M1')
+    expect(seen).toMatchObject({ mimetype: 'image/jpeg', type: 'image' })
+  })
+})
