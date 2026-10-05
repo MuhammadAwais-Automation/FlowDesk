@@ -16,7 +16,7 @@ vi.mock('./linkedin/linkedin', () => ({
   saveLinkedInAccounts: (a: typeof linkedin) => { linkedin = a },
 }))
 
-const { addSocialAccount, listSocialAccounts, resolveSocialAccount, socialPartition } = await import('./socialAccounts')
+const { addSocialAccount, cleanLabel, listSocialAccounts, parseStored, resolveSocialAccount, socialPartition } = await import('./socialAccounts')
 
 describe('social account registry', () => {
   beforeEach(() => { linkedin = linkedin.slice(0, 2) })
@@ -55,5 +55,17 @@ describe('social account registry', () => {
     const li = addSocialAccount('linkedin')
     expect(li).toMatchObject({ id: '3', label: 'Account 3', partition: 'social-linkedin-3' })
     expect(linkedin.map(a => a.id)).toEqual(['1', '2', '3']) // LinkedIn's own file stays its store
+  })
+
+  it('drops malformed stored rows instead of trusting them', () => {
+    expect(parseStored(null)).toEqual({})
+    expect(parseStored({ tiktok: 'x' })).toEqual({})
+    expect(parseStored({ tiktok: [{ id: '2', label: 'Two' }, { id: '../x', label: 'bad' }, { id: 3, label: 'n' }] }))
+      .toEqual({ tiktok: [{ id: '2', label: 'Two' }] })
+  })
+
+  it('strips control characters and caps label length', () => {
+    expect(cleanLabel(String.fromCharCode(32, 97, 0, 98, 10, 99, 32))).toBe('abc')
+    expect(cleanLabel('x'.repeat(200))).toHaveLength(60)
   })
 })

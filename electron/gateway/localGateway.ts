@@ -13,7 +13,7 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, writeFile, unlink, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -99,8 +99,10 @@ import { askBrowserProvider, workerProgress } from '../agent/browserWorkerQueue'
 import { radarCollectOnce, radarReportFor, radarStatus, startRadar, stopRadar } from '../tiktok/tiktokRadar'
 import { loadNiches, removeNiche, upsertNiche } from '../tiktok/tiktokRadarStore'
 import { addSocialAccount, isSocialPlatform, openSocialLogin, socialAccountsStatus } from '../socialAccounts'
+import { fbFeed } from '../facebook'
 import { askChat, askChatgptText, chatModels, downloadImage, imageLibrary, listChats, readChat, searchChats, updateChat } from '../chatgptChats'
 import { enqueueImages, imageAccounts, listJobs, openChatgptLogin, publicJob, waitForJob, type ImageRequest } from '../chatgptImages'
+import { summarizeJobs } from '../chatgptImageCore'
 import { openHudWidget, closeHudWidget, getHudStatus } from '../hudWidget'
 import {
   flowListProjects,
@@ -146,10 +148,14 @@ async function runImageJobs(req: ImageRequest, wait: boolean) {
   const jobs = await enqueueImages(req)
   if (wait) await Promise.all(jobs.map(j => waitForJob(j, 14 * 60_000)))
   const out = jobs.map(publicJob)
-  const count = (s: string) => out.filter(j => j.status === s).length
+  // ok:false only when every job failed; jobs still queued/running are
+  // "accepted", not failures, so the caller polls instead of starting them again.
+  const { ok, state, progress } = summarizeJobs(out.map(j => j.status))
   return {
-    ok: out.some(j => j.status === 'done') || (!wait && out.length > 0),
-    progress: { total: out.length, done: count('done'), running: count('running'), queued: count('queued'), failed: count('failed') },
+    ok,
+    state,
+    progress,
+    ...(ok ? {} : { error: out.find(j => j.error)?.error ?? 'every image job failed' }),
     jobs: out,
     images: out.flatMap(j => j.images),
     ...(out.some(j => j.status === 'queued' || j.status === 'running') ? { note: 'some jobs are still running — read them with chatgpt.imageJobs' } : {}),
@@ -235,6 +241,7 @@ interface AgentToolDef {
   description: string
   inputSchema: z.ZodRawShape
   handler: (args: Record<string, unknown>, extra: unknown) => Promise<{ content?: unknown[] } & Record<string, unknown>>
+  annotations?: Record<string, unknown>
 }
 
 let agentToolRegistry: Promise<Map<string, AgentToolDef>> | null = null
@@ -269,43 +276,48 @@ export function resetAgentToolRegistry(): void {
   agentToolRegistry = null
 }
 
+/** The optional WhatsApp `account` (id, label or partition; number ids allowed). */
+const waAccount = (p: Record<string, unknown>) => (typeof p.account === 'string' || typeof p.account === 'number' ? p.account : undefined)
+
 const RPC_HANDLERS: Record<string, RpcHandler> = {
   // Reddit methods
-  'reddit.status': async () => rdStatus(),
+  'reddit.status': async (p) => rdStatus(p.account as string),
   'reddit.feed': async (p) => rdFeed({
     subreddit: typeof p.subreddit === 'string' ? p.subreddit : undefined,
     sort: p.sort as any,
     limit: typeof p.limit === 'number' ? p.limit : undefined,
     after: typeof p.after === 'string' ? p.after : undefined,
     timeFilter: p.timeFilter as any,
-  }),
+  }, p.account as string),
   'reddit.postComments': async (p) => rdPostComments(
     String(p.subreddit || ''),
     String(p.postId || ''),
     typeof p.limit === 'number' ? p.limit : undefined,
+    p.account as string,
   ),
   'reddit.search': async (p) => rdSearch(
     String(p.query || ''),
     p.sort as any,
     typeof p.limit === 'number' ? p.limit : undefined,
     typeof p.t === 'string' ? p.t as any : undefined,
+    p.account as string,
   ),
-  'reddit.votePost': async (p) => rdVotePost(String(p.postId || ''), p.voteState as any),
-  'reddit.voteComment': async (p) => rdVoteComment(String(p.commentId || ''), p.voteState as any),
-  'reddit.createComment': async (p) => rdCreateComment(String(p.postId || ''), String(p.parentId || ''), String(p.text || '')),
-  'reddit.createPost': async (p) => rdCreatePost(String(p.subreddit || ''), String(p.title || ''), typeof p.body === 'string' ? p.body : undefined),
-  'reddit.subscribe': async (p) => rdSubscribe(String(p.subredditId || ''), p.subscribeState as any),
-  'reddit.markRead': async () => rdMarkRead(),
+  'reddit.votePost': async (p) => rdVotePost(String(p.postId || ''), p.voteState as any, p.account as string),
+  'reddit.voteComment': async (p) => rdVoteComment(String(p.commentId || ''), p.voteState as any, p.account as string),
+  'reddit.createComment': async (p) => rdCreateComment(String(p.postId || ''), String(p.parentId || ''), String(p.text || ''), p.account as string),
+  'reddit.createPost': async (p) => rdCreatePost(String(p.subreddit || ''), String(p.title || ''), typeof p.body === 'string' ? p.body : undefined, p.account as string),
+  'reddit.subscribe': async (p) => rdSubscribe(String(p.subredditId || ''), p.subscribeState as any, p.account as string),
+  'reddit.markRead': async (p) => rdMarkRead(p.account as string),
   'reddit.api_feed': async (p) => rdApiFeed({
     subreddit: typeof p.subreddit === 'string' ? p.subreddit : undefined,
     sort: typeof p.sort === 'string' ? p.sort : undefined,
     limit: typeof p.limit === 'number' ? p.limit : undefined,
-  }),
+  }, p.account as string),
   'reddit.apiFeed': async (p) => rdApiFeed({
     subreddit: typeof p.subreddit === 'string' ? p.subreddit : undefined,
     sort: typeof p.sort === 'string' ? p.sort : undefined,
     limit: typeof p.limit === 'number' ? p.limit : undefined,
-  }),
+  }, p.account as string),
   'reddit.api_search': async (p) => rdApiSearch(
     String(p.query || ''),
     {
@@ -314,6 +326,7 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
       sort: typeof p.sort === 'string' ? p.sort as any : undefined,
       t: typeof p.t === 'string' ? p.t as any : undefined,
     },
+    p.account as string,
   ),
   'reddit.apiSearch': async (p) => rdApiSearch(
     String(p.query || ''),
@@ -323,47 +336,42 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
       sort: typeof p.sort === 'string' ? p.sort as any : undefined,
       t: typeof p.t === 'string' ? p.t as any : undefined,
     },
+    p.account as string,
   ),
   'reddit.api_post_comments': async (p) => rdApiPostComments(
     String(p.postId || p.id || ''),
     typeof p.limit === 'number' ? p.limit : undefined,
+    p.account as string,
   ),
   'reddit.apiPostComments': async (p) => rdApiPostComments(
     String(p.postId || p.id || ''),
     typeof p.limit === 'number' ? p.limit : undefined,
+    p.account as string,
   ),
   'reddit.api_comments': async (p) => rdApiPostComments(
     String(p.postId || p.id || ''),
     typeof p.limit === 'number' ? p.limit : undefined,
+    p.account as string,
   ),
   'reddit.outlier': async (p) => rdApiOutlier(
     String(p.subreddit || p.sub || ''),
     typeof p.minMultiplier === 'number' ? p.minMultiplier : (typeof p.multiplier === 'number' ? p.multiplier : 3.0),
     { sort: typeof p.sort === 'string' ? p.sort as any : undefined, t: typeof p.t === 'string' ? p.t as any : undefined },
+    p.account as string,
   ),
 
-  // WhatsApp methods
-  'whatsapp.status': async () => waStatus(),
-  'whatsapp.listChats': async (p) => waListChats(typeof p.limit === 'number' ? p.limit : undefined, Boolean(p.onlyUnread)),
-  'whatsapp.listMessages': async (p) => waListMessages(String(p.chatId || ''), typeof p.limit === 'number' ? p.limit : undefined),
-  'whatsapp.send': async (p) => waSend(String(p.chatId || ''), String(p.text || '')),
-  'whatsapp.unread': async (p) => waUnreadWithMessages(typeof p.limit === 'number' ? p.limit : 10),
-  'whatsapp.api_chats': async (p) => waApiListChats(
-    typeof p.limit === 'number' ? p.limit : undefined,
-    Boolean(p.onlyUnread || p.unread),
-  ),
-  'whatsapp.apiChats': async (p) => waApiListChats(
-    typeof p.limit === 'number' ? p.limit : undefined,
-    Boolean(p.onlyUnread || p.unread),
-  ),
-  'whatsapp.api_messages': async (p) => waApiListMessages(
-    String(p.chatId || p.id || ''),
-    typeof p.limit === 'number' ? p.limit : undefined,
-  ),
-  'whatsapp.apiMessages': async (p) => waApiListMessages(
-    String(p.chatId || p.id || ''),
-    typeof p.limit === 'number' ? p.limit : undefined,
-  ),
+  // WhatsApp methods. `account` (id, label or partition) routes through the
+  // social account registry; an explicit unknown account is an error.
+  // api_chats/apiChats/api_messages/apiMessages are older aliases.
+  'whatsapp.status': async (p) => waStatus(waAccount(p)),
+  'whatsapp.listChats': async (p) => waListChats(typeof p.limit === 'number' ? p.limit : undefined, Boolean(p.onlyUnread || p.unread), waAccount(p)),
+  'whatsapp.listMessages': async (p) => waListMessages(String(p.chatId || p.id || ''), typeof p.limit === 'number' ? p.limit : undefined, waAccount(p)),
+  'whatsapp.send': async (p) => waSend(String(p.chatId || ''), typeof p.text === 'string' ? p.text : '', waAccount(p)),
+  'whatsapp.unread': async (p) => waUnreadWithMessages(typeof p.limit === 'number' ? p.limit : 10, undefined, waAccount(p)),
+  'whatsapp.api_chats': async (p) => waApiListChats(typeof p.limit === 'number' ? p.limit : undefined, Boolean(p.onlyUnread || p.unread), waAccount(p)),
+  'whatsapp.apiChats': async (p) => waApiListChats(typeof p.limit === 'number' ? p.limit : undefined, Boolean(p.onlyUnread || p.unread), waAccount(p)),
+  'whatsapp.api_messages': async (p) => waApiListMessages(String(p.chatId || p.id || ''), typeof p.limit === 'number' ? p.limit : undefined, waAccount(p)),
+  'whatsapp.apiMessages': async (p) => waApiListMessages(String(p.chatId || p.id || ''), typeof p.limit === 'number' ? p.limit : undefined, waAccount(p)),
 
   // LinkedIn methods
   // One account list for every social platform (electron/socialAccounts.ts)
@@ -375,10 +383,19 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     ? openSocialLogin(p.platform, typeof p.account === 'string' || typeof p.account === 'number' ? p.account : null)
     : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook' },
 
+  // Facebook read. Writes stay on the agent tools (tools.call → facebook_*),
+  // the single place their arguments are validated. A present-but-odd account
+  // becomes a string so it is refused as unknown, never read as account 1.
+  'facebook.feed': async (p) => fbFeed(
+    typeof p.count === 'number' ? p.count : undefined,
+    typeof p.cursor === 'string' && p.cursor ? p.cursor : undefined,
+    p.account == null ? undefined : String(p.account),
+  ),
+
   'linkedin.accounts': async () => liAccounts(),
   'linkedin.switchAccount': async (p) => liSwitchAccount(typeof p.account === 'string' || typeof p.account === 'number' ? p.account : '1'),
   'linkedin.status': async (p) => liStatus(typeof p?.account === 'string' || typeof p?.account === 'number' ? p.account : undefined),
-  'linkedin.feed': async (p) => liFeed(typeof p.limit === 'number' ? p.limit : undefined, typeof p.start === 'number' ? p.start : 0, typeof p.sort === 'string' ? p.sort : undefined, typeof p.account === 'string' || typeof p.account === 'number' ? p.account : undefined),
+  'linkedin.feed': async (p) => liFeed(typeof p.limit === 'number' ? p.limit : undefined, typeof p.start === 'number' ? p.start : 0, typeof p.sortBy === 'string' ? p.sortBy : typeof p.sort === 'string' ? p.sort : undefined, typeof p.account === 'string' || typeof p.account === 'number' ? p.account : undefined),
   'linkedin.postComments': async (p) => liPostComments(String(p.activityId || ''), typeof p.limit === 'number' ? p.limit : undefined, typeof p.account === 'string' || typeof p.account === 'number' ? p.account : undefined),
   'linkedin.search': async (p) => liSearch(String(p.query || ''), typeof p.resultType === 'string' ? p.resultType : undefined, typeof p.limit === 'number' ? p.limit : undefined, typeof p.account === 'string' || typeof p.account === 'number' ? p.account : undefined),
   'linkedin.send': async (p) => liSend(String(p.conversationUrn || ''), String(p.text || ''), typeof p.account === 'string' || typeof p.account === 'number' ? p.account : undefined),
@@ -560,7 +577,7 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'flow.generateImage': async (p) => flowGenerateImage(
     String(p.prompt || ''),
     String(p.projectId || ''),
-    p.imageModel as any,
+    typeof p.imageModel === 'string' ? p.imageModel : undefined,
     acct(p),
   ),
   'flow.generateVideo': async (p) => flowGenerateVideo(
@@ -574,22 +591,25 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     String(p.projectId || ''),
     String(p.mediaId || ''),
     String(p.modelKey || ''),
+    acct(p),
   ),
   'flow.extendVideo': async (p) => flowExtendVideo(
     String(p.prompt || ''),
     String(p.projectId || ''),
     String(p.sourceVideoId || ''),
     String(p.sceneId || ''),
+    acct(p),
   ),
   'flow.uploadImage': async (p) => flowUploadImage(
     String(p.localFilePath || ''),
     String(p.projectId || ''),
+    acct(p),
   ),
-  'flow.downloadMedia': async (p) => flowDownloadMedia(String(p.mediaUrl || '')),
-  'flow.videoModels': async () => flowVideoModels(),
+  'flow.downloadMedia': async (p) => flowDownloadMedia(String(p.mediaUrl || ''), acct(p)),
+  'flow.videoModels': async (p) => flowVideoModels(acct(p)),
   'flow.credits': async (p) => flowGetCredits(acct(p)),
   'flow.mediaStatus': async (p) => flowMediaStatus(String(p.mediaId || ''), acct(p)),
-  'flow.listProjectMedia': async (p) => flowListProjectMedia(String(p.projectId || '')),
+  'flow.listProjectMedia': async (p) => flowListProjectMedia(String(p.projectId || ''), acct(p)),
   'flow.eval': async (p) => flowEval(String(p.code || ''), acct(p)),
 
   // FlowDesk Native Floating HUD Widget
@@ -701,6 +721,7 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
       name: t.name,
       description: t.description,
       inputSchema: z.toJSONSchema(z.object(t.inputSchema)),
+      ...(t.annotations ? { annotations: t.annotations } : {}),
     }))
   },
   'tools.call': async (p) => {
@@ -750,6 +771,16 @@ export interface GatewayOptions {
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>
 }
 
+// Local tools only send small JSON (paths, prompts, ids); images travel as file paths.
+const MAX_RPC_BODY_BYTES = 1024 * 1024
+
+export function tokenMatches(header: string | undefined, token: string): boolean {
+  if (typeof header !== 'string') return false
+  const got = Buffer.from(header)
+  const want = Buffer.from(`Bearer ${token}`)
+  return got.length === want.length && timingSafeEqual(got, want)
+}
+
 export function startLocalGateway(userDataPath?: string, preferredPort = 47888, options: GatewayOptions = {}): Promise<GatewayServer> {
   const policyDir = userDataPath || join(process.env.FLOWDESK_HOME || homedir(), '.flowdesk')
   guard = createActionGuard({ ...policyPaths(policyDir), requestApproval: options.requestApproval })
@@ -780,13 +811,13 @@ export function startLocalGateway(userDataPath?: string, preferredPort = 47888, 
       // Health endpoint (unauthenticated for discovery)
       if (req.url === '/health' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ ok: true, app: 'flowdesk', pid: process.pid }))
+        res.end(JSON.stringify({ ok: true, app: 'flowdesk' }))
         return
       }
 
       // Auth validation for all other endpoints
       const authHeader = req.headers.authorization
-      if (!authHeader || authHeader !== `Bearer ${token}`) {
+      if (!tokenMatches(authHeader, token)) {
         res.writeHead(401, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ ok: false, error: 'Unauthorized: invalid or missing gateway token' }))
         return
@@ -836,8 +867,20 @@ export function startLocalGateway(userDataPath?: string, preferredPort = 47888, 
       // RPC endpoint
       if (req.url === '/rpc' && req.method === 'POST') {
         let body = ''
-        req.on('data', chunk => { body += chunk })
+        let tooLarge = false
+        req.setEncoding('utf8')
+        req.on('data', (chunk: string) => {
+          if (tooLarge) return
+          body += chunk
+          if (Buffer.byteLength(body) > MAX_RPC_BODY_BYTES) {
+            tooLarge = true
+            res.writeHead(413, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ ok: false, error: 'Request body too large' }))
+            req.destroy()
+          }
+        })
         req.on('end', async () => {
+          if (tooLarge) return
           try {
             const parsed = JSON.parse(body || '{}')
             const method = String(parsed.method || '')

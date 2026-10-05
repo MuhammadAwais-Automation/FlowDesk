@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { startLocalGateway, type GatewayServer } from './localGateway'
+import { startLocalGateway, tokenMatches, type GatewayServer } from './localGateway'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -133,6 +133,23 @@ describe('localGateway server', () => {
       body: JSON.stringify({ method: 'brain.status', params: {} }),
     })
     expect(brainRes.status).toBe(200)
+  })
+
+  it('rejects wrong tokens and oversized rpc bodies', async () => {
+    server = await startLocalGateway(testUserData, 0)
+    const { port, token } = server.info
+    const wrong = await fetch(`http://127.0.0.1:${port}/status`, { headers: { Authorization: `Bearer ${token}x` } })
+    expect(wrong.status).toBe(401)
+    expect(tokenMatches(undefined, token)).toBe(false)
+    expect(tokenMatches(`Bearer ${token}`, token)).toBe(true)
+
+    const huge = await fetch(`http://127.0.0.1:${port}/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ method: 'brain.status', params: { pad: 'x'.repeat(2 * 1024 * 1024) } }),
+    }).catch(() => null)
+    // The server answers 413 and drops the socket; either outcome means the body was refused.
+    if (huge) expect(huge.status).toBe(413)
   })
 
   it('stops cleanly and removes discovery files', async () => {

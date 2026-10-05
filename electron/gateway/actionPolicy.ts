@@ -25,9 +25,20 @@ export interface ActionPolicy {
 }
 
 export const DEFAULT_POLICY: ActionPolicy = {
-  blocked: [],
-  requireApproval: ['tiktok_delete_all_videos', 'tiktok_update_profile', 'linkedin_send_connection_request'],
+  blocked: ['flow_eval', 'linkedin_eval', 'tiktok_eval'],
+  requireApproval: ['tiktok_delete_all_videos', 'tiktok_delete_video', 'whatsapp_delete_message', 'tiktok_update_profile', 'linkedin_send_connection_request', 'linkedin_update_profile', 'linkedin_upload_photo', 'linkedin_upload_cover'],
 }
+
+/**
+ * Run arbitrary JavaScript inside a signed-in session: whoever holds the gateway
+ * token (including a prompt-injected agent) could read the account's access
+ * token with one call. Refused unless the policy file says "allowEval": true,
+ * and enforced on load so policy files written before this rule are covered too.
+ */
+export const EVAL_ACTIONS = ['flow_eval', 'linkedin_eval', 'tiktok_eval']
+
+/** Wipes a whole account in one call: always asks, even if the policy file leaves it out. */
+export const ALWAYS_ASK = ['tiktok_delete_all_videos']
 
 export const APPROVAL_TIMEOUT_MS = 60_000
 
@@ -41,7 +52,7 @@ export function actionName(method: string, params: Record<string, unknown>): str
   return canonicalAction(method === 'tools.call' && typeof params.name === 'string' ? params.name : method)
 }
 
-const WRITE = /(^|_)(send|create|delete|remove|like|unlike|comment|reply|react|share|follow|hide|update|upload|submit|vote|subscribe|mark_read|connection|edit|switch_account|generate|extend|remember|decide|save|run)(_|$)/
+const WRITE = /(^|_)(send|create|delete|remove|like|unlike|comment|reply|react|share|follow|hide|update|upload|submit|vote|subscribe|mark_read|connection|edit|switch_account|generate|extend|remember|decide|save|run|ask|download|add|open|eval)(_|$)/
 
 export function isWriteAction(canonical: string): boolean {
   return !canonical.startsWith('tools_list') && WRITE.test(canonical)
@@ -51,7 +62,7 @@ export function isWriteAction(canonical: string): boolean {
 export function summarizeParams(params: Record<string, unknown>): Record<string, string> {
   const args = (params.args && typeof params.args === 'object' ? params.args : params) as Record<string, unknown>
   const out: Record<string, string> = {}
-  for (const k of ['account', 'activityId', 'commentId', 'chatId', 'msgId', 'videoId', 'itemId', 'postId', 'subreddit', 'conversationUrn', 'profileUrl', 'filePath', 'privacy', 'visibility']) {
+  for (const k of ['account', 'platform', 'activityId', 'commentId', 'chatId', 'msgId', 'videoId', 'itemId', 'postId', 'subreddit', 'conversationUrn', 'profileUrl', 'filePath', 'image', 'localFilePath', 'imagePath', 'mediaUrl', 'mediaId', 'fileId', 'conversationId', 'projectId', 'privacy', 'visibility']) {
     if (args[k] != null && args[k] !== '') out[k] = String(args[k]).slice(0, 120)
   }
   for (const k of ['text', 'message', 'caption', 'bio', 'title', 'body']) {
@@ -65,10 +76,11 @@ export function summarizeParams(params: Record<string, unknown>): Record<string,
 
 export async function loadPolicy(file: string): Promise<ActionPolicy> {
   try {
-    const raw = JSON.parse(await readFile(file, 'utf8')) as Partial<ActionPolicy>
+    const raw = JSON.parse(await readFile(file, 'utf8')) as Partial<ActionPolicy> & { allowEval?: unknown }
+    const blocked = Array.isArray(raw.blocked) ? raw.blocked.map(String) : DEFAULT_POLICY.blocked
     return {
-      blocked: Array.isArray(raw.blocked) ? raw.blocked.map(String) : DEFAULT_POLICY.blocked,
-      requireApproval: Array.isArray(raw.requireApproval) ? raw.requireApproval.map(String) : DEFAULT_POLICY.requireApproval,
+      blocked: raw.allowEval === true ? blocked : [...new Set([...blocked, ...EVAL_ACTIONS])],
+      requireApproval: [...new Set([...(Array.isArray(raw.requireApproval) ? raw.requireApproval.map(String) : DEFAULT_POLICY.requireApproval), ...ALWAYS_ASK])],
     }
   } catch (e) {
     // First run: write the defaults so the user has a file to edit.

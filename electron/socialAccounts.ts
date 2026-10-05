@@ -13,7 +13,7 @@
  * its store, so its labels, names and publicIds are not duplicated.
  */
 import { app, BrowserWindow, session } from 'electron'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { rememberedView } from './sessions'
 import { getSavedLinkedInAccounts, saveLinkedInAccounts } from './linkedin/linkedin'
@@ -39,8 +39,40 @@ const DEFAULT_IDS: Record<SocialPlatform, string[]> = {
 type Stored = Partial<Record<SocialPlatform, { id: string; label: string }[]>>
 const file = () => join(app.getPath('userData'), 'social-accounts.json')
 
+export const MAX_SOCIAL_ACCOUNTS = 10
+const MAX_LABEL = 60
+
+// The file is user data on disk: anything that is not a list of numbered slots
+// is dropped, so a hand-edited or half-written file cannot invent partitions.
+export function parseStored(raw: unknown): Stored {
+  const out: Stored = {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const p of SOCIAL_PLATFORMS) {
+    const rows = (raw as Record<string, unknown>)[p]
+    if (!Array.isArray(rows)) continue
+    const clean = rows
+      .filter((r): r is { id: string; label: string } => !!r && typeof r === 'object'
+        && typeof (r as { id?: unknown }).id === 'string' && /^[1-9]\d{0,2}$/.test((r as { id: string }).id)
+        && typeof (r as { label?: unknown }).label === 'string')
+      .map(r => ({ id: r.id, label: cleanLabel(r.label) || `Account ${r.id}` }))
+      .slice(0, MAX_SOCIAL_ACCOUNTS)
+    if (clean.length) out[p] = clean
+  }
+  return out
+}
+
+export function cleanLabel(label: string): string {
+  return label.replace(/\p{Cc}/gu, '').trim().slice(0, MAX_LABEL)
+}
+
 function readStored(): Stored {
-  try { return existsSync(file()) ? JSON.parse(readFileSync(file(), 'utf8')) as Stored : {} } catch { return {} }
+  try { return existsSync(file()) ? parseStored(JSON.parse(readFileSync(file(), 'utf8'))) : {} } catch { return {} }
+}
+
+function writeStored(stored: Stored): void {
+  const tmp = `${file()}.tmp`
+  writeFileSync(tmp, JSON.stringify(stored, null, 2), 'utf8')
+  renameSync(tmp, file())
 }
 
 export function isSocialPlatform(v: unknown): v is SocialPlatform {
@@ -77,14 +109,15 @@ export function resolveSocialAccount(platform: SocialPlatform, ref?: string | nu
 /** A new numbered account slot; the user then signs in with openSocialLogin. */
 export function addSocialAccount(platform: SocialPlatform, label?: string): SocialAccount {
   const all = listSocialAccounts(platform)
+  if (all.length >= MAX_SOCIAL_ACCOUNTS) throw new Error(`${platform} already has ${MAX_SOCIAL_ACCOUNTS} accounts`)
   const next = String(Math.max(0, ...all.map(a => Number(a.id) || 0)) + 1)
-  const name = (label ?? '').trim() || `Account ${next}`
+  const name = cleanLabel(label ?? '') || `Account ${next}`
   if (platform === 'linkedin') {
     saveLinkedInAccounts([...getSavedLinkedInAccounts(), { id: next, label: name, partition: socialPartition(platform, next) }])
   } else {
     const stored = readStored()
     stored[platform] = [...all.map(a => ({ id: a.id, label: a.label })), { id: next, label: name }]
-    writeFileSync(file(), JSON.stringify(stored, null, 2), 'utf8')
+    writeStored(stored)
   }
   return { platform, id: next, label: name, partition: socialPartition(platform, next) }
 }
@@ -116,13 +149,20 @@ export async function socialAccountsStatus(platform?: SocialPlatform) {
 }
 
 /** A visible window on the account's own partition, for the user to sign in once. */
+// One sign-in window per partition: asking again focuses it instead of stacking windows.
+const loginWindows = new Map<string, BrowserWindow>()
+
 export function openSocialLogin(platform: SocialPlatform, ref?: string | number | null): { ok: boolean; account?: SocialAccount; error?: string } {
   const acc = resolveSocialAccount(platform, ref)
   if (!acc) return { ok: false, error: `unknown ${platform} account "${ref}" — list them with social_accounts` }
+  const open = loginWindows.get(acc.partition)
+  if (open && !open.isDestroyed()) { open.show(); open.focus(); return { ok: true, account: acc } }
   const win = new BrowserWindow({
     width: 1100, height: 850, title: `${platform} sign-in — ${acc.label}`,
-    webPreferences: { session: session.fromPartition(`persist:${acc.partition}`), nodeIntegration: false, contextIsolation: true },
+    webPreferences: { session: session.fromPartition(`persist:${acc.partition}`), nodeIntegration: false, contextIsolation: true, sandbox: true },
   })
+  loginWindows.set(acc.partition, win)
+  win.on('closed', () => loginWindows.delete(acc.partition))
   void win.loadURL(SOCIAL_HOME[platform])
   return { ok: true, account: acc }
 }

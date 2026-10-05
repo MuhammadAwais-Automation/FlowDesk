@@ -68,6 +68,15 @@ describe('action policy', () => {
     expect(entries[0]).toMatchObject({ action: 'whatsapp_send_message', outcome: 'failed', chatId: 'c', message: 'hi' })
   })
 
+  it('still asks before deleting every video when the policy file leaves it out', async () => {
+    let asked = 0
+    const { guard } = setup({ blocked: [], requireApproval: [] }, async () => { asked++; return false })
+    let ran = false
+    await guard('tiktok.deleteAllVideos', {}, async () => { ran = true; return { ok: true } }).catch(() => null)
+    expect(asked).toBe(1)
+    expect(ran).toBe(false)
+  })
+
   it('writes a default policy file on first use', async () => {
     const { guard, policyFile } = setup()
     await guard('reddit.status', {}, async () => ({ ok: true }))

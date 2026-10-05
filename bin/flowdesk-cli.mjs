@@ -191,9 +191,19 @@ async function main() {
   if (command === 'reddit') {
     const subCmd = rawArgs[1]
     const { flags, positional } = parseFlags(rawArgs.slice(2))
+    // --account <id|label|partition> picks a registered Reddit account (social accounts reddit).
+    const rdAcct = typeof flags.account === 'string' ? { account: flags.account } : {}
+    const rd = async (method, params = {}) => {
+      const r = await callRpc(method, { ...params, ...rdAcct })
+      if (r && r.ok === false) {
+        console.error(`\x1b[31m[Reddit]\x1b[0m ${r.error || 'failed'}`)
+        process.exit(1)
+      }
+      return r
+    }
 
     if (subCmd === 'status') {
-      const res = await callRpc('reddit.status')
+      const res = await rd('reddit.status')
       console.log('\x1b[36m=== Reddit Identity ===\x1b[0m')
       console.log(`Username:    ${res.username || 'Not signed in'}`)
       console.log(`Total Karma: ${res.totalKarma ?? 'N/A'}`)
@@ -206,7 +216,7 @@ async function main() {
       const sort = flags.sort || 'hot'
       const limit = Number(flags.limit || 10)
       console.log(`\x1b[36mFetching Reddit ${sub ? 'r/' + sub : 'Home'} (${sort}, limit ${limit})...\x1b[0m\n`)
-      const res = await callRpc('reddit.feed', { subreddit: sub, sort, limit })
+      const res = await rd('reddit.feed', { subreddit: sub, sort, limit })
       if (!res.posts || res.posts.length === 0) {
         console.log('No posts found.')
         return
@@ -220,13 +230,13 @@ async function main() {
     }
 
     if (subCmd === 'comments') {
-      const sub = flags.sub || flags.subreddit || positional[0]
-      const postId = flags.post || positional[1]
-      if (!sub || !postId) {
-        console.error('Usage: flowdesk reddit comments --sub <subreddit> --post <postId>')
+      const sub = flags.sub || flags.subreddit || (positional.length > 1 ? positional[0] : undefined)
+      const postId = flags.post || (positional.length > 1 ? positional[1] : positional[0])
+      if (!postId) {
+        console.error('Usage: flowdesk reddit comments --post <postId> [--sub <subreddit>] [--account <id>]')
         return
       }
-      const res = await callRpc('reddit.postComments', { subreddit: sub, postId, limit: Number(flags.limit || 10) })
+      const res = await rd('reddit.postComments', { subreddit: sub, postId, limit: Number(flags.limit || 10) })
       console.log(`\x1b[36m=== Post: ${res.post?.title} ===\x1b[0m\n`)
       if (res.comments) {
         res.comments.forEach(c => {
@@ -242,7 +252,7 @@ async function main() {
         console.error('Usage: flowdesk reddit search <query>')
         return
       }
-      const res = await callRpc('reddit.search', { query, limit: Number(flags.limit || 10) })
+      const res = await rd('reddit.search', { query, limit: Number(flags.limit || 10) })
       console.log(`\x1b[36mSearch results for "${query}":\x1b[0m\n`)
       res.results?.forEach((p, idx) => {
         console.log(`[${idx + 1}] ${p.title} (${p.subreddit}) -> https://reddit.com${p.permalink}`)
@@ -271,7 +281,7 @@ async function main() {
       }
 
       console.log('Publishing...')
-      const res = await callRpc('reddit.createPost', { subreddit: sub, title, body })
+      const res = await rd('reddit.createPost', { subreddit: sub, title, body })
       console.log('\x1b[32mPost created successfully!\x1b[0m', res)
       return
     }
@@ -291,7 +301,7 @@ async function main() {
         return
       }
 
-      const res = await callRpc('reddit.createComment', { postId, parentId, text })
+      const res = await rd('reddit.createComment', { postId, parentId, text })
       console.log('\x1b[32mComment submitted successfully!\x1b[0m', res)
       return
     }
@@ -303,7 +313,7 @@ async function main() {
         console.error('Usage: flowdesk reddit vote --post <postId> --action <UP|DOWN|NONE>')
         return
       }
-      await callRpc('reddit.votePost', { postId, voteState: action })
+      await rd('reddit.votePost', { postId, voteState: action })
       console.log(`\x1b[32mVote updated to ${action} for post ${postId}!\x1b[0m`)
       return
     }
@@ -316,7 +326,7 @@ async function main() {
       }
       const minMultiplier = Number(flags['min-multiplier'] || flags.multiplier || flags.m || 3.0)
       console.log(`\x1b[36mRunning Reddit Viral Outlier Miner on r/${sub} (min ${minMultiplier}x multiplier)...\x1b[0m\n`)
-      const res = await callRpc('reddit.outlier', { subreddit: sub, minMultiplier })
+      const res = await rd('reddit.outlier', { subreddit: sub, minMultiplier })
       console.log(`\x1b[32m=== r/${res.subreddit} Outlier Report ===\x1b[0m`)
       console.log(`Sample Analyzed: ${res.sampleSize} posts`)
       console.log(`Median Upvotes:  ${res.medianScore} | Median Comments: ${res.medianComments}`)
@@ -359,7 +369,7 @@ async function main() {
       const sort = flags.sort || 'hot'
       const limit = Number(flags.limit || 25)
       console.log(`\x1b[36mFetching fast in-session Reddit feed ${sub ? 'r/' + sub : 'Home'} (${sort}, limit ${limit})...\x1b[0m\n`)
-      const res = await callRpc('reddit.api_feed', { subreddit: sub, sort, limit })
+      const res = await rd('reddit.api_feed', { subreddit: sub, sort, limit })
       const posts = res.items || res.posts || []
       if (posts.length === 0) {
         console.log('No posts found.')
@@ -382,7 +392,7 @@ async function main() {
       const sub = flags.subreddit || flags.sub
       const limit = Number(flags.limit || 25)
       console.log(`\x1b[36mFast searching Reddit for "${query}"${sub ? ' in r/' + sub : ''} (limit ${limit})...\x1b[0m\n`)
-      const res = await callRpc('reddit.api_search', { query, subreddit: sub, limit })
+      const res = await rd('reddit.api_search', { query, subreddit: sub, limit })
       const results = res.items || res.results || []
       if (results.length === 0) {
         console.log('No results found.')
@@ -403,7 +413,7 @@ async function main() {
       }
       const limit = Number(flags.limit || 20)
       console.log(`\x1b[36mFetching fast flattened comments for post ${postId} (limit ${limit})...\x1b[0m\n`)
-      const res = await callRpc('reddit.api_post_comments', { postId, limit })
+      const res = await rd('reddit.api_post_comments', { postId, limit })
       if (res.post) {
         console.log(`\x1b[36m=== Post: ${res.post.title || postId} ===\x1b[0m`)
         console.log(`Author: u/${res.post.author || 'unknown'} | Score: ▲ ${res.post.score} | Comments: ${res.post.numComments}\n`)
@@ -420,15 +430,44 @@ async function main() {
   }
 
   // ── WHATSAPP COMMANDS ──────────────────────────────────────────────────────
+  // Every command takes --account <id|label|partition> (default account 1).
   if (command === 'whatsapp') {
     const subCmd = rawArgs[1]
-    const { flags } = parseFlags(rawArgs.slice(2))
+    const { flags, positional } = parseFlags(rawArgs.slice(2))
+    const account = typeof flags.account === 'string' ? flags.account : undefined
+    // The gateway envelope can be ok while the WhatsApp call itself failed.
+    const failed = (res) => {
+      if (res && res.ok === false) {
+        console.error(`\x1b[31m[WhatsApp]\x1b[0m ${res.error || 'failed'}`)
+        process.exitCode = 1
+        return true
+      }
+      return false
+    }
+    const unreadOf = (c) => c.unread ?? c.unreadCount ?? 0
 
-    if (subCmd === 'chats') {
-      const res = await callRpc('whatsapp.listChats', { limit: Number(flags.limit || 10) })
-      console.log('\x1b[36m=== WhatsApp Recent Chats ===\x1b[0m\n')
-      res.chats?.forEach((c, idx) => {
-        console.log(`[${idx + 1}] ${c.name || c.id} ${c.unreadCount > 0 ? '\x1b[31m(' + c.unreadCount + ' unread)\x1b[0m' : ''}`)
+    if (subCmd === 'status') {
+      const res = await callRpc('whatsapp.status', { account })
+      if (failed(res)) return
+      console.log(`WhatsApp account ${res.account}: signedIn=${res.signedIn} ready=${res.ready} chats=${res.chats} contacts=${res.contacts}`)
+      return
+    }
+
+    if (subCmd === 'chats' || subCmd === 'api-chats') {
+      const limit = Number(flags.limit || (subCmd === 'chats' ? 10 : 20))
+      const unread = Boolean(flags.unread || flags['only-unread'] || flags.onlyUnread)
+      const res = await callRpc('whatsapp.listChats', { limit, onlyUnread: unread, account })
+      if (failed(res)) return
+      console.log(`\x1b[36m=== WhatsApp Chats (limit ${limit}${unread ? ', unread only' : ''}) ===\x1b[0m\n`)
+      const chats = res.chats || []
+      if (chats.length === 0) {
+        console.log('No chats found.')
+        return
+      }
+      chats.forEach((c, idx) => {
+        const n = unreadOf(c)
+        const unreadTag = n > 0 ? ` \x1b[31m(${n} unread)\x1b[0m` : ''
+        console.log(`[${idx + 1}] \x1b[33m${c.name || c.id}\x1b[0m${unreadTag} - ID: ${c.id}`)
       })
       return
     }
@@ -436,45 +475,30 @@ async function main() {
     if (subCmd === 'send') {
       const to = flags.to
       const message = flags.msg || flags.message
-      if (!to || !message) {
-        console.error('Usage: flowdesk whatsapp send --to <chatId> --message "<text>" [--yes]')
+      if (!to || typeof message !== 'string' || !message.trim()) {
+        console.error('Usage: flowdesk whatsapp send --to <chatId> --message "<text>" [--account <id>] [--yes]')
         return
       }
-      const confirmed = await confirmAction(`Send WhatsApp message to ${to}?`, Boolean(flags.yes))
+      const confirmed = await confirmAction(`Send WhatsApp message to ${to}${account ? ` from account ${account}` : ''}?`, Boolean(flags.yes))
       if (!confirmed) {
         console.log('Cancelled.')
         return
       }
-      await callRpc('whatsapp.send', { chatId: to, text: message })
-      console.log('\x1b[32mWhatsApp message sent!\x1b[0m')
+      const res = await callRpc('whatsapp.send', { chatId: to, text: message, account })
+      if (failed(res)) return
+      console.log(`\x1b[32mWhatsApp message sent\x1b[0m${res.acked ? ' (server acknowledged)' : ''}`)
       return
     }
 
-    if (subCmd === 'api-chats') {
-      const limit = Number(flags.limit || 20)
-      const unread = Boolean(flags.unread || flags['only-unread'] || flags.onlyUnread)
-      const res = await callRpc('whatsapp.api_chats', { limit, onlyUnread: unread })
-      console.log(`\x1b[36m=== WhatsApp In-Session Chats (limit ${limit}${unread ? ', unread only' : ''}) ===\x1b[0m\n`)
-      const chats = res.chats || []
-      if (chats.length === 0) {
-        console.log('No chats found.')
-        return
-      }
-      chats.forEach((c, idx) => {
-        const unreadTag = c.unreadCount > 0 ? ` \x1b[31m(${c.unreadCount} unread)\x1b[0m` : ''
-        console.log(`[${idx + 1}] \x1b[33m${c.name || c.id}\x1b[0m${unreadTag} - ID: ${c.id}`)
-      })
-      return
-    }
-
-    if (subCmd === 'api-messages') {
+    if (subCmd === 'messages' || subCmd === 'api-messages') {
       const chatId = positional[0] || flags.chatId || flags.chat || flags.to
       if (!chatId) {
-        console.error('Usage: flowdesk whatsapp api-messages <chatId> [--limit <n>]')
+        console.error('Usage: flowdesk whatsapp messages <chatId> [--limit <n>] [--account <id>]')
         return
       }
       const limit = Number(flags.limit || 20)
-      const res = await callRpc('whatsapp.api_messages', { chatId, limit })
+      const res = await callRpc('whatsapp.listMessages', { chatId, limit, account })
+      if (failed(res)) return
       console.log(`\x1b[36m=== WhatsApp Messages for ${chatId} ===\x1b[0m\n`)
       const messages = res.messages || []
       if (messages.length === 0) {
@@ -483,10 +507,14 @@ async function main() {
       }
       messages.forEach((m, idx) => {
         const sender = m.fromMe ? '\x1b[34m[Me]\x1b[0m' : `\x1b[32m[${m.sender || 'Them'}]\x1b[0m`
-        console.log(`[${idx + 1}] ${sender} ${m.body || m.text || ''}`)
+        console.log(`[${idx + 1}] ${sender} ${m.body || m.caption || (m.type && m.type !== 'chat' ? `[${m.type}]` : '')}`)
       })
       return
     }
+
+    console.error('Usage: flowdesk whatsapp status|chats|messages|send ... [--account <id>]')
+    process.exitCode = 1
+    return
   }
 
   // ── LINKEDIN COMMANDS ──────────────────────────────────────────────────────
@@ -512,12 +540,18 @@ async function main() {
     if (subCmd === 'switch') {
       const target = positional[0] || flags.account || flags.a || '1'
       const res = await callRpc('linkedin.switchAccount', { account: target })
+      if (!res.ok) {
+        console.error(`\x1b[31m${res.error || 'Could not switch LinkedIn account.'}\x1b[0m`)
+        process.exitCode = 1
+        return
+      }
       console.log(`\x1b[32mSwitched active LinkedIn account to ${target} (${res.account})\x1b[0m`)
       return
     }
 
     if (subCmd === 'status') {
       const res = await callRpc('linkedin.status', { account })
+      if (!res.ok && res.error) console.error(`\x1b[31m${res.error}\x1b[0m`)
       console.log(`\x1b[36m=== LinkedIn Status (${res.account || 'Account 1'})\x1b[0m\n`)
       console.log(`Authenticated: ${res.signedIn ? '\x1b[32mYES\x1b[0m' : '\x1b[33mNO\x1b[0m'}`)
       if (res.name) console.log(`Name:        ${res.name}`)
@@ -1018,7 +1052,7 @@ async function main() {
       const edit = sub === 'edit'
       const image = edit ? positional[0] : undefined
       const prompt = (edit ? positional.slice(1) : positional).join(' ')
-      if (!prompt || (edit && !image)) return fail(edit ? 'Usage: flowdesk chatgpt edit <image path or flowdesk-image://…> "<change>" [--count N]' : 'Usage: flowdesk chatgpt image "<prompt>" [--count N] [--account <email>]')
+      if (!prompt || (edit && !image)) return fail(edit ? 'Usage: flowdesk chatgpt edit <absolute image path or flowdesk-image://…> "<change>" [--count N] [--account <email>]' : 'Usage: flowdesk chatgpt image "<prompt>" [--count N] [--account <email>]')
       const queued = await callRpc(edit ? 'chatgpt.editImage' : 'chatgpt.generateImage', { prompt, image, count: num(flags.count), account, wait: false })
       return followJobs(queued)
     }
@@ -1374,8 +1408,8 @@ Usage:
   flowdesk chatgpt read <chatId> [--last N]          What was said in one chat
   flowdesk chatgpt search "<words>"                  Full-text search over chats
   flowdesk chatgpt ask "<prompt>" [--chat id] [--model slug] [--account email]
-                                                     New chat, or continue one
-  flowdesk chatgpt image "<prompt>" [--count N]      Generate images (routes across accounts)
+                                                     New chat, or continue one (--account: that account only)
+  flowdesk chatgpt image "<prompt>" [--count N]      Generate images (routes across accounts; --account pins one)
   flowdesk chatgpt edit <image> "<change>"           Edit an image (path or flowdesk-image://)
   flowdesk chatgpt jobs [jobId]                      Image job status
   flowdesk chatgpt library [--limit N] [--cursor c]  Every generated image, newest first
@@ -1401,18 +1435,18 @@ Usage:
                                                      Fast in-session Reddit search JSON API
   flowdesk reddit api-comments <postId> [--limit 20]
                                                      Fast in-session flattened Reddit comments
-  flowdesk reddit comments --sub name --post id      Read comments on a post
+  flowdesk reddit comments --post id [--sub name]    Read comments on a post
   flowdesk reddit search "<query>"                   Search Reddit posts
   flowdesk reddit post --sub name --title "..."      Publish post (with approval prompt)
   flowdesk reddit comment --post id --text "..."     Post comment (with approval prompt)
   flowdesk reddit vote --post id --action UP|DOWN    Upvote or downvote a post
+  (every reddit command takes --account <id|label> from "social accounts reddit"; default account 1)
 
-  flowdesk whatsapp chats [--limit 10]               List recent WhatsApp conversations
-  flowdesk whatsapp api-chats [--limit 20] [--unread]
-                                                     Fast in-session WhatsApp chat list
-  flowdesk whatsapp api-messages <chatId> [--limit 20]
-                                                     Fast in-session WhatsApp messages reader
-  flowdesk whatsapp send --to <id> --message "..."   Send WhatsApp message
+  flowdesk whatsapp status                           Signed in? chats/contacts loaded
+  flowdesk whatsapp chats [--limit 10] [--unread]    List recent WhatsApp conversations (alias: api-chats)
+  flowdesk whatsapp messages <chatId> [--limit 20]   Read one chat (alias: api-messages)
+  flowdesk whatsapp send --to <id> --message "..."   Send WhatsApp message (asks to confirm unless --yes)
+  (every whatsapp command takes --account <id|label> from "social accounts whatsapp"; default account 1)
 
   flowdesk linkedin accounts                         List all connected LinkedIn accounts (Account 1, 2, etc.)
   flowdesk linkedin switch <1|2>                     Switch active displayed LinkedIn account in window
