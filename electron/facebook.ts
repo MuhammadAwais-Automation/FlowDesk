@@ -6,8 +6,9 @@
  * string is built in exactly one place.
  */
 
-import type { WebContents } from 'electron'
-import { findAnyViewByUrl, ensureBackgroundView } from './sessions'
+import { session, type WebContents } from 'electron'
+import { getViewById, ensureBackgroundView } from './sessions'
+import { resolveSocialAccount, SOCIAL_HOME, type SocialAccount } from './socialAccounts'
 import { feedScript, reactScript, commentScript, replyScript, shareScript, followScript, hideScript, type ReactionType, type SharePrivacy } from './facebookBridge'
 
 export interface FacebookResult {
@@ -16,49 +17,109 @@ export interface FacebookResult {
   [key: string]: unknown
 }
 
+/** Which Facebook account a call means: id ("2"), partition or label. Omitted = account 1. */
+export type FacebookAccountRef = string | number | null | undefined
+
 const NOT_OPEN =
   'Facebook is not open. Open the Social page in FlowDesk, select Facebook and sign in, then retry.'
 
-// Visible tab first, else the hidden background window — the MCP/agent path
-// must work without the Social page ever being opened.
-async function getFacebookView(): Promise<{ webContents: WebContents } | null> {
-  const existing = findAnyViewByUrl('facebook.com')
-  if (existing) return existing
+function onPartition(wc: WebContents, partition: string): boolean {
   try {
-    return await ensureBackgroundView('social-facebook', 'social-facebook', 'https://www.facebook.com')
+    return !wc.isDestroyed() && wc.session === session.fromPartition(`persist:${partition}`)
   } catch {
-    return null
+    return false
   }
 }
 
-async function call(script: string): Promise<FacebookResult> {
-  const view = await getFacebookView()
-  if (!view) return { ok: false, error: NOT_OPEN }
+// The account's own view only. This used to take ANY open facebook.com view
+// first, which with two accounts reads (or posts from) the wrong one. The
+// Social page tab and the background window both use the partition as tabId
+// (account 1 = social-facebook), and a view is only used when its session is
+// provably that partition. The MCP/agent path still works without the Social
+// page ever being opened: no tab means a hidden background window.
+async function getFacebookView(acc: SocialAccount): Promise<{ webContents: WebContents } | string> {
+  let view: { webContents: WebContents } | null = getViewById(acc.partition)
+  if (!view) {
+    try {
+      view = await ensureBackgroundView(acc.partition, acc.partition, SOCIAL_HOME.facebook)
+    } catch {
+      return NOT_OPEN
+    }
+  }
+  if (!onPartition(view.webContents, acc.partition)) {
+    return `the open view for facebook account "${acc.id}" is not on its partition ${acc.partition}; refusing to use it`
+  }
+  return view
+}
+
+/** The registry account, or an error result. Never falls back to another account. */
+function facebookAccount(ref: FacebookAccountRef): SocialAccount | FacebookResult {
+  const acc = resolveSocialAccount('facebook', ref)
+  if (acc) return acc
+  return { ok: false, error: `unknown facebook account "${ref}" — list them with social_accounts { platform: "facebook" }` }
+}
+
+async function call(script: string, ref?: FacebookAccountRef): Promise<FacebookResult> {
+  const acc = facebookAccount(ref)
+  if ('ok' in acc) return acc
+  const view = await getFacebookView(acc)
+  if (typeof view === 'string') return { ok: false, error: view, account: acc.id }
   try {
     const result = await view.webContents.executeJavaScript(script)
-    if (result && typeof result === 'object') return result as FacebookResult
-    return { ok: false, error: `bridge returned a non-object: ${String(result)}` }
+    if (result && typeof result === 'object') return { ...(result as FacebookResult), account: acc.id }
+    return { ok: false, error: `bridge returned a non-object: ${String(result)}`, account: acc.id }
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    return { ok: false, error: e instanceof Error ? e.message : String(e), account: acc.id }
   }
+}
+
+/** Refuses an explicit unknown account before any argument or page work. */
+export function unknownFacebookAccount(ref: FacebookAccountRef): FacebookResult | null {
+  const acc = facebookAccount(ref)
+  return 'ok' in acc ? acc : null
 }
 
 const MAX_FEED_COUNT = 20
+// Facebook answers the first feed page with ~4 units whatever count is asked
+// (verified live 2026-10-04: count 5, 10 and 20 all returned 4), so the read
+// follows nextCursor until count is reached. Bounded so one call stays short.
+const MAX_FEED_PAGES = 5
 
 /**
- * Reads the news feed. Read-only.
+ * Reads the news feed. Read-only. May return a few more than `count` when the
+ * last page overshoots; nothing is dropped, so nextCursor never skips items.
  */
-export function fbFeed(count?: number, cursor?: string | null): Promise<FacebookResult> {
+export async function fbFeed(count?: number, cursor?: string | null, account?: FacebookAccountRef): Promise<FacebookResult> {
   const n = Math.min(Math.max(count ?? 5, 1), MAX_FEED_COUNT)
-  return call(feedScript(n, cursor ?? null))
+  const posts: unknown[] = []
+  let next: string | null = cursor ?? null
+  let hasNextPage: boolean | null = null
+  let accountId: unknown
+  for (let page = 0; page < MAX_FEED_PAGES && posts.length < n; page++) {
+    const res = await call(feedScript(n - posts.length, next), account)
+    if (!res.ok) {
+      if (page === 0) return res
+      // Keep what was read; nextCursor still points at the page that failed.
+      return { ok: true, count: posts.length, posts, nextCursor: next, hasNextPage, account: accountId, warning: `stopped early: ${res.error}` }
+    }
+    accountId = res.account
+    const got = Array.isArray(res.posts) ? res.posts : []
+    posts.push(...got)
+    next = typeof res.nextCursor === 'string' && res.nextCursor ? res.nextCursor : null
+    hasNextPage = typeof res.hasNextPage === 'boolean' ? res.hasNextPage : null
+    if (!got.length || !next || hasNextPage === false) break
+  }
+  return { ok: true, count: posts.length, posts, nextCursor: next, hasNextPage, account: accountId }
 }
 
 /**
  * Reacts to a post. `feedbackId` comes from a facebook_feed result, not the
  * post id — the mutation rejects a bare post id.
  */
-export function fbReact(feedbackId: string, reactionType: ReactionType): Promise<FacebookResult> {
-  return call(reactScript(feedbackId, reactionType))
+export function fbReact(feedbackId: string, reactionType: ReactionType, account?: FacebookAccountRef): Promise<FacebookResult> {
+  const bad = unknownFacebookAccount(account)
+  if (bad) return Promise.resolve(bad)
+  return call(reactScript(feedbackId, reactionType), account)
 }
 
 const MAX_COMMENT_LENGTH = 8000
@@ -68,26 +129,30 @@ const MAX_COMMENT_LENGTH = 8000
  * `groupId` is only needed when the post lives inside a group — confirmed
  * live that a plain feed post accepts groupID: null.
  */
-export function fbComment(feedbackId: string, text: string, groupId?: string | null): Promise<FacebookResult> {
+export function fbComment(feedbackId: string, text: string, groupId?: string | null, account?: FacebookAccountRef): Promise<FacebookResult> {
+  const bad = unknownFacebookAccount(account)
+  if (bad) return Promise.resolve(bad)
   const body = String(text ?? '').trim()
   if (!body) return Promise.resolve({ ok: false, error: 'refusing to submit an empty comment' })
   if (body.length > MAX_COMMENT_LENGTH) {
     return Promise.resolve({ ok: false, error: `the comment is ${body.length} characters; keep it under ${MAX_COMMENT_LENGTH}` })
   }
-  return call(commentScript(feedbackId, body, groupId ?? null))
+  return call(commentScript(feedbackId, body, groupId ?? null), account)
 }
 
 /**
  * Replies to a comment, addressed by the post's id and the comment's own id
  * (both numeric, both from a comments-reading tool once one exists).
  */
-export function fbReply(postId: string, commentId: string, text: string, groupId?: string | null): Promise<FacebookResult> {
+export function fbReply(postId: string, commentId: string, text: string, groupId?: string | null, account?: FacebookAccountRef): Promise<FacebookResult> {
+  const bad = unknownFacebookAccount(account)
+  if (bad) return Promise.resolve(bad)
   const body = String(text ?? '').trim()
   if (!body) return Promise.resolve({ ok: false, error: 'refusing to submit an empty reply' })
   if (body.length > MAX_COMMENT_LENGTH) {
     return Promise.resolve({ ok: false, error: `the reply is ${body.length} characters; keep it under ${MAX_COMMENT_LENGTH}` })
   }
-  return call(replyScript(postId, commentId, body, groupId ?? null))
+  return call(replyScript(postId, commentId, body, groupId ?? null), account)
 }
 
 /**
@@ -96,10 +161,12 @@ export function fbReply(postId: string, commentId: string, text: string, groupId
  * 'SELF'/'EVERYONE' are Facebook's stable Graph API vocabulary but unverified
  * against this specific mutation.
  */
-export function fbShare(permalink: string, message?: string, privacy?: SharePrivacy): Promise<FacebookResult> {
+export function fbShare(permalink: string, message?: string, privacy?: SharePrivacy, account?: FacebookAccountRef): Promise<FacebookResult> {
+  const bad = unknownFacebookAccount(account)
+  if (bad) return Promise.resolve(bad)
   const link = String(permalink ?? '').trim()
   if (!link) return Promise.resolve({ ok: false, error: 'refusing to share without a permalink' })
-  return call(shareScript(link, message ?? '', privacy ?? 'FRIENDS'))
+  return call(shareScript(link, message ?? '', privacy ?? 'FRIENDS'), account)
 }
 
 /**
@@ -107,10 +174,12 @@ export function fbShare(permalink: string, message?: string, privacy?: SharePriv
  * follow direction is supported — unfollow uses a different, not-yet-captured
  * mutation.
  */
-export function fbFollow(authorId: string): Promise<FacebookResult> {
+export function fbFollow(authorId: string, account?: FacebookAccountRef): Promise<FacebookResult> {
+  const bad = unknownFacebookAccount(account)
+  if (bad) return Promise.resolve(bad)
   const id = String(authorId ?? '').trim()
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to follow without an authorId' })
-  return call(followScript(id))
+  return call(followScript(id), account)
 }
 
 /**
@@ -118,8 +187,10 @@ export function fbFollow(authorId: string): Promise<FacebookResult> {
  * facebook_feed result. Only hiding a single post is supported — snooze and
  * unfollow-via-this-menu are not, since neither has been captured live yet.
  */
-export function fbHide(nodeId: string): Promise<FacebookResult> {
+export function fbHide(nodeId: string, account?: FacebookAccountRef): Promise<FacebookResult> {
+  const bad = unknownFacebookAccount(account)
+  if (bad) return Promise.resolve(bad)
   const id = String(nodeId ?? '').trim()
   if (!id) return Promise.resolve({ ok: false, error: 'refusing to hide without a nodeId' })
-  return call(hideScript(id))
+  return call(hideScript(id), account)
 }
