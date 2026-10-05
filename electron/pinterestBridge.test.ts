@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  checkBoardUrl, checkBookmark, checkPinId, checkUsername, clampLimit, mapBoards, mapPin, mapPins,
-  mapSuggestions, mapUser, nextBookmark, pinOutliers, resourceGetScript, type PinSummary,
-} from './pinterestBridge'
+import {  checkBoardUrl, checkBookmark, checkCountry, checkPinId, checkTrendType, checkUsername, clampLimit, mapAudience, mapBoards,  mapConversations, mapMe, mapPin, mapPins, mapSuggestions, mapTrends, mapUser, matchTrends, nextBookmark, nicheReport,  pinOutliers, resourceGetScript, type PinSummary,} from './pinterestBridge'
 
 const rawPin = (id: string, saves: number | null, extra: Record<string, unknown> = {}) => ({
   type: 'pin', id, title: `t${id}`, description: 'd', link: 'https://example.com', repin_count: 3, comment_count: 1,
@@ -86,5 +83,72 @@ describe('pinterest mapping', () => {
     expect(out.map(p => p.id)).toEqual(['4'])
     expect(out[0].multiplier).toBe(15)
     expect(pinOutliers([], 3)).toEqual([])
+  })
+})
+
+describe('pinterest signed-in reads (shapes from probes/pin-40..42)', () => {
+  const trend = (term: string, n: number) => ({
+    term, normalizedCount: n, seasonality_score: 0.5, affinity: null,
+    wow_change: { roundedPercentChange: 6, rank: 2 }, mom_change: { roundedPercentChange: 300, rank: 1 }, yoy_change: { roundedPercentChange: 10001, rank: 4 },
+  })
+
+  it('maps trend terms with their changes', () => {
+    const t = mapTrends({ date: '2026-09-30', values: [trend('fall nails', 100), { term: '' }] })
+    expect(t.date).toBe('2026-09-30')
+    expect(t.terms).toEqual([{ term: 'fall nails', volume: 100, weekChange: 6, monthChange: 300, yearChange: 10001, seasonality: 0.5 }])
+    expect(mapTrends(null)).toEqual({ date: null, terms: [] })
+  })
+
+  it('validates country and trend type before any request', () => {
+    expect(checkCountry(undefined)).toBe('US')
+    expect(checkCountry('gb')).toBe('GB')
+    expect(() => checkCountry('USA')).toThrow(/two-letter/)
+    expect(checkTrendType(undefined)).toBe('monthly')
+    expect(checkTrendType('seasonal')).toBe('seasonal')
+    expect(() => checkTrendType('daily')).toThrow(/invalid trend type/)
+  })
+
+  it('matches only trend terms holding every niche word', () => {
+    const lists = { monthly: mapTrends({ values: [trend('minimal logo ideas', 40), trend('fall aesthetic', 90), trend('logo', 10)] }).terms }
+    expect(matchTrends('minimal logo', lists).map(t => t.term)).toEqual(['minimal logo ideas'])
+  })
+
+  it('maps the own profile, audience and conversations', () => {
+    expect(mapMe({ id: '9', username: 'shop', is_partner: true, follower_count: 3, pin_count: 4, board_count: 2 }))
+      .toEqual({ id: '9', username: 'shop', isBusiness: true, followers: 3, pins: 4, boards: 2 })
+    expect(mapMe({})).toBeNull()
+    const aud = mapAudience([{
+      ages: { '25-34': 0.4, '18-24': 0.3 }, genders: { FEMALE: 0.6 }, devices: { IPHONE: 0.5 },
+      categories: [{ name: 'art', id: '1', value: 0.2 }, { name: 'design', id: '2', value: 0.5 }],
+      metros: [{ name: 'Example City', id: '3', value: 0.1 }], countries: [],
+      interestsMap: { design: [{ name: 'logo design', value: 0.3, interestId: '5', href: '/x' }] },
+      pinnerCount: { value: 1000, sizeIsUpperBound: false }, targetAudienceScope: 'pinterest', targetAudienceType: 'impression_plus_engagement',
+    }])
+    expect(aud?.categories.map(c => c.name)).toEqual(['design', 'art'])
+    expect(aud?.topInterests).toEqual([{ category: 'design', name: 'logo design', value: 0.3 }])
+    expect(aud?.size).toBe(1000)
+    expect(mapAudience([])).toBeNull()
+    expect(mapConversations([{
+      type: 'conversation', id: 'c1', unread: 2, users: [{ username: 'me' }, { username: 'buyer' }],
+      last_message: { text: 'hi', sender: { username: 'buyer' }, created_at: 'Mon, 05 Oct 2026' },
+    }, { type: 'other', id: 'x' }])).toEqual([{ id: 'c1', unread: 2, with: ['me', 'buyer'], lastMessage: { text: 'hi', from: 'buyer', at: 'Mon, 05 Oct 2026' } }])
+  })
+
+  it('rolls searched pins into a niche report without double counting', () => {
+    const pins = mapPins([
+      rawPin('1', 100, { link: 'https://www.shop.example.com/a', title: 'Minimal logo design', pinner: { username: 'ann' } }),
+      rawPin('1', 100),
+      rawPin('2', 10, { link: null, pinner: { username: 'bob' } }),
+      rawPin('3', 12, { pinner: { username: 'ann' } }),
+    ])
+    const r = nicheReport(pins)
+    expect(r.pinsScanned).toBe(3)
+    expect(r.medianSaves).toBe(12)
+    expect(r.topPins[0].id).toBe('1')
+    expect(r.outliers.map(p => p.id)).toEqual(['1'])
+    expect(r.topCreators[0]).toEqual({ username: 'ann', pins: 2, saves: 112 })
+    expect(r.topDomains.map(d => d.domain).sort()).toEqual(['example.com', 'shop.example.com'])
+    expect(r.topWords.find(w => w.word === 'logo')).toEqual({ word: 'logo', pins: 1 })
+    expect(nicheReport([]).medianSaves).toBeNull()
   })
 })

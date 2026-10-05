@@ -241,3 +241,162 @@ export function pinOutliers(pins: PinSummary[], minMultiplier: number): (PinSumm
     .map(p => ({ ...p, multiplier: Math.round(((p.saves as number) / base) * 10) / 10 }))
     .sort((a, b) => b.multiplier - a.multiplier)
 }
+
+// ── Signed-in reads (probes/pin-40..42, business hub, 2026-10-05) ────────────
+// All go through ApiResource (a proxy to Pinterest's /v3 API) or a named
+// resource, with the business hub as source page.
+
+export const HUB = { sourceUrl: '/business/hub/', handler: 'www/business/hub.js' } as const
+
+/** Pinterest Trends' four lists, in the order of its own dropdown. */
+export const TREND_TYPES = { monthly: 1, yearly: 2, growing: 3, seasonal: 4 } as const
+export type TrendType = keyof typeof TREND_TYPES
+
+export function checkTrendType(v: unknown): TrendType {
+  if (v === undefined || v === null || v === '') return 'monthly'
+  if (typeof v === 'string' && v in TREND_TYPES) return v as TrendType
+  throw new Error(`invalid trend type — use one of ${Object.keys(TREND_TYPES).join(', ')}`)
+}
+
+export function checkCountry(v: unknown): string {
+  if (v === undefined || v === null || v === '') return 'US'
+  if (typeof v === 'string' && /^[A-Za-z]{2}$/.test(v.trim())) return v.trim().toUpperCase()
+  throw new Error('invalid country — use a two-letter code such as US or GB')
+}
+
+export interface TrendTerm {
+  term: string
+  /** Search volume relative to the top term of the list (100). */
+  volume: number | null
+  /** % change week/month/year over; 10001 means the term is new. */
+  weekChange: number | null
+  monthChange: number | null
+  yearChange: number | null
+  seasonality: number | null
+}
+
+export function mapTrends(data: unknown): { date: string | null; terms: TrendTerm[] } {
+  const d = obj(data)
+  const values = Array.isArray(d.values) ? d.values : []
+  const pct = (v: unknown) => num(obj(v).roundedPercentChange)
+  return {
+    date: str(d.date),
+    terms: values.map(v => obj(v)).filter(v => str(v.term)).map(v => ({
+      term: v.term as string,
+      volume: num(v.normalizedCount),
+      weekChange: pct(v.wow_change),
+      monthChange: pct(v.mom_change),
+      yearChange: pct(v.yoy_change),
+      seasonality: num(v.seasonality_score),
+    })),
+  }
+}
+
+export interface MeSummary { id: string | null; username: string | null; isBusiness: boolean; followers: number | null; pins: number | null; boards: number | null }
+
+export function mapMe(data: unknown): MeSummary | null {
+  const u = obj(data)
+  if (!str(u.id)) return null
+  return { id: str(u.id), username: str(u.username), isBusiness: u.is_partner === true, followers: num(u.follower_count), pins: num(u.pin_count), boards: num(u.board_count) }
+}
+
+const named = (v: unknown) => (Array.isArray(v) ? v : []).map(x => obj(x))
+  .filter(x => str(x.name)).map(x => ({ name: x.name as string, value: num(x.value) }))
+  .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+const numbers = (v: unknown) => Object.fromEntries(Object.entries(obj(v)).filter(([, n]) => num(n) !== null))
+
+export function mapAudience(data: unknown) {
+  const a = obj(Array.isArray(data) ? data[0] : data)
+  if (!Object.keys(a).length) return null
+  const interests = Object.entries(obj(a.interestsMap)).flatMap(([category, list]) =>
+    named(list).map(i => ({ category, ...i }))).sort((x, y) => (y.value ?? 0) - (x.value ?? 0))
+  return {
+    scope: str(a.targetAudienceScope),
+    type: str(a.targetAudienceType),
+    size: num(obj(a.pinnerCount).value),
+    ages: numbers(a.ages),
+    genders: numbers(a.genders),
+    devices: numbers(a.devices),
+    categories: named(a.categories),
+    metros: named(a.metros),
+    countries: named(a.countries),
+    topInterests: interests.slice(0, 25),
+  }
+}
+
+export interface ConversationSummary {
+  id: string
+  unread: number | null
+  with: string[]
+  lastMessage: { text: string | null; from: string | null; at: string | null } | null
+}
+
+export function mapConversations(data: unknown): ConversationSummary[] {
+  return records(data).filter(c => c.type === 'conversation' && str(c.id)).map(c => {
+    const m = obj(c.last_message)
+    return {
+      id: c.id as string,
+      unread: num(c.unread),
+      with: records(c.users).map(u => str(u.username)).filter((u): u is string => !!u),
+      lastMessage: Object.keys(m).length ? { text: str(m.text), from: str(obj(m.sender).username), at: str(m.created_at) } : null,
+    }
+  })
+}
+function records(v: unknown): Raw[] { return (Array.isArray(v) ? v : []).map(x => obj(x)) }
+
+// ── Niche research ───────────────────────────────────────────────────────────
+
+const STOP = new Set('a an and are as at be by for from how i in is it its my of on or our the this to with you your diy ideas idea'.split(' '))
+
+export function words(text: string | null): string[] {
+  return (text ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 2 && !STOP.has(w) && !/^\d+$/.test(w))
+}
+
+function domainOf(link: string | null): string | null {
+  if (!link) return null
+  try { return new URL(link).hostname.replace(/^www\./, '') } catch { return null }
+}
+
+function median(ns: number[]): number | null {
+  if (!ns.length) return null
+  const s = [...ns].sort((a, b) => a - b)
+  const m = Math.floor(s.length / 2)
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
+const top = <T>(m: Map<string, T>, score: (v: T) => number, n: number) =>
+  [...m.entries()].sort((a, b) => score(b[1]) - score(a[1])).slice(0, n)
+
+/** Trend terms that contain every word of the niche (keywords add noise: "aesthetic" matched "fall aesthetic"). */
+export function matchTrends(niche: string, lists: Partial<Record<string, TrendTerm[]>>) {
+  const want = words(niche)
+  return Object.entries(lists).flatMap(([list, terms]) =>
+    (terms ?? []).filter(t => { const have = new Set(words(t.term)); return want.length > 0 && want.every(w => have.has(w)) }).map(t => ({ list, ...t })))
+}
+
+export function nicheReport(pins: PinSummary[]) {
+  const seen = new Set<string>()
+  const uniq = pins.filter(p => !seen.has(p.id) && seen.add(p.id))
+  const saves = uniq.map(p => p.saves).filter((n): n is number => n !== null)
+  const creators = new Map<string, { pins: number; saves: number }>()
+  const domains = new Map<string, { pins: number; saves: number }>()
+  const terms = new Map<string, number>()
+  for (const p of uniq) {
+    const s = p.saves ?? 0
+    if (p.pinner) { const c = creators.get(p.pinner) ?? { pins: 0, saves: 0 }; c.pins++; c.saves += s; creators.set(p.pinner, c) }
+    const d = domainOf(p.link)
+    if (d && d !== 'pinterest.com') { const c = domains.get(d) ?? { pins: 0, saves: 0 }; c.pins++; c.saves += s; domains.set(d, c) }
+    for (const w of new Set(words(`${p.title ?? ''} ${p.description ?? ''}`))) terms.set(w, (terms.get(w) ?? 0) + 1)
+  }
+  return {
+    pinsScanned: uniq.length,
+    medianSaves: median(saves),
+    videoShare: uniq.length ? Math.round((uniq.filter(p => p.isVideo).length / uniq.length) * 100) / 100 : null,
+    withLinkShare: uniq.length ? Math.round((uniq.filter(p => domainOf(p.link)).length / uniq.length) * 100) / 100 : null,
+    topPins: [...uniq].sort((a, b) => (b.saves ?? 0) - (a.saves ?? 0)).slice(0, 10),
+    outliers: pinOutliers(uniq, 3).slice(0, 10),
+    topCreators: top(creators, c => c.saves, 10).map(([username, c]) => ({ username, ...c })),
+    topDomains: top(domains, c => c.pins, 10).map(([domain, c]) => ({ domain, ...c })),
+    topWords: top(terms, n => n, 25).map(([word, pins]) => ({ word, pins })),
+  }
+}

@@ -98,7 +98,11 @@ let guard: Guard = (_m, _p, run) => run()
 import { askBrowserProvider, workerProgress } from '../agent/browserWorkerQueue'
 import { radarCollectOnce, radarReportFor, radarStatus, startRadar, stopRadar } from '../tiktok/tiktokRadar'
 import { loadNiches, removeNiche, upsertNiche } from '../tiktok/tiktokRadarStore'
-import { pinterestBoardPins, pinterestOutlier, pinterestPin, pinterestRelated, pinterestSearch, pinterestStatus, pinterestSuggest, pinterestUser, pinterestUserBoards, pinterestUserPins } from '../pinterest'
+import {
+  pinterestAudience, pinterestBoardPins, pinterestInbox, pinterestMe, pinterestMyBoards, pinterestNicheResearch, pinterestNotifications,
+  pinterestOutlier, pinterestPin, pinterestRelated, pinterestSearch, pinterestStatus, pinterestSuggest, pinterestTrends, pinterestUser,
+  pinterestUserBoards, pinterestUserPins,
+} from '../pinterest'
 
 // Any non-empty account value is passed on as text, so an odd value is refused as unknown instead of meaning account 1.
 const pinAccount = (p: Record<string, unknown>): string | undefined => p.account === undefined || p.account === null || p.account === '' ? undefined : String(p.account)
@@ -389,6 +393,13 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'pinterest.suggest': async (p) => pinterestSuggest(p.term ?? p.query, pinAccount(p)),
   'pinterest.search': async (p) => pinterestSearch(p.query, { limit: p.limit, bookmark: p.bookmark, account: pinAccount(p) }),
   'pinterest.outlier': async (p) => pinterestOutlier({ username: p.username, boardUrl: p.boardUrl }, { limit: p.limit, minMultiplier: p.minMultiplier, account: pinAccount(p) }),
+  'pinterest.me': async (p) => pinterestMe(pinAccount(p)),
+  'pinterest.trends': async (p) => pinterestTrends({ country: p.country, type: p.type, limit: p.limit, account: pinAccount(p) }),
+  'pinterest.audience': async (p) => pinterestAudience(pinAccount(p)),
+  'pinterest.myBoards': async (p) => pinterestMyBoards({ limit: p.limit, bookmark: p.bookmark, account: pinAccount(p) }),
+  'pinterest.inbox': async (p) => pinterestInbox(pinAccount(p)),
+  'pinterest.notifications': async (p) => pinterestNotifications(pinAccount(p)),
+  'pinterest.nicheResearch': async (p) => pinterestNicheResearch({ niche: p.niche, country: p.country, queries: p.queries, account: pinAccount(p) }),
   'social.accounts': async (p) => socialAccountsStatus(isSocialPlatform(p.platform) ? p.platform : undefined),
   'social.addAccount': async (p) => isSocialPlatform(p.platform)
     ? (() => {

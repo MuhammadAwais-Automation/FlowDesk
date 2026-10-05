@@ -252,7 +252,33 @@ async function main() {
       console.log(JSON.stringify(p, null, 2))
       return
     }
-    console.error('Usage: flowdesk pinterest <status|user <name>|boards <name>|pins <name>|board <url>|pin <id|url>|related <id>|suggest <term>|search <query>|outlier <name|boardUrl>> [--account id] [--limit n] [--bookmark b]')
+    const country = typeof flags.country === 'string' ? { country: flags.country } : {}
+    if (subCmd === 'trends') {
+      const res = await pin('pinterest.trends', { ...country, ...(arg ? { type: arg } : {}) })
+      console.log(`${res.type} trends, ${res.country}, ${res.date}  (volume | week% month% year%; 10001 = new)`)
+      res.terms.forEach((t, i) => console.log(`[${i + 1}] ${t.term} — ${t.volume} | ${t.weekChange} ${t.monthChange} ${t.yearChange}`))
+      return
+    }
+    if (subCmd === 'niche' && positional.length) {
+      const r = await pin('pinterest.nicheResearch', { niche: positional.join(' '), ...country })
+      console.log(`Niche "${r.niche}" (${r.country}) — ${r.pinsScanned} pins, median saves ${r.medianSaves}, video ${r.videoShare}, with link ${r.withLinkShare}`)
+      console.log(`Keywords: ${r.keywords.join(', ')}`)
+      console.log(`Trends: ${r.trendMatches.length ? r.trendMatches.map(t => `${t.term} (${t.list})`).join(', ') : r.trendNote || 'none in the top lists of this country'}`)
+      console.log(`Domains: ${r.topDomains.map(d => `${d.domain} ${d.pins}`).join(', ')}`)
+      console.log(`Words: ${r.topWords.slice(0, 15).map(w => w.word).join(', ')}`)
+      console.log('Outliers:')
+      return showPins({ outliers: r.outliers })
+    }
+    if (subCmd === 'me' || subCmd === 'notifications' || subCmd === 'audience' || subCmd === 'inbox') {
+      console.log(JSON.stringify(await pin(`pinterest.${subCmd}`), null, 2))
+      return
+    }
+    if (subCmd === 'my-boards') {
+      const res = await pin('pinterest.myBoards')
+      res.boards.forEach((b, i) => console.log(`[${i + 1}] ${b.name} — ${b.pinCount ?? '?'} pins, ${b.privacy || '-'} — ${b.url}`))
+      return
+    }
+    console.error('Usage: flowdesk pinterest <status|user <name>|boards <name>|pins <name>|board <url>|pin <id|url>|related <id>|suggest <term>|search <query>|outlier <name|boardUrl>|trends [monthly|yearly|growing|seasonal]|niche <niche>|me|my-boards|audience|inbox|notifications> [--account id] [--country US] [--limit n] [--bookmark b]')
     process.exit(1)
   }
 
@@ -1494,7 +1520,7 @@ Usage:
   flowdesk flow credits                              Check Google Flow credits
   flowdesk flow image --project id --prompt "..."    Generate image in Flow
 
-  flowdesk pinterest <status|user|boards|pins|board|pin|related|suggest|search|outlier> [--account id]   Read Pinterest (search needs sign-in)
+  flowdesk pinterest <status|user|boards|pins|board|pin|related|suggest|search|outlier|trends|niche|me|my-boards|audience|inbox|notifications> [--account id]   Read Pinterest (search, trends, niche and own-account reads need sign-in)
   flowdesk reddit status                             View authenticated username & karma
   flowdesk reddit feed [--sub name] [--sort hot]     Browse subreddit or home feed
   flowdesk reddit outlier <subreddit> [--min-multiplier 3.0]

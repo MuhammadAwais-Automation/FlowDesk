@@ -17,7 +17,7 @@ vi.mock('./socialAccounts', () => ({
   isSignedIn: async () => signedIn,
 }))
 
-const { pinterestPin, pinterestSearch, pinterestStatus, pinterestUser, pinterestUserPins } = await import('./pinterest')
+const { pinterestNicheResearch, pinterestPin, pinterestSearch, pinterestStatus, pinterestTrends, pinterestUser, pinterestUserPins } = await import('./pinterest')
 
 describe('pinterest account routing', () => {
   beforeEach(() => { opened.length = 0; signedIn = false; answer = { ok: true, status: 200, code: 0, data: [], bookmark: null } })
@@ -49,5 +49,15 @@ describe('pinterest account routing', () => {
     expect(String(out.error)).toContain('signed-in accounts')
     signedIn = true
     expect(await pinterestSearch('minimal logo')).toMatchObject({ ok: true, pins: [] })
+  })
+
+  it('says signed-in tools need sign-in and refuses bad input before opening a page', async () => {
+    const out = await pinterestTrends()
+    expect(out.ok).toBe(false)
+    expect(String(out.error)).toContain('needs a signed-in Pinterest account')
+    expect(opened).toEqual([])
+    expect((await pinterestTrends({ country: 'USA' })).error).toMatch(/two-letter/)
+    expect((await pinterestNicheResearch({ niche: '  ' })).error).toBe('niche is empty')
+    expect(opened).toEqual([])
   })
 })

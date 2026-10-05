@@ -10,9 +10,10 @@ import type { WebContents } from 'electron'
 import { ensureBackgroundView } from './sessions'
 import { isSignedIn, resolveSocialAccount, type SocialAccount } from './socialAccounts'
 import {
-  checkBoardId, checkBoardUrl, checkBookmark, checkPinId, checkUsername, clampLimit, mapBoards, mapPin, mapPins,
-  mapSuggestions, mapUser, nextBookmark, pinOutliers, resourceGetScript,
-  type PinSummary, type ResourceAnswer, type ResourceCall,
+  HUB, TREND_TYPES, checkBoardId, checkBoardUrl, checkBookmark, checkCountry, checkPinId, checkTrendType, checkUsername,
+  clampLimit, mapAudience, mapBoards, mapConversations, mapMe, mapPin, mapPins, mapSuggestions, mapTrends, mapUser,
+  matchTrends, nextBookmark, nicheReport, pinOutliers, resourceGetScript,
+  type PinSummary, type ResourceAnswer, type ResourceCall, type TrendTerm, type TrendType,
 } from './pinterestBridge'
 
 export interface PinterestResult {
@@ -205,5 +206,170 @@ export function pinterestOutlier(source: { username?: unknown; boardUrl?: unknow
     if (!page.ok) return page
     const pins = page.pins as PinSummary[]
     return { ok: true, account: page.account, scanned: pins.length, minMultiplier: m, outliers: pinOutliers(pins, m) }
+  })
+}
+
+// ── Signed-in reads ──────────────────────────────────────────────────────────
+
+const api = (url: string, data: Record<string, unknown>): ResourceCall => ({ resource: 'ApiResource', options: { url, data }, ...HUB })
+
+/** Signed-out accounts get errors or empty answers here; say why instead. */
+async function needsSignIn(account: PinterestAccountRef, what: string): Promise<PinterestResult | null> {
+  const acc = pinterestAccount(account)
+  if (!acc) return unknownPinterestAccount(account)
+  if ((await isSignedIn(acc)) === true) return null
+  return { ok: false, account: acc.id, error: `${what} needs a signed-in Pinterest account — account ${acc.id} is signed out. Sign in once with social_open_login { platform: "pinterest" }.` }
+}
+
+async function myProfile(account: PinterestAccountRef) {
+  const a = await resource(account, api('/v3/users/me/', { fields: 'user.id,user.username,user.is_partner,user.follower_count,user.pin_count,user.board_count' }))
+  return { a, me: a.ok ? mapMe(a.data) : null }
+}
+
+export function pinterestMe(account?: PinterestAccountRef): Promise<PinterestResult> {
+  return guarded(async () => {
+    const gate = await needsSignIn(account, 'pinterest_me')
+    if (gate) return gate
+    const { a, me } = await myProfile(account)
+    if (!me) return failed(a, 'own profile')
+    return { ok: true, account: a.account, me }
+  })
+}
+
+async function trendList(account: PinterestAccountRef, country: string, type: TrendType, count: number) {
+  const date = await resource(account, api('/v3/trends/latest_available_date/', {}))
+  if (!date.ok) return { a: date, terms: [] as TrendTerm[], date: null }
+  const a = await resource(account, api('/v3/trends/top/search_query/', {
+    country, end_date: mapTrends(date.data).date ?? '', num_terms_to_return: count, trends_preset: TREND_TYPES[type],
+  }))
+  const t = mapTrends(a.data)
+  return { a, terms: t.terms, date: t.date }
+}
+
+/** Pinterest Trends: the top search terms of a country, with week/month/year change. */
+export function pinterestTrends(o: { country?: unknown; type?: unknown; limit?: unknown; account?: PinterestAccountRef } = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const country = checkCountry(o.country)
+    const type = checkTrendType(o.type)
+    const gate = await needsSignIn(o.account, 'pinterest_trends')
+    if (gate) return gate
+    const { a, terms, date } = await trendList(o.account, country, type, clampLimit(o.limit, 25, 50))
+    if (!a.ok) {
+      if (a.status === 400) return { ok: false, account: a.account, error: `Pinterest Trends has no data for country "${country}" — try US, GB, CA, AU, DE or FR` }
+      return failed(a, 'trends')
+    }
+    return { ok: true, account: a.account, country, type, date, terms }
+  })
+}
+
+/** Audience insights from the business hub: ages, genders, devices, metros, interests. */
+export function pinterestAudience(account?: PinterestAccountRef): Promise<PinterestResult> {
+  return guarded(async () => {
+    const gate = await needsSignIn(account, 'pinterest_audience')
+    if (gate) return gate
+    const { a: m, me } = await myProfile(account)
+    if (!me?.id) return failed(m, 'own profile')
+    const a = await resource(account, { resource: 'AudienceInsightsDataResource', options: {
+      business_id: me.id, audience_business_id: '0', audience_type: 'NC_IMPRESSION_PLUS_ENGAGEMENT_30d', audience_id: '0',
+      advertiser_id: '0', should_return_comparison_audience: false, is_comparison_tab: false,
+    }, ...HUB })
+    if (!a.ok) return failed(a, 'audience insights')
+    const audience = mapAudience(a.data)
+    return audience ? { ok: true, account: a.account, audience } : { ok: false, account: a.account, error: 'no audience insights — they need a business account' }
+  })
+}
+
+/** The account's own boards, secret ones included. */
+export function pinterestMyBoards(o: PageOptions = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const bookmark = checkBookmark(o.bookmark)
+    const gate = await needsSignIn(o.account, 'pinterest_my_boards')
+    if (gate) return gate
+    const { a: m, me } = await myProfile(o.account)
+    if (!me?.username) return failed(m, 'own profile')
+    const a = await resource(o.account, { resource: 'BoardsResource', options: {
+      username: me.username, page_size: clampLimit(o.limit), privacy_filter: 'all', sort: 'last_pinned_to', field_set_key: 'detailed',
+      ...(bookmark ? { bookmarks: [bookmark] } : {}),
+    }, ...HUB })
+    if (!a.ok) return failed(a, 'own boards')
+    return { ok: true, account: a.account, username: me.username, boards: mapBoards(a.data), nextBookmark: nextBookmark(a.bookmark) }
+  })
+}
+
+/** Direct-message conversations: who, unread count, last message. */
+export function pinterestInbox(account?: PinterestAccountRef): Promise<PinterestResult> {
+  return guarded(async () => {
+    const gate = await needsSignIn(account, 'pinterest_inbox')
+    if (gate) return gate
+    const a = await resource(account, { resource: 'ConversationsResource', options: { field_set_key: 'default' }, ...HUB })
+    if (!a.ok) return failed(a, 'inbox')
+    return { ok: true, account: a.account, conversations: mapConversations(a.data) }
+  })
+}
+
+/** Unread counts: notifications, unseen conversations, unread comments on own pins. */
+export function pinterestNotifications(account?: PinterestAccountRef): Promise<PinterestResult> {
+  return guarded(async () => {
+    const gate = await needsSignIn(account, 'pinterest_notifications')
+    if (gate) return gate
+    const badge = await resource(account, { resource: 'NewsHubBadgeResource', options: {}, ...HUB })
+    if (!badge.ok) return failed(badge, 'notifications')
+    const b = (badge.data ?? {}) as Record<string, unknown>
+    const { me } = await myProfile(account)
+    const inter = me?.id ? await resource(account, api(`/v3/interactions/users/${me.id}/`, { page_size: 10 })) : null
+    // news_hub_count comes as a number, interactions' unread as a string ("0").
+    const n = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : null)
+    return {
+      ok: true, account: badge.account,
+      notifications: n(b.news_hub_count),
+      unseenConversations: n(b.conversations_unseen_count),
+      unreadComments: n((inter?.data as { unread?: unknown } | null | undefined)?.unread),
+    }
+  })
+}
+
+/**
+ * Niche research in one call: Pinterest's autocomplete for the niche, the
+ * country's four trend lists matched against it, then signed-in search on the
+ * best phrases, rolled up into top pins, outliers, creators, outbound domains
+ * and the words winning pins use. Read-only; about 12 requests, one at a time.
+ */
+export function pinterestNicheResearch(o: { niche?: unknown; country?: unknown; queries?: unknown; account?: PinterestAccountRef } = {}): Promise<PinterestResult> {
+  return guarded(async () => {
+    const niche = typeof o.niche === 'string' ? o.niche.trim().slice(0, 100) : ''
+    if (!niche) return { ok: false, error: 'niche is empty' }
+    const country = checkCountry(o.country)
+    const queries = typeof o.queries === 'number' && o.queries >= 1 ? Math.min(5, Math.floor(o.queries)) : 3
+    const gate = await needsSignIn(o.account, 'pinterest_niche_research')
+    if (gate) return gate
+    const sug = await pinterestSuggest(niche, o.account)
+    const keywords = sug.ok ? (sug.suggestions as { query: string }[]).map(s => s.query) : []
+    const lists: Partial<Record<TrendType, TrendTerm[]>> = {}
+    let trendNote: string | null = null
+    for (const type of Object.keys(TREND_TYPES) as TrendType[]) {
+      const { a, terms } = await trendList(o.account, country, type, 50)
+      if (!a.ok) { trendNote = a.status === 400 ? `no Pinterest Trends data for ${country}` : `trends failed (${a.status})`; break }
+      lists[type] = terms
+    }
+    const phrases = [niche, ...keywords.filter(k => k.toLowerCase() !== niche.toLowerCase())].slice(0, queries)
+    const pins: PinSummary[] = []
+    const searched: { query: string; pins: number; error?: string }[] = []
+    for (const q of phrases) {
+      const r = await pinterestSearch(q, { account: o.account, limit: 50 })
+      const got = r.ok ? (r.pins as PinSummary[]) : []
+      searched.push({ query: q, pins: got.length, ...(r.ok ? {} : { error: r.error }) })
+      pins.push(...got)
+    }
+    return {
+      ok: true,
+      account: pinterestAccount(o.account)?.id,
+      niche,
+      country,
+      keywords,
+      trendMatches: matchTrends(niche, lists),
+      trendNote,
+      searched,
+      ...nicheReport(pins),
+    }
   })
 }
