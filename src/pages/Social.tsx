@@ -18,7 +18,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { RotateCw, User, Edit2, Trash2 } from 'lucide-react'
 import { SOCIAL_PLATFORMS, DEFAULT_PLATFORM_ID } from '@/config/socialPlatforms'
-import type { GmailSession } from '@/types/electron'
+import type { GmailSession, SocialAccountRow } from '@/types/electron'
 
 const RAIL_W = 64
 const TOP_H = 44
@@ -41,6 +41,11 @@ interface LinkedInAccount {
   label: string
   partition: string
 }
+
+// Platforms whose account list comes from the main-process social registry
+// (electron/socialAccounts.ts), so the switcher and the MCP/CLI tools agree on
+// which slot is which.
+const REGISTRY_SWITCHER = new Set(['pinterest', 'whatsapp', 'facebook'])
 
 const DEFAULT_LINKEDIN_ACCOUNTS: LinkedInAccount[] = [
   { id: '1', label: 'Account 1 (Primary)', partition: 'social-linkedin' },
@@ -90,6 +95,19 @@ export default function Social({ isActive }: Props) {
   })
 
   const platform = SOCIAL_PLATFORMS.find(p => p.id === activeId) ?? SOCIAL_PLATFORMS[0]
+  const usesRegistry = REGISTRY_SWITCHER.has(platform.id)
+  const [registryAccounts, setRegistryAccounts] = useState<SocialAccountRow[]>([])
+  const [registrySelected, setRegistrySelected] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('socialRegistrySelected') || '{}') as Record<string, string> } catch { return {} }
+  })
+
+  const loadRegistry = useCallback(async () => {
+    if (!usesRegistry || !api.socialAccounts) return
+    const res = await api.socialAccounts(platform.id).catch(() => null)
+    setRegistryAccounts(res?.ok && res.accounts ? res.accounts : [])
+  }, [api, platform.id, usesRegistry])
+
+  useEffect(() => { void loadRegistry() }, [loadRegistry])
 
   useEffect(() => {
     Promise.all([
@@ -111,6 +129,11 @@ export default function Social({ isActive }: Props) {
   const currentSession = gmailSessions.find(s => s.email === selectedEmail) ?? gmailSessions[0]
   const currentTikTok = tiktokAccounts.find(a => a.id === selectedTikTokId) ?? tiktokAccounts[0]
   const currentLinkedIn = linkedinAccounts.find(a => a.id === selectedLinkedInId) ?? linkedinAccounts[0]
+  const platformRegistry = registryAccounts.filter(a => a.platform === platform.id)
+  const selectedRegistryId = registrySelected[platform.id] ?? '1'
+  const currentRegistry = usesRegistry
+    ? platformRegistry.find(a => a.id === selectedRegistryId) ?? platformRegistry[0]
+    : undefined
 
   let effectivePartition = platform.partition
   let effectiveTabId = `social-${platform.id}`
@@ -124,6 +147,9 @@ export default function Social({ isActive }: Props) {
   } else if (platform.id === 'linkedin' && currentLinkedIn) {
     effectivePartition = currentLinkedIn.partition
     effectiveTabId = currentLinkedIn.id === '1' ? 'social-linkedin' : `social-linkedin-${currentLinkedIn.id}`
+  } else if (currentRegistry) {
+    effectivePartition = currentRegistry.partition
+    effectiveTabId = currentRegistry.id === '1' ? `social-${platform.id}` : `social-${platform.id}-${currentRegistry.id}`
   }
 
   // ── Sidebar resize ────────────────────────────────────────────────
@@ -192,6 +218,28 @@ export default function Social({ isActive }: Props) {
   function handleAccountChange(email: string) {
     setSelectedEmail(email)
     localStorage.setItem('socialAccountEmail', email)
+  }
+
+  function handleRegistryChange(id: string) {
+    const next = { ...registrySelected, [platform.id]: id }
+    setRegistrySelected(next)
+    localStorage.setItem('socialRegistrySelected', JSON.stringify(next))
+  }
+
+  async function handleAddRegistryAccount() {
+    const res = await api.socialAddAccount?.(platform.id).catch(() => null)
+    if (!res?.ok || !res.account) { if (res?.error) window.alert(res.error); return }
+    await loadRegistry()
+    handleRegistryChange(res.account.id)
+  }
+
+  async function handleRenameRegistryAccount() {
+    if (!currentRegistry) return
+    const newName = window.prompt('Enter account label:', currentRegistry.label)
+    if (!newName || !newName.trim()) return
+    const res = await api.socialAddAccount?.(platform.id, newName.trim(), currentRegistry.id).catch(() => null)
+    if (res && !res.ok && res.error) window.alert(res.error)
+    await loadRegistry()
   }
 
   function handleTikTokChange(id: string) {
@@ -381,6 +429,43 @@ export default function Social({ isActive }: Props) {
                     <Trash2 size={12} />
                   </button>
                 )}
+              </div>
+            )}
+
+            {/* Registry Multi-Account Switcher (Pinterest, WhatsApp, Facebook) */}
+            {usesRegistry && platformRegistry.length > 0 && (
+              <div className="flex items-center gap-1.5 ml-2 pl-3 border-l border-[#D6CFC0]">
+                <User size={13} className="text-stone-500 shrink-0" />
+                <span className="font-retro-sans text-[11px] text-stone-600 hidden sm:inline">
+                  Account:
+                </span>
+                <select
+                  value={currentRegistry?.id ?? '1'}
+                  onChange={e => {
+                    if (e.target.value === '__add_new__') {
+                      void handleAddRegistryAccount()
+                    } else {
+                      handleRegistryChange(e.target.value)
+                    }
+                  }}
+                  className="font-retro-sans text-xs bg-[#FAF7F0] border border-[#D6CFC0] rounded px-2 py-0.5 text-stone-800 focus:outline-none focus:ring-1 focus:ring-stone-400 cursor-pointer"
+                >
+                  {platformRegistry.map(acc => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.label}{acc.signedIn === false ? ' (signed out)' : ''}
+                    </option>
+                  ))}
+                  <option value="__add_new__">+ Add New Account…</option>
+                </select>
+
+                <button
+                  type="button"
+                  title="Rename account label"
+                  onClick={() => void handleRenameRegistryAccount()}
+                  className="p-1 hover:bg-[#FAF7F0] rounded text-stone-500 hover:text-stone-800 transition-colors"
+                >
+                  <Edit2 size={12} />
+                </button>
               </div>
             )}
 

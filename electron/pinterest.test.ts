@@ -40,7 +40,7 @@ describe('pinterest account routing', () => {
     answer = { ok: false, status: 404 }
     const out = await pinterestUser('nobody-here')
     expect(out).toMatchObject({ ok: false, error: 'user "nobody-here" not found on Pinterest', account: '1' })
-    expect(opened).toEqual(['pinterest-bg-1'])
+    expect(opened).toEqual(['social-pinterest']) // same tab as the Social page, so one Chromium per partition
   })
 
   it('explains that search needs sign-in when a signed-out account gets nothing back', async () => {

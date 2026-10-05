@@ -156,6 +156,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('tiktok:accountSwitched', listener)
   },
 
+  // Social account registry (Pinterest, WhatsApp, Facebook switchers)
+  socialAccounts: (platform: string) =>
+    ipcRenderer.invoke('social:accounts', platform),
+  socialAddAccount: (platform: string, label?: string, account?: string) =>
+    ipcRenderer.invoke('social:addAccount', platform, label, account),
+
   // LinkedIn Multi-Account state sync
   linkedinSetActiveAccount: (account: string | number) =>
     ipcRenderer.invoke('linkedin:setActiveAccount', account),

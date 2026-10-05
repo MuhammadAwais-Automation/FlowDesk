@@ -34,7 +34,7 @@ export function unknownPinterestAccount(ref: PinterestAccountRef): PinterestResu
 }
 
 async function pinterestView(acc: SocialAccount): Promise<WebContents> {
-  const view = await ensureBackgroundView(`pinterest-bg-${acc.id}`, acc.partition, HOME)
+  const view = await ensureBackgroundView(acc.id === '1' ? 'social-pinterest' : `social-pinterest-${acc.id}`, acc.partition, HOME)
   return view.webContents
 }
 

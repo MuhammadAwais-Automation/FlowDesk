@@ -18,6 +18,22 @@ export interface ActionLogEntry {
   [detail: string]: string | undefined
 }
 
+/** One account slot from the social registry (electron/socialAccounts.ts). */
+export interface SocialAccountRow {
+  platform: string
+  id: string
+  label: string
+  partition: string
+  signedIn?: boolean | null
+  google?: string | null
+}
+
+export interface SocialAccountsResult {
+  ok: boolean
+  accounts?: SocialAccountRow[]
+  error?: string
+}
+
 export interface GmailSession {
   email: string
   label: string | null
@@ -280,6 +296,8 @@ export interface ElectronAPI {
   clearPartitionStorage: (partition: string) => Promise<void>
   tiktokSetActiveAccount?: (account: string | number) => Promise<boolean>
   onTikTokAccountSwitched?: (cb: (accountId: string) => void) => () => void
+  socialAccounts?: (platform: string) => Promise<SocialAccountsResult>
+  socialAddAccount?: (platform: string, label?: string, account?: string) => Promise<{ ok: boolean; account?: SocialAccountRow; error?: string }>
   linkedinSetActiveAccount?: (account: string | number) => Promise<boolean>
   linkedinGetAccounts?: () => Promise<unknown>
   linkedinSaveAccounts?: (accounts: unknown) => Promise<boolean>
