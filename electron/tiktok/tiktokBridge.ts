@@ -77,8 +77,46 @@ export function tiktokFeedScript(limit = 20): string {
         })
       }
 
+      // The /explore grid renders its cards without /video/ links (and as empty
+      // placeholders in a background window), so read the item list the grid's
+      // own React props hold (probes tkf-01..05: listInfo.items, the
+      // /api/explore/item_list/ items).
+      let via = 'dom'
+      if (extracted.length === 0) {
+        const grid = document.querySelector('[data-e2e="explore-item-list"]')
+        const cell = grid && grid.children[0]
+        const fiberKey = cell ? Object.keys(cell).find(k => k.startsWith('__reactFiber')) : null
+        let f = fiberKey ? cell[fiberKey] : null
+        let items = null
+        for (let i = 0; f && i < 20 && !items; i++, f = f.return) {
+          const p = f.memoizedProps
+          if (p && p.listInfo && Array.isArray(p.listInfo.items)) items = p.listInfo.items
+        }
+        for (const it of items || []) {
+          if (!it || !it.id || seen.has(String(it.id))) continue
+          seen.add(String(it.id))
+          const author = (it.author && it.author.uniqueId) || null
+          const s = it.stats || {}
+          extracted.push({
+            author,
+            videoId: String(it.id),
+            url: 'https://www.tiktok.com/@' + (author || 'user') + '/video/' + it.id,
+            views: Number(s.playCount) || null,
+            likes: Number(s.diggCount) || null,
+            comments: Number(s.commentCount) || null,
+            shares: Number(s.shareCount) || null,
+            coverImg: (it.video && (it.video.cover || it.video.originCover)) || null,
+            title: it.desc || null,
+            music: (it.music && it.music.title) || null,
+            createTime: it.createTime ? new Date(Number(it.createTime) * 1000).toISOString() : null,
+          })
+        }
+        if (extracted.length) via = 'react_props'
+      }
+
       return {
         ok: true,
+        via,
         url: window.location.href,
         count: extracted.length,
         videos: extracted.slice(0, ${Math.max(1, Math.min(50, limit))}),

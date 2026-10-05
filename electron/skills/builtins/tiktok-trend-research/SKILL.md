@@ -32,6 +32,12 @@ inputs:
     description: "Target account ID: 1, 2, or 3. Defaults to active account"
 ---
 
+> The `tiktok` skill is the full, current reference for every TikTok tool. Account routing: every
+> tool takes `account` (id, label or partition from `tiktok_accounts`); an unknown account fails and never
+> falls back to another one. Uploads, posts, caption edits, deletes, bio changes and warmup `autoLike`
+> change the public account: call them only after the user approved that exact action.
+
+
 ## When to use
 - Identifying high-demand search topics, trending queries, and viral hooks before producing video content.
 - Scanning competitor creators to identify mathematically proven viral outliers (3x to 10x+ above median views).

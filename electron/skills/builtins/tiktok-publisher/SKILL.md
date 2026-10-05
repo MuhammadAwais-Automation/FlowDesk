@@ -33,6 +33,12 @@ inputs:
     description: "Target account ID: 1, 2, or 3. Defaults to active account"
 ---
 
+> The `tiktok` skill is the full, current reference for every TikTok tool. Account routing: every
+> tool takes `account` (id, label or partition from `tiktok_accounts`); an unknown account fails and never
+> falls back to another one. Uploads, posts, caption edits, deletes, bio changes and warmup `autoLike`
+> change the public account: call them only after the user approved that exact action.
+
+
 ## When to use
 - A rendered mp4 video file is saved on disk and ready to upload to TikTok.
 - Uploading in private mode ("Only you") for manual review and QA before broad release.

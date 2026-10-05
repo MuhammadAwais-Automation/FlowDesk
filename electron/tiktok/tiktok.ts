@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { clipboard, type WebContents } from 'electron'
 import { ensureBackgroundView, getActiveView, getViewById, showView } from '../sessions'
-import { isSignedIn, listSocialAccounts } from '../socialAccounts'
+import { isSignedIn, listSocialAccounts, resolveSocialAccount, type SocialAccount } from '../socialAccounts'
 import {
   tiktokStatusScript,
   tiktokFeedScript,
@@ -44,21 +44,35 @@ export function getActiveTikTokAccount(): string {
   return activeTikTokAccountId
 }
 
-export function resolveTikTokPartition(account?: string | number): { tabId: string; partition: string } {
-  const str = String(account ?? activeTikTokAccountId ?? '1').trim()
-  if (str === '1' || str === 'default' || str === 'social-tiktok') {
-    return { tabId: 'social-tiktok', partition: 'social-tiktok' }
-  }
-  if (str.startsWith('social-tiktok-')) {
-    return { tabId: str, partition: str }
-  }
-  return { tabId: `social-tiktok-${str}`, partition: `social-tiktok-${str}` }
+/**
+ * The registry account a call means (electron/socialAccounts.ts): by id ("2"),
+ * partition ("social-tiktok-2") or label. No account / "active" = the active one,
+ * "default" = account 1. An explicit unknown ref is null — never a new partition
+ * and never another account, so a write cannot land on the wrong one.
+ */
+export function resolveTikTokAccount(account?: string | number | null): SocialAccount | null {
+  const raw = account === undefined || account === null ? '' : String(account).trim()
+  const ref = raw === '' || raw === 'active' ? activeTikTokAccountId : raw === 'default' ? '1' : raw
+  return resolveSocialAccount('tiktok', ref)
+}
+
+export function resolveTikTokPartition(account?: string | number | null): { tabId: string; partition: string } | null {
+  const acc = resolveTikTokAccount(account)
+  return acc ? { tabId: acc.partition, partition: acc.partition } : null
+}
+
+/** `{ok:false}` for an account the registry does not know, else null. Checked before any page action. */
+export function unknownTikTokAccount(account?: string | number | null): TikTokResult | null {
+  if (resolveTikTokAccount(account)) return null
+  const raw = account === undefined || account === null || String(account).trim() === '' || account === 'active' ? activeTikTokAccountId : account
+  return { ok: false, error: `unknown tiktok account "${raw}" — list them with tiktok_accounts` }
 }
 
 export async function getTikTokView(account?: string | number): Promise<{ webContents: WebContents }> {
-  // Use explicit account if provided, otherwise strictly use the active TikTok account
-  const targetAccount = (account && account !== 'active') ? account : activeTikTokAccountId
-  const { tabId, partition } = resolveTikTokPartition(targetAccount)
+  // Explicit account if given, otherwise strictly the active TikTok account
+  const resolved = resolveTikTokPartition(account)
+  if (!resolved) throw new Error(unknownTikTokAccount(account)?.error ?? 'unknown tiktok account')
+  const { tabId, partition } = resolved
 
   // 1. Exact lookup by tabId — checks viewCache (visible UI) and backgroundWindows
   const existing = getViewById(tabId)
@@ -124,35 +138,42 @@ async function callScript(script: string, timeoutMs = 15000, account?: string | 
       setTimeout(() => reject(new Error(`TikTok bridge execution timed out after ${timeoutMs}ms`)), timeoutMs),
     )
     const result = await Promise.race([execPromise, timeoutPromise])
-    if (result && typeof result === 'object') return result as TikTokResult
-    return { ok: false, error: `bridge returned a non-object: ${String(result)}` }
+    // Say which account answered, unless the script already set the field.
+    const label = resolveTikTokPartition(account)?.tabId
+    if (result && typeof result === 'object') return { account: label, ...result as TikTokResult }
+    return { ok: false, error: `bridge returned a non-object: ${String(result)}`, account: label }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
 }
 
 export async function tkStatus(account?: string | number): Promise<TikTokResult> {
+  const bad = unknownTikTokAccount(account)
+  if (bad) return bad
   const result = await callScript(tiktokStatusScript(), 15000, account)
-  const resolved = resolveTikTokPartition(account)
   return {
     ...result,
-    account: resolved.tabId,
+    account: resolveTikTokPartition(account)?.tabId,
   }
 }
 
 export async function tkFeed(limit = 20, account?: string | number): Promise<TikTokResult> {
+  const bad = unknownTikTokAccount(account)
+  if (bad) return bad
   const view = await getTikTokView(account)
   const currentUrl = view.webContents.getURL()
 
-  // If not on explore / home, navigate to explore
-  if (!currentUrl.includes('tiktok.com/explore') && !currentUrl.includes('tiktok.com/foryou')) {
-    await navigateAndWait(view.webContents, 'https://www.tiktok.com/explore')
+  // The feed script reads the /explore grid; /foryou has no grid to read.
+  if (!currentUrl.includes('tiktok.com/explore')) {
+    await navigateAndWait(view.webContents, 'https://www.tiktok.com/explore', 3000, 8000)
   }
 
   return callScript(tiktokFeedScript(limit), 15000, account)
 }
 
 export async function tkSearch(query: string, limit = 20, account?: string | number): Promise<TikTokResult> {
+  const bad = unknownTikTokAccount(account)
+  if (bad) return bad
   const view = await getTikTokView(account)
   const targetUrl = `https://www.tiktok.com/search?q=${encodeURIComponent(query)}`
   await navigateAndWait(view.webContents, targetUrl)
@@ -160,14 +181,24 @@ export async function tkSearch(query: string, limit = 20, account?: string | num
 }
 
 export async function tkVideoDetail(url: string, account?: string | number): Promise<TikTokResult> {
+  const bad = unknownTikTokAccount(account)
+  if (bad) return bad
   const view = await getTikTokView(account)
-  await navigateAndWait(view.webContents, url)
-  return callScript(tiktokVideoDetailScript(), 15000, account)
+  await navigateAndWait(view.webContents, url, 2500, 8000)
+  const dom = await callScript(tiktokVideoDetailScript(), 15000, account)
+  if (dom.ok) return dom
+  // The page script fails while the video page is still loading or redirecting
+  // (seen live 2026-10-05); the in-session JSON read does not depend on the DOM.
+  const id = url.match(/\/video\/(\d+)/)?.[1] ?? url
+  const api = await tkApiVideoDetail(id, account)
+  return api.ok ? { ...api, via: 'api_fallback' } : dom
 }
 
 export async function tkSuggest(seedKeyword: string, account?: string | number): Promise<TikTokResult> {
   const seedClean = seedKeyword.trim()
   if (!seedClean) return { ok: false, error: 'Seed keyword cannot be empty' }
+  const bad = unknownTikTokAccount(account)
+  if (bad) return bad
 
   try {
     const res = await fetch(`https://suggestqueries.google.com/complete/search?client=chrome&q=${encodeURIComponent(seedClean + ' tiktok')}`, {
@@ -201,6 +232,8 @@ export async function tkSuggest(seedKeyword: string, account?: string | number):
 }
 
 export async function tkOutlier(creatorOrQuery: string, account?: string | number): Promise<TikTokResult> {
+  const bad = unknownTikTokAccount(account)
+  if (bad) return bad
   const view = await getTikTokView(account)
   const cleanTarget = creatorOrQuery.replace(/^@/, '').trim()
   const targetUrl = `https://www.tiktok.com/search?q=${encodeURIComponent(cleanTarget)}`
@@ -246,6 +279,8 @@ export async function tkUploadVideo(options: {
 }): Promise<TikTokResult> {
   const filePath = String(options.videoFilePath ?? '').trim()
   if (!filePath) return { ok: false, error: 'refusing to upload without a video file path' }
+  const resolved = resolveTikTokPartition(options.account)
+  if (!resolved) return unknownTikTokAccount(options.account) as TikTokResult
 
   let bytes: Buffer
   try {
@@ -373,7 +408,6 @@ export async function tkUploadVideo(options: {
     await new Promise(r => setTimeout(r, 1500))
   }
 
-  const resolved = resolveTikTokPartition(options.account)
   return {
     ok: true,
     uploaded: true,
@@ -387,6 +421,8 @@ export async function tkUploadVideo(options: {
 }
 
 export async function tkSubmitPost(account?: string | number): Promise<TikTokResult> {
+  const resolved = resolveTikTokPartition(account)
+  if (!resolved) return unknownTikTokAccount(account) as TikTokResult
   const view = await getTikTokView(account)
 
   // 1. Locate Post button and calculate coordinates
@@ -423,8 +459,6 @@ export async function tkSubmitPost(account?: string | number): Promise<TikTokRes
     const postBtn = document.querySelector('button[data-e2e="post_video_button"]')
     if (postBtn) postBtn.click()
   })()`)
-
-  const resolved = resolveTikTokPartition(account)
 
   // 4. Poll for success navigation or modal confirmations
   for (let i = 0; i < 15; i++) {
@@ -471,6 +505,8 @@ export async function tkAccounts(): Promise<{
     authenticated: boolean
     username: string | null
     active: boolean
+    /** The account a tool call without `account` goes to. */
+    selected: boolean
     currentUrl: string
   }>
 }> {
@@ -485,12 +521,13 @@ export async function tkAccounts(): Promise<{
     authenticated: boolean
     username: string | null
     active: boolean
+    selected: boolean
     currentUrl: string
   }> = []
 
   for (const id of accountIds) {
-    const { tabId, partition } = resolveTikTokPartition(id)
-    const view = getViewById(tabId)
+    const partition = registry.find(a => a.id === id)?.partition ?? (id === '1' ? 'social-tiktok' : `social-tiktok-${id}`)
+    const view = getViewById(partition)
     let authenticated = false
     let username: string | null = null
     let currentUrl = ''
@@ -520,6 +557,7 @@ export async function tkAccounts(): Promise<{
       authenticated,
       username,
       active: isActive,
+      selected: id === activeTikTokAccountId,
       currentUrl,
     })
   }
@@ -534,10 +572,13 @@ export function setOnAccountSwitchedListener(fn: (accountId: string) => void): v
 }
 
 export async function tkSwitchAccount(account: string | number): Promise<TikTokResult> {
-  const { tabId, partition } = resolveTikTokPartition(account)
-  setActiveTikTokAccount(account)
-  showView(tabId, partition, 'https://www.tiktok.com')
-  const cleanId = String(account).replace(/^social-tiktok-?/, '') || '1'
+  // Unknown account: refuse before touching the visible view or the active id.
+  const acc = resolveTikTokAccount(account === 'active' ? '' : account)
+  if (!acc) return unknownTikTokAccount(account) as TikTokResult
+  const tabId = acc.partition
+  setActiveTikTokAccount(acc.id)
+  showView(tabId, acc.partition, 'https://www.tiktok.com')
+  const cleanId = acc.id
   if (onAccountSwitchedListener) {
     try { onAccountSwitchedListener(cleanId) } catch {}
   }
@@ -553,6 +594,7 @@ export async function tkSwitchAccount(account: string | number): Promise<TikTokR
  */
 export async function tkListPosts(account?: string | number): Promise<TikTokResult> {
   const resolved = resolveTikTokPartition(account)
+  if (!resolved) return unknownTikTokAccount(account) as TikTokResult
   try {
     const view = await getTikTokView(account)
     if (!/tiktok\.com\/tiktokstudio/.test(view.webContents.getURL())) {
@@ -669,6 +711,7 @@ export async function tkDeleteVideo(options: {
     return { ok: false, error: 'Must provide either videoId or videoUrl (a numeric id or a /video/<id> URL) to delete a video' }
   }
   const resolved = resolveTikTokPartition(options.account)
+  if (!resolved) return unknownTikTokAccount(options.account) as TikTokResult
   try {
     const view = await getTikTokView(options.account)
     await ensureTikTokWebApp(view.webContents)
@@ -683,8 +726,13 @@ export async function tkDeleteAllVideos(options: {
   account?: string | number
   limit?: number
 } = {}): Promise<TikTokResult> {
-  const maxLimit = typeof options.limit === 'number' ? options.limit : 100
+  // A negative limit would make slice(0, -n) delete all but n videos.
+  const maxLimit = typeof options.limit === 'number' && Number.isFinite(options.limit)
+    ? Math.max(0, Math.min(200, Math.floor(options.limit)))
+    : 100
+  if (maxLimit === 0) return { ok: false, error: 'limit must be at least 1' }
   const resolved = resolveTikTokPartition(options.account)
+  if (!resolved) return unknownTikTokAccount(options.account) as TikTokResult
 
   // 1. Fetch current user posts
   const listRes = await tkListPosts(options.account)
@@ -746,9 +794,10 @@ export async function tkWarmupScroll(options: {
   niche?: string
   autoLike?: boolean
 } = {}): Promise<TikTokResult> {
+  const resolved = resolveTikTokPartition(options.account)
+  if (!resolved) return unknownTikTokAccount(options.account) as TikTokResult
   const view = await getTikTokView(options.account)
   const durationSec = Math.max(10, Math.min(600, options.durationSeconds ?? 60))
-  const resolved = resolveTikTokPartition(options.account)
 
   let targetUrl = 'https://www.tiktok.com/foryou'
   if (options.niche && options.niche.trim()) {
@@ -785,6 +834,7 @@ export async function tkEditVideoCaption(options: {
   account?: string | number
 }): Promise<TikTokResult> {
   const resolved = resolveTikTokPartition(options.account)
+  if (!resolved) return unknownTikTokAccount(options.account) as TikTokResult
   if (!/^\d+$/.test(String(options.videoId))) return { ok: false, error: 'videoId must be numeric', account: resolved.tabId }
   const caption = String(options.caption ?? '')
   try {

@@ -20,7 +20,7 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { crc32 } from 'node:zlib'
-import { getTikTokView, type TikTokResult } from './tiktok'
+import { getTikTokView, unknownTikTokAccount, type TikTokResult } from './tiktok'
 
 export interface VodToken {
   access_key_id: string
@@ -145,6 +145,10 @@ export async function tkApiUploadVideo(opts: {
   const privacy: TikTokPrivacy = opts.privacy === 'public' || opts.privacy === 'friends' ? opts.privacy : 'private'
   const caption = String(opts.caption ?? '').trim()
   const steps: string[] = []
+  if (!String(opts.filePath ?? '').trim()) return { ok: false, error: 'refusing to upload without a video file path', steps }
+  // An unknown account never falls back to another one.
+  const bad = unknownTikTokAccount(opts.account)
+  if (bad) return { ...bad, steps }
   // Checked before anything is uploaded, so a bad time costs nothing.
   const schedule = checkSchedule(opts.scheduleAt, privacy)
   if (schedule.error) return { ok: false, error: schedule.error, steps }

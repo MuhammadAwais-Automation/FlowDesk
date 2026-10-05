@@ -13,7 +13,7 @@
  * Studio and the public profile ~4s later — reads right after the write still
  * return the old value, which is why this polls before reporting.
  */
-import { getTikTokView, ensureTikTokWebApp, TIKTOK_CLIENT_FN, type TikTokResult } from './tiktok'
+import { getTikTokView, ensureTikTokWebApp, resolveTikTokPartition, unknownTikTokAccount, TIKTOK_CLIENT_FN, type TikTokResult } from './tiktok'
 
 /** TikTok's own counter: emoji count double. Its limit is 80. */
 export function tiktokBioLength(bio: string): number {
@@ -52,11 +52,14 @@ export async function tkUpdateProfile(opts: { bio: string; account?: string | nu
   // Over the limit TikTok still answers status_code 0 and silently keeps the
   // old bio, so refuse here instead of reporting a success that did nothing.
   if (length > TIKTOK_BIO_LIMIT) return { ok: false, error: `bio is ${length} by TikTok's count (emoji count 2); the limit is ${TIKTOK_BIO_LIMIT}` }
+  // An unknown account never falls back to another one.
+  const resolved = resolveTikTokPartition(opts.account)
+  if (!resolved) return unknownTikTokAccount(opts.account) as TikTokResult
   try {
     const view = await getTikTokView(opts.account)
     await ensureTikTokWebApp(view.webContents)
     const out = await view.webContents.executeJavaScript(tiktokUpdateBioScript(bio))
-    return out && typeof out === 'object' ? out as TikTokResult : { ok: false, error: 'bridge returned a non-object' }
+    return out && typeof out === 'object' ? { ...out as TikTokResult, account: resolved.tabId } : { ok: false, error: 'bridge returned a non-object', account: resolved.tabId }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
@@ -113,10 +116,14 @@ export function tiktokProfileScript(): string {
 }
 
 export async function tkGetProfile(account?: string | number): Promise<TikTokResult> {
+  const bad = unknownTikTokAccount(account)
+  if (bad) return bad
   try {
     const view = await getTikTokView(account)
     const out = await view.webContents.executeJavaScript(tiktokProfileScript())
-    return out && typeof out === 'object' ? out as TikTokResult : { ok: false, error: 'bridge returned a non-object' }
+    // Say which account answered, as the other tools do.
+    const label = resolveTikTokPartition(account)?.tabId
+    return out && typeof out === 'object' ? { ...out as TikTokResult, account: label } : { ok: false, error: 'bridge returned a non-object', account: label }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }

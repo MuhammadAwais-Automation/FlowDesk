@@ -7,6 +7,7 @@ vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
 vi.mock('./tiktok', () => ({
   getTikTokView: vi.fn(async () => { throw new Error('live TikTok must not be used in tests') }),
   ensureTikTokWebApp: vi.fn(async () => {}),
+  unknownTikTokAccount: vi.fn((a?: string) => a === '9' ? { ok: false, error: 'unknown tiktok account "9"' } : null),
 }))
 
 import {
@@ -315,6 +316,15 @@ describe('radarCollectOnce', () => {
   it('rejects unknown niches', async () => {
     install(() => ok({}))
     expect(await radarCollectOnce('nope')).toMatchObject({ ok: false })
+  })
+
+  it('rejects a niche whose account is unknown before any request', async () => {
+    await upsertNiche({ id: 'acc', keywords: ['k'], creators: creators(20), account: '9' })
+    const { exec } = install(() => ok({}))
+    const res = await radarCollectOnce('acc')
+    expect(res).toMatchObject({ ok: false })
+    expect(res.error).toContain('unknown tiktok account')
+    expect(exec).not.toHaveBeenCalled()
   })
 })
 

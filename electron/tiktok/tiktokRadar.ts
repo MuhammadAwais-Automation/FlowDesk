@@ -18,7 +18,7 @@
 
 import { radarReport, toCount } from '../radar/radarCore'
 import type { RadarReport, RadarReportOptions, SoundSnapshot } from '../radar/types'
-import { ensureTikTokWebApp, getTikTokView } from './tiktok'
+import { ensureTikTokWebApp, getTikTokView, unknownTikTokAccount } from './tiktok'
 import {
   appendRecommendation,
   appendRunLog,
@@ -361,6 +361,9 @@ export async function radarCollectOnce(nicheId: string): Promise<RadarCycleResul
 async function collect(nicheId: string): Promise<RadarCycleResult> {
   const niche = await getNiche(nicheId)
   if (!niche) return { ok: false, error: `unknown niche: ${nicheId}` }
+  // A niche saved with an account that no longer exists never reads from another one.
+  const badAccount = niche.account ? unknownTikTokAccount(niche.account) : null
+  if (badAccount) return { ok: false, error: badAccount.error ?? 'unknown tiktok account' }
   const startMs = deps.nowMs()
   const nowSec = Math.floor(startMs / 1000)
   const cycle: Cycle = { account: niche.account, calls: 0, blocks: 0 }
