@@ -19,6 +19,14 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 // Arguments for read tools that need one. Anything absent here is called with {}.
 const ARGS = {
+  pinterest_user: { username: 'pinterest' },
+  pinterest_user_boards: { username: 'pinterest', limit: 3 },
+  pinterest_user_pins: { username: 'pinterest', limit: 3 },
+  pinterest_board_pins: { boardUrl: '/pinterest/girls-night-in/', limit: 3 },
+  pinterest_pin: { pinId: '424605071145711021' },
+  pinterest_related_pins: { pinId: '424605071145711021', limit: 3 },
+  pinterest_suggest: { term: 'minimal logo' },
+  pinterest_outlier: { username: 'pinterest', limit: 20 },
   whatsapp_list_chats: { limit: 3 },
   whatsapp_api_chats: { limit: 3 },
   whatsapp_unread: { limit: 3 },

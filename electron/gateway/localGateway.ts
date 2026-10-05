@@ -98,6 +98,10 @@ let guard: Guard = (_m, _p, run) => run()
 import { askBrowserProvider, workerProgress } from '../agent/browserWorkerQueue'
 import { radarCollectOnce, radarReportFor, radarStatus, startRadar, stopRadar } from '../tiktok/tiktokRadar'
 import { loadNiches, removeNiche, upsertNiche } from '../tiktok/tiktokRadarStore'
+import { pinterestBoardPins, pinterestOutlier, pinterestPin, pinterestRelated, pinterestSearch, pinterestStatus, pinterestSuggest, pinterestUser, pinterestUserBoards, pinterestUserPins } from '../pinterest'
+
+// Any non-empty account value is passed on as text, so an odd value is refused as unknown instead of meaning account 1.
+const pinAccount = (p: Record<string, unknown>): string | undefined => p.account === undefined || p.account === null || p.account === '' ? undefined : String(p.account)
 import { addSocialAccount, isSocialPlatform, openSocialLogin, socialAccountsStatus } from '../socialAccounts'
 import { fbFeed } from '../facebook'
 import { askChat, askChatgptText, chatModels, downloadImage, imageLibrary, listChats, readChat, searchChats, updateChat } from '../chatgptChats'
@@ -375,6 +379,16 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
 
   // LinkedIn methods
   // One account list for every social platform (electron/socialAccounts.ts)
+  'pinterest.status': async (p) => pinterestStatus(pinAccount(p)),
+  'pinterest.user': async (p) => pinterestUser(p.username, pinAccount(p)),
+  'pinterest.userBoards': async (p) => pinterestUserBoards(p.username, { limit: p.limit, bookmark: p.bookmark, account: pinAccount(p) }),
+  'pinterest.userPins': async (p) => pinterestUserPins(p.username, { limit: p.limit, bookmark: p.bookmark, account: pinAccount(p) }),
+  'pinterest.boardPins': async (p) => pinterestBoardPins({ boardUrl: p.boardUrl, boardId: p.boardId }, { limit: p.limit, bookmark: p.bookmark, account: pinAccount(p) }),
+  'pinterest.pin': async (p) => pinterestPin(p.pinId ?? p.id ?? p.url, pinAccount(p)),
+  'pinterest.related': async (p) => pinterestRelated(p.pinId ?? p.id ?? p.url, { limit: p.limit, bookmark: p.bookmark, account: pinAccount(p) }),
+  'pinterest.suggest': async (p) => pinterestSuggest(p.term ?? p.query, pinAccount(p)),
+  'pinterest.search': async (p) => pinterestSearch(p.query, { limit: p.limit, bookmark: p.bookmark, account: pinAccount(p) }),
+  'pinterest.outlier': async (p) => pinterestOutlier({ username: p.username, boardUrl: p.boardUrl }, { limit: p.limit, minMultiplier: p.minMultiplier, account: pinAccount(p) }),
   'social.accounts': async (p) => socialAccountsStatus(isSocialPlatform(p.platform) ? p.platform : undefined),
   'social.addAccount': async (p) => isSocialPlatform(p.platform)
     ? { ok: true, account: addSocialAccount(p.platform, typeof p.label === 'string' ? p.label : undefined), next: 'sign in with social.openLogin' }

@@ -187,6 +187,75 @@ async function main() {
     return
   }
 
+  // ── PINTEREST COMMANDS (read-only) ──────────────────────────────────────────
+  if (command === 'pinterest') {
+    const subCmd = rawArgs[1]
+    const { flags, positional } = parseFlags(rawArgs.slice(2))
+    const page = {
+      ...(typeof flags.account === 'string' ? { account: flags.account } : {}),
+      ...(flags.limit ? { limit: Number(flags.limit) } : {}),
+      ...(typeof flags.bookmark === 'string' ? { bookmark: flags.bookmark } : {}),
+    }
+    const pin = async (method, params = {}) => {
+      const r = await callRpc(method, { ...params, ...page })
+      if (r && r.ok === false) {
+        console.error(`\x1b[31m[Pinterest]\x1b[0m ${r.error || 'failed'}`)
+        process.exit(1)
+      }
+      return r
+    }
+    const showPins = (res) => {
+      ;(res.pins || res.outliers || []).forEach((p, i) => {
+        const x = p.multiplier ? ` | ${p.multiplier}x` : ''
+        console.log(`[${i + 1}] ${p.title || (p.description || '').slice(0, 70) || '(untitled)'}`)
+        console.log(`    saves ${p.saves ?? '-'} | comments ${p.comments ?? '-'}${x} | by ${p.pinner || '-'} | ${p.url}`)
+      })
+      if (res.nextBookmark) console.log(`\nNext page: --bookmark ${res.nextBookmark}`)
+    }
+    const arg = positional[0]
+
+    if (subCmd === 'status') {
+      const res = await pin('pinterest.status')
+      console.log(`Account ${res.account} (${res.label}): ${res.signedIn ? '\x1b[32msigned in\x1b[0m' : '\x1b[33msigned out\x1b[0m — reads work, search needs sign-in'}`)
+      return
+    }
+    if (subCmd === 'user' && arg) {
+      const { user } = await pin('pinterest.user', { username: arg })
+      console.log(`${user.fullName || user.username} (@${user.username}) — ${user.url}`)
+      console.log(`followers ${user.followers} | following ${user.following} | pins ${user.pins} | boards ${user.boards} | monthly views ${user.monthlyViews ?? '-'}`)
+      if (user.about) console.log(user.about)
+      return
+    }
+    if (subCmd === 'boards' && arg) {
+      const res = await pin('pinterest.userBoards', { username: arg })
+      res.boards.forEach((b, i) => console.log(`[${i + 1}] ${b.name} — ${b.pinCount ?? '?'} pins, ${b.followers ?? '?'} followers — ${b.url}`))
+      if (res.nextBookmark) console.log(`\nNext page: --bookmark ${res.nextBookmark}`)
+      return
+    }
+    if (subCmd === 'pins' && arg) return showPins(await pin('pinterest.userPins', { username: arg }))
+    if (subCmd === 'board' && arg) return showPins(await pin('pinterest.boardPins', { boardUrl: arg }))
+    if (subCmd === 'related' && arg) return showPins(await pin('pinterest.related', { pinId: arg }))
+    if (subCmd === 'search' && positional.length) return showPins(await pin('pinterest.search', { query: positional.join(' ') }))
+    if (subCmd === 'outlier' && arg) {
+      const target = arg.includes('/') ? { boardUrl: arg } : { username: arg }
+      const res = await pin('pinterest.outlier', { ...target, ...(flags['min-multiplier'] ? { minMultiplier: Number(flags['min-multiplier']) } : {}) })
+      console.log(`${res.outliers.length} of ${res.scanned} pins at ≥${res.minMultiplier}x median saves`)
+      return showPins(res)
+    }
+    if (subCmd === 'suggest' && positional.length) {
+      const res = await pin('pinterest.suggest', { term: positional.join(' ') })
+      res.suggestions.forEach(s => console.log(`- ${s.query}`))
+      return
+    }
+    if (subCmd === 'pin' && arg) {
+      const { pin: p } = await pin('pinterest.pin', { pinId: arg })
+      console.log(JSON.stringify(p, null, 2))
+      return
+    }
+    console.error('Usage: flowdesk pinterest <status|user <name>|boards <name>|pins <name>|board <url>|pin <id|url>|related <id>|suggest <term>|search <query>|outlier <name|boardUrl>> [--account id] [--limit n] [--bookmark b]')
+    process.exit(1)
+  }
+
   // ── REDDIT COMMANDS ────────────────────────────────────────────────────────
   if (command === 'reddit') {
     const subCmd = rawArgs[1]
@@ -1425,6 +1494,7 @@ Usage:
   flowdesk flow credits                              Check Google Flow credits
   flowdesk flow image --project id --prompt "..."    Generate image in Flow
 
+  flowdesk pinterest <status|user|boards|pins|board|pin|related|suggest|search|outlier> [--account id]   Read Pinterest (search needs sign-in)
   flowdesk reddit status                             View authenticated username & karma
   flowdesk reddit feed [--sub name] [--sort hot]     Browse subreddit or home feed
   flowdesk reddit outlier <subreddit> [--min-multiplier 3.0]

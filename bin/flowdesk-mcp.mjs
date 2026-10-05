@@ -336,12 +336,12 @@ function formatBrainVisual(data) {
 
 // Sent to every MCP client on connect (the spec's `instructions`), so any agent
 // knows where the how-to lives before it picks a tool.
-const SERVER_INSTRUCTIONS = `FlowDesk drives the user's own signed-in accounts (ChatGPT, Google Flow, TikTok, LinkedIn, Reddit, WhatsApp, Facebook) through the FlowDesk desktop app, which must be running.
+const SERVER_INSTRUCTIONS = `FlowDesk drives the user's own signed-in accounts (ChatGPT, Google Flow, TikTok, LinkedIn, Reddit, WhatsApp, Facebook, Pinterest) through the FlowDesk desktop app, which must be running.
 
 Before using a family of tools, read its skill with flowdesk_skill_get — it says which tool fits which job, the order to call them in, timings, costs and what each error means (all verified live):
 - chatgpt_* and ask_chatgpt → flowdesk_skill_get { id: "chatgpt" }
 - flow_* (Google Flow images and video) → flowdesk_skill_get { id: "google-flow" }
-- tiktok_* / linkedin_* / reddit_* / whatsapp_* / facebook_* → flowdesk_skill_get { id: "tiktok" | "linkedin" | "reddit" | "whatsapp" | "facebook" }
+- tiktok_* / linkedin_* / reddit_* / whatsapp_* / facebook_* / pinterest_* → flowdesk_skill_get { id: "tiktok" | "linkedin" | "reddit" | "whatsapp" | "facebook" | "pinterest" }
 - several accounts per platform: social_accounts lists them; pass account (id, label or partition) to any social tool. An unknown account is an error, never another account.
 flowdesk_skills_list shows every other skill.
 
@@ -1905,7 +1905,110 @@ server.tool(
 
 // ── SOCIAL ACCOUNTS (one list for every platform: electron/socialAccounts.ts) ─
 
-const SOCIAL_PLATFORM = z.enum(['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook'])
+// ── PINTEREST ────────────────────────────────────────────────────────────────
+// Read-only. Every call runs in the account's own hidden Pinterest window.
+// Signed out, everything here works except pinterest_search (Pinterest gates it).
+
+const PIN_ACCOUNT = z.string().optional().describe('Pinterest account id, label or partition from social_accounts {platform:"pinterest"}. Omit for account 1. Unknown ids fail, never fall back.')
+const PIN_LIMIT = z.number().int().min(1).max(50).optional().describe('Items per page (1-50, default 25).')
+const PIN_BOOKMARK = z.string().max(2000).optional().describe('nextBookmark from the previous page, unchanged, to get the next page.')
+const PIN_USERNAME = z.string().min(1).max(65).describe('Pinterest username, e.g. "pinterest" (the part after pinterest.com/).')
+const PIN_ID = z.string().min(1).max(200).describe('Pin id (digits) or a full pin URL.')
+
+server.tool(
+  'pinterest_status',
+  'Which Pinterest account a call would use and whether it is signed in. Signed out still reads profiles, boards, pins and related pins; only search needs sign-in.',
+  { account: PIN_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: false },
+  async (args) => textResult(await callGatewayRpc('pinterest.status', args))
+)
+
+server.tool(
+  'pinterest_user',
+  'Public profile of a Pinterest user: name, about, website, followers, following, pin and board counts, monthly views.',
+  { username: PIN_USERNAME, account: PIN_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.user', args))
+)
+
+server.tool(
+  'pinterest_user_boards',
+  'Boards of a Pinterest user (name, url, pin count, followers, sections), most recently pinned first. Page with nextBookmark.',
+  { username: PIN_USERNAME, limit: PIN_LIMIT, bookmark: PIN_BOOKMARK, account: PIN_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.userBoards', args))
+)
+
+server.tool(
+  'pinterest_user_pins',
+  'Pins a Pinterest user created, newest first, with title, description, outbound link, image URL, saves and comments. Page with nextBookmark.',
+  { username: PIN_USERNAME, limit: PIN_LIMIT, bookmark: PIN_BOOKMARK, account: PIN_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.userPins', args))
+)
+
+server.tool(
+  'pinterest_board_pins',
+  'Pins on one board. Pass the board URL (from pinterest_user_boards or the browser); boardId is optional and saves one lookup. Page with nextBookmark.',
+  {
+    boardUrl: z.string().min(3).max(300).describe('Board URL or path, e.g. "https://www.pinterest.com/pinterest/girls-night-in/" or "/pinterest/girls-night-in/".'),
+    boardId: z.string().regex(/^\d{1,25}$/).optional().describe('Board id from pinterest_user_boards (optional).'),
+    limit: PIN_LIMIT, bookmark: PIN_BOOKMARK, account: PIN_ACCOUNT,
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.boardPins', args))
+)
+
+server.tool(
+  'pinterest_pin',
+  'Full details of one pin: title, description, outbound link, best image URL, video flag, saves, repins, comments, creator, board, created date.',
+  { pinId: PIN_ID, account: PIN_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.pin', args))
+)
+
+server.tool(
+  'pinterest_related_pins',
+  'Pins Pinterest shows as "more like this" for a pin — the way to explore a niche while signed out. Page with nextBookmark.',
+  { pinId: PIN_ID, limit: PIN_LIMIT, bookmark: PIN_BOOKMARK, account: PIN_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.related', args))
+)
+
+server.tool(
+  'pinterest_suggest',
+  'Pinterest search autocomplete for a term — what people actually search (keyword research). Works signed out.',
+  { term: z.string().min(1).max(100).describe('Start of a search, e.g. "minimal logo".'), account: PIN_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.suggest', args))
+)
+
+server.tool(
+  'pinterest_search',
+  'Search pins by keyword. Pinterest only answers this for a signed-in account; signed out it returns an error that says so (sign in once with social_open_login {platform:"pinterest"}). Page with nextBookmark.',
+  { query: z.string().min(1).max(200).describe('Search keywords.'), limit: PIN_LIMIT, bookmark: PIN_BOOKMARK, account: PIN_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinterest.search', args))
+)
+
+server.tool(
+  'pinterest_outlier',
+  'Pins of a user (or a board) that got at least minMultiplier× the median saves of that set — what took off. Give username or boardUrl.',
+  {
+    username: PIN_USERNAME.optional(),
+    boardUrl: z.string().min(3).max(300).optional().describe('Board URL instead of a username.'),
+    minMultiplier: z.number().min(1).max(100).optional().describe('How many times the median saves (default 3).'),
+    limit: PIN_LIMIT,
+    account: PIN_ACCOUNT,
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => {
+    if (!args.username && !args.boardUrl) return textResult({ ok: false, error: 'give username or boardUrl' })
+    return textResult(await callGatewayRpc('pinterest.outlier', args))
+  }
+)
+
+const SOCIAL_PLATFORM = z.enum(['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook', 'pinterest'])
 
 server.tool(
   'social_accounts',

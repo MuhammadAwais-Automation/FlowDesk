@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import { rememberedView } from './sessions'
 import { getSavedLinkedInAccounts, saveLinkedInAccounts } from './linkedin/linkedin'
 
-export const SOCIAL_PLATFORMS = ['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook'] as const
+export const SOCIAL_PLATFORMS = ['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook', 'pinterest'] as const
 export type SocialPlatform = typeof SOCIAL_PLATFORMS[number]
 
 export interface SocialAccount { platform: SocialPlatform; id: string; label: string; partition: string }
@@ -29,11 +29,12 @@ export const SOCIAL_HOME: Record<SocialPlatform, string> = {
   linkedin: 'https://www.linkedin.com/feed/',
   reddit: 'https://www.reddit.com',
   facebook: 'https://www.facebook.com',
+  pinterest: 'https://www.pinterest.com',
 }
 
 // What each platform had before this list existed.
 const DEFAULT_IDS: Record<SocialPlatform, string[]> = {
-  whatsapp: ['1'], tiktok: ['1', '2', '3'], linkedin: ['1', '2'], reddit: ['1'], facebook: ['1'],
+  whatsapp: ['1'], tiktok: ['1', '2', '3'], linkedin: ['1', '2'], reddit: ['1'], facebook: ['1'], pinterest: ['1'],
 }
 
 type Stored = Partial<Record<SocialPlatform, { id: string; label: string }[]>>
@@ -126,18 +127,20 @@ export function addSocialAccount(platform: SocialPlatform, label?: string): Soci
 // partition, so no page has to be opened; an account whose view was never
 // opened used to read as "not signed in". WhatsApp keeps its session in
 // IndexedDB, so it reads as null (unknown) rather than a guessed false.
-const AUTH_COOKIE: Partial<Record<SocialPlatform, { url: string; name: string }>> = {
+const AUTH_COOKIE: Partial<Record<SocialPlatform, { url: string; name: string; value?: string }>> = {
   tiktok: { url: 'https://www.tiktok.com', name: 'sessionid' },
   linkedin: { url: 'https://www.linkedin.com', name: 'li_at' },
   reddit: { url: 'https://www.reddit.com', name: 'reddit_session' },
   facebook: { url: 'https://www.facebook.com', name: 'c_user' },
+  // Pinterest sets _auth=0 for visitors too; only 1 means signed in.
+  pinterest: { url: 'https://www.pinterest.com', name: '_auth', value: '1' },
 }
 
 export async function isSignedIn(acc: SocialAccount): Promise<boolean | null> {
   const c = AUTH_COOKIE[acc.platform]
   if (!c) return null
   const found = await session.fromPartition(`persist:${acc.partition}`).cookies.get({ url: c.url, name: c.name }).catch(() => null)
-  return found === null ? null : found.length > 0
+  return found === null ? null : found.some(k => c.value === undefined || k.value === c.value)
 }
 
 /** Every account of one platform (or all), with whether it is signed in. */

@@ -1,4 +1,4 @@
-import { MessageCircle, Linkedin, Facebook, Flame, Video } from 'lucide-react'
+import { MessageCircle, Linkedin, Facebook, Flame, Video, Pin } from 'lucide-react'
 
 export interface SocialPlatform {
   id: string
@@ -62,6 +62,14 @@ export const SOCIAL_PLATFORMS: SocialPlatform[] = [
     icon: Video,
     partition: 'social-tiktok',
     accent: '#FE2C55',
+  },
+  {
+    id: 'pinterest',
+    label: 'Pinterest',
+    url: 'https://www.pinterest.com',
+    icon: Pin,
+    partition: 'social-pinterest',
+    accent: '#E60023',
   },
 ]
 
