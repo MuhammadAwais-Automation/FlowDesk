@@ -298,6 +298,7 @@ export interface ElectronAPI {
   onTikTokAccountSwitched?: (cb: (accountId: string) => void) => () => void
   socialAccounts?: (platform: string) => Promise<SocialAccountsResult>
   socialAddAccount?: (platform: string, label?: string, account?: string) => Promise<{ ok: boolean; account?: SocialAccountRow; error?: string }>
+  socialRemoveAccount?: (platform: string, account: string) => Promise<{ ok: boolean; error?: string }>
   linkedinSetActiveAccount?: (account: string | number) => Promise<boolean>
   linkedinGetAccounts?: () => Promise<unknown>
   linkedinSaveAccounts?: (accounts: unknown) => Promise<boolean>

@@ -31,6 +31,20 @@ app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
 // which the sign-in windows open on the same session.
 app.commandLine.appendSwitch('disable-features', 'FedCm')
 
+// Two instances share one user-data dir: the second cannot write the cookie
+// databases the first holds open, so its logins lived only in memory and were
+// gone after a restart (Pinterest account 1 signed out every time). Hand off to
+// the running window instead.
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0)
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  })
+}
+
 // Must run before app is ready. Gives the custom scheme fetch/CORS semantics
 // like a normal https:// origin so an <img src="flowdesk-image://...">
 // loads cleanly from the Vite-served renderer without CSP/mixed-content
@@ -87,7 +101,7 @@ import { join, basename, resolve, sep } from 'path'
 import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, findAnyViewByUrl, findWorkerViewByTool, prewarmBackgroundViews, flushAllCookies, rememberedView } from './sessions'
 import { attachShellLinkPolicy } from './shellLinkPolicy'
-import { addSocialAccount, isSocialPlatform, socialAccountsStatus } from './socialAccounts'
+import { addSocialAccount, isSocialPlatform, removeSocialAccount, socialAccountsStatus } from './socialAccounts'
 import { startProbeRunner } from './discovery/probeRunner'
 import { APPROVAL_TIMEOUT_MS, loadPolicy, policyPaths, readActionLog, savePolicy } from './gateway/actionPolicy'
 import { initSkillsRegistry, listSkills, getSkill, saveSkill, deleteSkill, listWorkflows, getWorkflow, saveWorkflow, deleteWorkflow } from './skills/skillRegistry'
@@ -916,6 +930,15 @@ ipcMain.handle('social:addAccount', (_e, platform: unknown, label: unknown, acco
   if (!isSocialPlatform(platform)) return { ok: false, error: 'unknown platform' }
   try {
     return { ok: true, account: addSocialAccount(platform, typeof label === 'string' ? label : undefined, typeof account === 'string' ? { account } : {}) }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+})
+
+ipcMain.handle('social:removeAccount', async (_e, platform: unknown, account: unknown) => {
+  if (!isSocialPlatform(platform) || typeof account !== 'string') return { ok: false, error: 'bad arguments' }
+  try {
+    return { ok: true, account: await removeSocialAccount(platform, account) }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }

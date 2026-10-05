@@ -15,7 +15,7 @@
 import { app, BrowserWindow, session } from 'electron'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { rememberedView } from './sessions'
+import { closeTabView, rememberedView } from './sessions'
 import { getSavedLinkedInAccounts, saveLinkedInAccounts } from './linkedin/linkedin'
 import { getGoogleAccounts, maskAccount, matchFlowAccount } from './flow'
 import { routeLink } from './linkRouting'
@@ -167,6 +167,32 @@ export function addSocialAccount(platform: SocialPlatform, label?: string, opts:
     writeStored(stored)
   }
   return { platform, id, label: name, partition }
+}
+
+/**
+ * Drops a slot and signs it out. Account 1 stays: every tool falls back to it.
+ * A slot living in an Accounts-page Google partition only loses the row; that
+ * partition's cookies belong to the Accounts page and are left alone.
+ */
+export async function removeSocialAccount(platform: SocialPlatform, ref: string): Promise<SocialAccount> {
+  const acc = resolveSocialAccount(platform, ref)
+  if (!acc) throw new Error(`unknown ${platform} account "${ref}"`)
+  if (acc.id === '1') throw new Error('account 1 cannot be removed')
+  if (platform === 'linkedin') {
+    saveLinkedInAccounts(getSavedLinkedInAccounts().filter(a => a.id !== acc.id))
+  } else {
+    const stored = readStored()
+    stored[platform] = listSocialAccounts(platform).filter(a => a.id !== acc.id).map(a => {
+      const prev = (stored[platform] ?? []).find(r => r.id === a.id)
+      return { id: a.id, label: a.label, ...(prev?.google ? { google: prev.google } : {}) }
+    })
+    writeStored(stored)
+  }
+  closeTabView(`social-${platform}-${acc.id}`)
+  if (!GOOGLE_PARTITION.test(acc.partition)) {
+    await session.fromPartition(`persist:${acc.partition}`).clearStorageData().catch(() => {})
+  }
+  return acc
 }
 
 // The session cookie each site sets once signed in. Read straight from the

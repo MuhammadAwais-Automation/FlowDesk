@@ -242,6 +242,15 @@ export default function Social({ isActive }: Props) {
     await loadRegistry()
   }
 
+  async function handleRemoveRegistryAccount() {
+    if (!currentRegistry || currentRegistry.id === '1') return
+    if (!window.confirm(`Remove ${currentRegistry.label}? It will be signed out.`)) return
+    const res = await api.socialRemoveAccount?.(platform.id, currentRegistry.id).catch(() => null)
+    if (res && !res.ok && res.error) window.alert(res.error)
+    handleRegistryChange('1')
+    await loadRegistry()
+  }
+
   function handleTikTokChange(id: string) {
     setSelectedTikTokId(id)
     localStorage.setItem('socialSelectedTiktokId', id)
@@ -466,6 +475,17 @@ export default function Social({ isActive }: Props) {
                 >
                   <Edit2 size={12} />
                 </button>
+
+                {currentRegistry && currentRegistry.id !== '1' && (
+                  <button
+                    type="button"
+                    title="Remove this account (signs it out)"
+                    onClick={() => void handleRemoveRegistryAccount()}
+                    className="p-1 hover:bg-[#FAF7F0] rounded text-stone-400 hover:text-red-600 transition-colors"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </div>
             )}
 

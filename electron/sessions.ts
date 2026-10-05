@@ -265,6 +265,14 @@ export function persistSessionCookies(partition: string): void {
   if (!partition.startsWith('social-') || persistingPartitions.has(partition)) return
   persistingPartitions.add(partition)
   const ses = session.fromPartition(`persist:${partition}`)
+  // Chromium writes cookies to disk in batches; a dev restart (taskkill) or a
+  // crash right after signing in lost the fresh login (Pinterest came back
+  // signed out). Flush shortly after any change instead.
+  let flushTimer: NodeJS.Timeout | undefined
+  ses.cookies.on('changed', () => {
+    clearTimeout(flushTimer)
+    flushTimer = setTimeout(() => { void ses.cookies.flushStore().catch(() => {}) }, 2000)
+  })
   ses.cookies.on('changed', (_event, cookie, _cause, removed) => {
     if (removed || !cookie.session || !cookie.domain) return
     const host = cookie.domain.replace(/^\./, '')

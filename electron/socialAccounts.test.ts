@@ -9,8 +9,17 @@ let linkedin = [
   { id: '2', label: 'Account 2', partition: 'social-linkedin-2' },
 ]
 
-vi.mock('electron', () => ({ app: { getPath: () => dir }, BrowserWindow: vi.fn(), session: {} }))
-vi.mock('./sessions', () => ({ rememberedView: () => ({ tabId: 'social-reddit-x', partition: 'gmail-abc' }) }))
+const cleared: string[] = []
+const closed: string[] = []
+vi.mock('electron', () => ({
+  app: { getPath: () => dir },
+  BrowserWindow: vi.fn(),
+  session: { fromPartition: (p: string) => ({ clearStorageData: async () => { cleared.push(p) } }) },
+}))
+vi.mock('./sessions', () => ({
+  rememberedView: () => ({ tabId: 'social-reddit-x', partition: 'gmail-abc' }),
+  closeTabView: (id: string) => { closed.push(id) },
+}))
 const G1 = 'gmail-11111111-1111-4111-8111-111111111111'
 const G2 = 'gmail-22222222-2222-4222-8222-222222222222'
 vi.mock('./flow', async () => {
@@ -26,7 +35,7 @@ vi.mock('./linkedin/linkedin', () => ({
   saveLinkedInAccounts: (a: typeof linkedin) => { linkedin = a },
 }))
 
-const { addSocialAccount, cleanLabel, listSocialAccounts, parseStored, resolveSocialAccount, socialPartition } = await import('./socialAccounts')
+const { addSocialAccount, cleanLabel, listSocialAccounts, parseStored, removeSocialAccount, resolveSocialAccount, socialPartition } = await import('./socialAccounts')
 
 describe('social account registry', () => {
   beforeEach(() => { linkedin = linkedin.slice(0, 2) })
@@ -98,5 +107,25 @@ describe('social account registry', () => {
   it('keeps a bound Google partition through a reload and drops forged ones', () => {
     expect(parseStored({ tiktok: [{ id: '2', label: 'x', google: G1 }, { id: '3', label: 'y', google: 'social-evil' }] }))
       .toEqual({ tiktok: [{ id: '2', label: 'x', google: G1 }, { id: '3', label: 'y' }] })
+  })
+
+  it('removes a slot, signs it out, and never removes account 1', async () => {
+    cleared.length = 0; closed.length = 0
+    addSocialAccount('reddit', 'Second')
+    const gone = await removeSocialAccount('reddit', '2')
+    expect(gone.partition).toBe('social-reddit-2')
+    expect(listSocialAccounts('reddit').map(a => a.id)).toEqual(['1'])
+    expect(closed).toEqual(['social-reddit-2'])
+    expect(cleared).toEqual(['persist:social-reddit-2'])
+    await expect(removeSocialAccount('reddit', '1')).rejects.toThrow('account 1 cannot be removed')
+    await expect(removeSocialAccount('reddit', '9')).rejects.toThrow('unknown reddit account')
+  })
+
+  it('keeps the Accounts-page Google session when a bound slot is removed', async () => {
+    cleared.length = 0
+    const acc = addSocialAccount('tiktok', undefined, { googleAccount: 'bob@example.com' })
+    await removeSocialAccount('tiktok', acc.id)
+    expect(cleared).toEqual([])
+    expect(listSocialAccounts('tiktok').some(a => a.partition === G2)).toBe(false)
   })
 })

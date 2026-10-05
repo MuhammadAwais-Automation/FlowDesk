@@ -161,6 +161,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('social:accounts', platform),
   socialAddAccount: (platform: string, label?: string, account?: string) =>
     ipcRenderer.invoke('social:addAccount', platform, label, account),
+  socialRemoveAccount: (platform: string, account: string) =>
+    ipcRenderer.invoke('social:removeAccount', platform, account),
 
   // LinkedIn Multi-Account state sync
   linkedinSetActiveAccount: (account: string | number) =>
