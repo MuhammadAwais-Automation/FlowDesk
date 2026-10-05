@@ -160,6 +160,13 @@ Open / accepted:
 - `facebook_follow` success response never seen live; Facebook has no Messenger/comment-read.
 - WhatsApp signed-out (QR) state reads as `signedIn: null`, not false.
 
+### Pinterest (2026-10-05)
+- Captured first (`probes/FINDINGS-pinterest.md`), then built: 10 read tools `pinterest_*` (status, user, user_boards,
+  user_pins, board_pins, pin, related_pins, suggest, search, outlier), `flowdesk pinterest …` CLI, skill `pinterest`.
+- Live over MCP: 9/9 ok signed out (0.4–1 s each). `pinterest_search` needs a signed-in account (Pinterest gates it).
+- Open: account 1 is signed out — the user signs in once via `social_open_login {platform:"pinterest"}`. Write tools
+  (save, create pin, follow) not built: they need a signed-in account and a capture approved by the user.
+
 ## 5. Agle modules (sketch)
 
 - **1B** wahi pattern Gemini/Grok/Perplexity/Claude par: `*_chats`, `*_ask {account,chatId,newChat}` — pool/queue code common ho jayega.
