@@ -391,8 +391,16 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'pinterest.outlier': async (p) => pinterestOutlier({ username: p.username, boardUrl: p.boardUrl }, { limit: p.limit, minMultiplier: p.minMultiplier, account: pinAccount(p) }),
   'social.accounts': async (p) => socialAccountsStatus(isSocialPlatform(p.platform) ? p.platform : undefined),
   'social.addAccount': async (p) => isSocialPlatform(p.platform)
-    ? { ok: true, account: addSocialAccount(p.platform, typeof p.label === 'string' ? p.label : undefined), next: 'sign in with social.openLogin' }
-    : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook' },
+    ? (() => {
+        try {
+          const account = addSocialAccount(p.platform, typeof p.label === 'string' ? p.label : undefined, {
+            googleAccount: typeof p.googleAccount === 'string' && p.googleAccount.trim() ? p.googleAccount : undefined,
+            account: typeof p.account === 'string' || typeof p.account === 'number' ? String(p.account) : undefined,
+          })
+          return { ok: true, account, next: 'sign in with social.openLogin' }
+        } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+      })()
+    : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook, pinterest' },
   'social.openLogin': async (p) => isSocialPlatform(p.platform)
     ? openSocialLogin(p.platform, typeof p.account === 'string' || typeof p.account === 'number' ? p.account : null)
     : { ok: false, error: 'platform must be one of whatsapp, tiktok, linkedin, reddit, facebook' },

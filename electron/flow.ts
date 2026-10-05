@@ -57,6 +57,11 @@ export function setGoogleAccountsGetter(getter: () => FlowAccount[]): void {
   googleAccountsGetter = getter
 }
 
+/** The Google accounts added on the Accounts page (email + partition). */
+export function getGoogleAccounts(): FlowAccount[] {
+  return googleAccountsGetter()
+}
+
 // ── input validation (pure, exported for tests) ─────────────────────────────
 
 /**

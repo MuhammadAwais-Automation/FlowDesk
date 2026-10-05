@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, session, shell, Menu, Tray, nativeImage, crashReporter, nativeTheme, protocol, net, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, globalShortcut, session, shell, Menu, Tray, nativeImage, crashReporter, nativeTheme, protocol, net, dialog, webContents } from 'electron'
 import { createHash, randomUUID } from 'crypto'
 import { deflateSync } from 'zlib'
 import { mkdir, writeFile, copyFile } from 'fs/promises'
@@ -23,6 +23,13 @@ crashReporter.start({ productName: 'FlowDesk', uploadToServer: false })
 
 // Prevent Windows Chromium GPU cache locking (Access is denied 0x5) across concurrent session partitions
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
+
+// "Continue with Google" buttons (Pinterest and other sites using Google
+// Identity Services) ask Chrome's FedCM for its built-in account chooser.
+// Electron has no FedCM UI, so the click silently did nothing. With FedCM off,
+// Google falls back to its own popup window (accounts.google.com/gsi/...),
+// which the sign-in windows open on the same session.
+app.commandLine.appendSwitch('disable-features', 'FedCm')
 
 // Must run before app is ready. Gives the custom scheme fetch/CORS semantics
 // like a normal https:// origin so an <img src="flowdesk-image://...">
@@ -80,6 +87,7 @@ import { join, basename, resolve, sep } from 'path'
 import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, findAnyViewByUrl, findWorkerViewByTool, prewarmBackgroundViews, flushAllCookies, rememberedView } from './sessions'
 import { attachShellLinkPolicy } from './shellLinkPolicy'
+import { addSocialAccount, isSocialPlatform, socialAccountsStatus } from './socialAccounts'
 import { startProbeRunner } from './discovery/probeRunner'
 import { APPROVAL_TIMEOUT_MS, loadPolicy, policyPaths, readActionLog, savePolicy } from './gateway/actionPolicy'
 import { initSkillsRegistry, listSkills, getSkill, saveSkill, deleteSkill, listWorkflows, getWorkflow, saveWorkflow, deleteWorkflow } from './skills/skillRegistry'
@@ -262,7 +270,7 @@ configureChatgptImages({
   getPreferred: () => store.get('agentBrowserAccountEmail' as never) as string | null,
 })
 
-setGoogleAccountsGetter(() => (store.get('gmailSessions') as GmailSession[]).map(({ email, partition }) => ({ email, partition })))
+setGoogleAccountsGetter(() => (store.get('gmailSessions') as GmailSession[]).map(({ email, partition, label }) => ({ email, partition, label: label ?? null })))
 
 setGooglePartitionGetter(() => {
   const sessions = (store.get('gmailSessions') as GmailSession[]) || []
@@ -895,6 +903,22 @@ ipcMain.handle('tiktok:setActiveAccount', (_e, account: string | number) => {
 ipcMain.handle('linkedin:setActiveAccount', (_e, account: string | number) => {
   setActiveLinkedInAccount(account)
   return true
+})
+
+// IPC: the social account registry (socialAccounts.ts) for the Social page switcher.
+ipcMain.handle('social:accounts', async (_e, platform: unknown) => {
+  if (!isSocialPlatform(platform)) return { ok: false, error: 'unknown platform' }
+  return socialAccountsStatus(platform)
+})
+
+// Adds a slot, or with `account` renames that slot. Never signs anything in.
+ipcMain.handle('social:addAccount', (_e, platform: unknown, label: unknown, account: unknown) => {
+  if (!isSocialPlatform(platform)) return { ok: false, error: 'unknown platform' }
+  try {
+    return { ok: true, account: addSocialAccount(platform, typeof label === 'string' ? label : undefined, typeof account === 'string' ? { account } : {}) }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
 })
 
 ipcMain.handle('linkedin:getAccounts', async () => {
@@ -2887,7 +2911,10 @@ app.whenReady().then(async () => {
         // possibly idle page — confirmed by a real probe that watched the
         // wrong one for 200s while a real ask_chatgpt call ran elsewhere).
         if (target.startsWith('worker:')) return findWorkerViewByTool(target.slice('worker:'.length))?.webContents ?? null
-        return findAnyViewByUrl(target)?.webContents ?? null
+        // Fallback: any other window (e.g. a social sign-in window) whose URL matches.
+        return findAnyViewByUrl(target)?.webContents
+          ?? webContents.getAllWebContents().find(wc => !wc.isDestroyed() && wc.getURL().includes(target))
+          ?? null
       },
       onResult: (name, result) => {
         const head = result.ok ? 'ok' : `FAILED: ${result.error}`

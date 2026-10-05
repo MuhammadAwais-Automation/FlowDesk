@@ -2020,10 +2020,12 @@ server.tool(
 
 server.tool(
   'social_add_account',
-  'Add another account slot for a social platform (it gets the next id). Then sign it in with social_open_login.',
+  'Add another account slot for a social platform (it gets the next id), or with account re-point an existing slot. With googleAccount the slot lives in that Google account from the FlowDesk Accounts page (see googleAccounts in social_accounts), so "Continue with Google" in social_open_login needs no password. Then sign it in with social_open_login.',
   {
     platform: SOCIAL_PLATFORM.describe('Platform.'),
-    label: z.string().optional().describe('A name for it, e.g. "Brand 2".'),
+    label: z.string().max(60).optional().describe('A name for it, e.g. "Brand 2" (default: the masked Google email).'),
+    googleAccount: z.string().max(200).optional().describe('Email, label or partition of a Google account from social_accounts googleAccounts.'),
+    account: z.string().max(10).optional().describe('Existing slot id to re-point (e.g. "1") instead of adding a new slot.'),
   },
   { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   async (args) => textResult(await callGatewayRpc('social.addAccount', args))

@@ -11,6 +11,16 @@ let linkedin = [
 
 vi.mock('electron', () => ({ app: { getPath: () => dir }, BrowserWindow: vi.fn(), session: {} }))
 vi.mock('./sessions', () => ({ rememberedView: () => ({ tabId: 'social-reddit-x', partition: 'gmail-abc' }) }))
+const G1 = 'gmail-11111111-1111-4111-8111-111111111111'
+const G2 = 'gmail-22222222-2222-4222-8222-222222222222'
+vi.mock('./flow', async () => {
+  const real = await vi.importActual<typeof import('./flow')>('./flow')
+  return {
+    maskAccount: real.maskAccount,
+    matchFlowAccount: real.matchFlowAccount,
+    getGoogleAccounts: () => [{ email: 'alice@example.com', partition: G1, label: 'Main' }, { email: 'bob@example.com', partition: G2, label: null }],
+  }
+})
 vi.mock('./linkedin/linkedin', () => ({
   getSavedLinkedInAccounts: () => linkedin,
   saveLinkedInAccounts: (a: typeof linkedin) => { linkedin = a },
@@ -67,5 +77,26 @@ describe('social account registry', () => {
   it('strips control characters and caps label length', () => {
     expect(cleanLabel(String.fromCharCode(32, 97, 0, 98, 10, 99, 32))).toBe('abc')
     expect(cleanLabel('x'.repeat(200))).toHaveLength(60)
+  })
+
+  it('binds a slot to a Google account from the Accounts page', () => {
+    const p = addSocialAccount('pinterest', undefined, { googleAccount: 'alice@example.com' })
+    expect(p).toMatchObject({ id: '2', label: 'al***@example.com', partition: G1 })
+    expect(resolveSocialAccount('pinterest', G1)?.id).toBe('2')
+    expect(() => addSocialAccount('pinterest', undefined, { googleAccount: 'Main' })).toThrow(/already uses that Google account/)
+    expect(() => addSocialAccount('pinterest', undefined, { googleAccount: 'nobody@example.com' })).toThrow(/unknown Google account/)
+  })
+
+  it('re-points an existing slot to a Google account and keeps the others', () => {
+    const p = addSocialAccount('facebook', 'Bob FB', { account: '1', googleAccount: G2 })
+    expect(p).toMatchObject({ id: '1', label: 'Bob FB', partition: G2 })
+    expect(listSocialAccounts('facebook')).toHaveLength(1)
+    expect(resolveSocialAccount('facebook')?.partition).toBe(G2)
+    expect(() => addSocialAccount('facebook', undefined, { account: '9', googleAccount: G1 })).toThrow(/unknown facebook account/)
+  })
+
+  it('keeps a bound Google partition through a reload and drops forged ones', () => {
+    expect(parseStored({ tiktok: [{ id: '2', label: 'x', google: G1 }, { id: '3', label: 'y', google: 'social-evil' }] }))
+      .toEqual({ tiktok: [{ id: '2', label: 'x', google: G1 }, { id: '3', label: 'y' }] })
   })
 })

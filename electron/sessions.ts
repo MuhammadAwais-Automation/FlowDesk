@@ -2,6 +2,7 @@ import { app, session, WebContentsView, BrowserWindow, shell, type WebContents }
 import { join } from 'path'
 import { isOAuthPopup } from './oauthRouting'
 import { routeLink } from './linkRouting'
+import { prepareGooglePopup, wantsGoogleChooser } from './googleSignInChooser'
 import { WHATSAPP_BRIDGE_SRC } from './whatsapp/whatsappInject'
 import { startLinkedInRealtimeWatch } from './linkedin/linkedinRealtimeWatch'
 import { startCdpRecorder } from './discovery/cdpRecorder'
@@ -379,7 +380,9 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
     logLinkRoutingDecision('window-open', view.webContents.getURL(), openUrl, decision)
     switch (decision) {
       case 'oauth-popup':
-        return { action: 'allow', overrideBrowserWindowOptions: popupWindowOptions }
+        // A social view's Google popup opens hidden: prepareGooglePopup first
+        // offers the Accounts-page Google accounts, then shows it.
+        return { action: 'allow', overrideBrowserWindowOptions: wantsGoogleChooser(partition, openUrl) ? { ...popupWindowOptions, show: false } : popupWindowOptions }
       case 'in-app':
         view.webContents.loadURL(openUrl)
         return { action: 'deny' }
@@ -387,6 +390,9 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
         shell.openExternal(openUrl)
         return { action: 'deny' }
     }
+  })
+  view.webContents.on('did-create-window', (child, { url: openUrl }) => {
+    if (wantsGoogleChooser(partition, openUrl)) void prepareGooglePopup(child, openUrl, BrowserWindow.getFocusedWindow())
   })
 
   // window.open is only half of it: an ordinary target="_self" link never
