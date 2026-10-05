@@ -742,6 +742,23 @@ export function uploadImageScript(base64: string, projectId: string, mimeType: s
 }
 
 /**
+ * Hosts whose media needs the signed-in Google session, so they are fetched
+ * from inside the Flow page. A thumbnail on lh3.googleusercontent.com fetched
+ * without cookies was seen (2026-10-05) to 302 via lh3.google.com to
+ * accounts.google.com sign-in.
+ */
+export const FLOW_PAGE_MEDIA_HOSTS = ['flow.google.com', 'labs.google', 'lh3.googleusercontent.com'] as const
+
+/**
+ * Where a session fetch may END after the browser follows redirects: Google's
+ * own domains only (exact host or a real dot-suffix). A sign-in page also ends
+ * here, which the content-type check then refuses.
+ */
+export const FLOW_MEDIA_FINAL_HOSTS = ['flow.google.com', 'labs.google', 'flow-content.google', '.google.com', '.googleusercontent.com'] as const
+
+export const FLOW_MEDIA_MAX_BYTES = 200 * 1024 * 1024
+
+/**
  * Fetches the bytes of one media item.
  *
  * There is no download *request* to copy. Flow's own download button builds a
@@ -753,19 +770,43 @@ export function uploadImageScript(base64: string, projectId: string, mimeType: s
  * So this fetches that URL directly. The URL comes from a listing
  * (`listProjectsScript` thumbnails, `listProjectMediaScript`) rather than being
  * constructed, because the token in it is opaque and not derivable from a media
- * id.
+ * id. Only https URLs on FLOW_PAGE_MEDIA_HOSTS are fetched, and only an
+ * image/video answer within the size cap is returned.
  */
-export function fetchMediaUrlScript(mediaUrl: string): string {
+export function fetchMediaUrlScript(mediaUrl: string, maxBytes: number = FLOW_MEDIA_MAX_BYTES): string {
   return buildScript(`
     var url = ${JSON.stringify(mediaUrl)}
-    if (url.indexOf('/asb/') === -1 && url.indexOf('googleusercontent.com') === -1 && url.indexOf('flow-content.google') === -1) {
+    var maxBytes = ${JSON.stringify(maxBytes)}
+    var startHosts = ${JSON.stringify(FLOW_PAGE_MEDIA_HOSTS)}
+    var finalHosts = ${JSON.stringify(FLOW_MEDIA_FINAL_HOSTS)}
+    function hostOk(host, list) {
+      host = String(host || '').toLowerCase()
+      for (var i = 0; i < list.length; i++) {
+        var a = list[i]
+        if (a.charAt(0) === '.' ? (host.length > a.length && host.slice(-a.length) === a) : host === a) return true
+      }
+      return false
+    }
+    var parsed = null
+    try { parsed = new URL(url) } catch (e) {}
+    if (!parsed || parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || !hostOk(parsed.hostname, startHosts)) {
       return { ok: false, error: 'refusing to fetch a URL that is not a Flow media URL: ' + url.slice(0, 80) }
     }
 
-    var res = await fetch(url, { credentials: 'include' })
+    var res = await fetch(parsed.toString(), { credentials: 'include', redirect: 'follow' })
+    var finalHost = ''
+    try { finalHost = new URL(res.url).hostname } catch (e) {}
+    if (!hostOk(finalHost, finalHosts)) return { ok: false, error: 'media URL redirected off Google (' + finalHost + ') -- refused' }
     if (!res.ok) return { ok: false, error: 'media fetch failed (HTTP ' + res.status + ') -- Flow media URLs expire, so re-list the project and try the fresh URL' }
+    var type = String(res.headers.get('content-type') || '').toLowerCase()
+    if (!/^(image|video)\\//.test(type)) {
+      return { ok: false, error: 'the media URL did not answer with an image or video (' + (type.split(';')[0] || 'no type') + ') -- the URL expired or this account is not signed in to Flow' }
+    }
+    var declared = Number(res.headers.get('content-length') || 0)
+    if (declared > maxBytes) return { ok: false, error: 'media is too large (' + declared + ' bytes, max ' + maxBytes + ')' }
 
     var blob = await res.blob()
+    if (blob.size > maxBytes) return { ok: false, error: 'media is too large (' + blob.size + ' bytes, max ' + maxBytes + ')' }
     var base64 = await new Promise(function (resolve, reject) {
       var reader = new FileReader()
       reader.onerror = function () { reject(new Error('could not read the media bytes')) }

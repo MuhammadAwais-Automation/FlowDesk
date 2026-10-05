@@ -159,10 +159,10 @@ describe('flow view image', () => {
     expect(String(out.error)).toContain('media URL')
   })
 
-  it('reports Google Flow not being open as a result, not a throw', async () => {
+  it('refuses something that is not a Flow media URL before touching any page', async () => {
     const out = await flowViewMedia('media-1')
     expect(out.ok).toBe(false)
-    expect(String(out.error)).toContain('Google Flow is not open')
+    expect(String(out.error)).toContain('refusing')
   })
 })
 
