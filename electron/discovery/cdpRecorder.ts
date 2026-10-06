@@ -398,6 +398,27 @@ export function startCdpRecorder(options: CdpRecorderOptions): () => void {
       const key = `${sessionId ?? 'page'}:${String(params.requestId ?? '')}`
 
       if (method === 'Network.requestWillBeSent') {
+        // A redirect re-sends under the SAME requestId, which overwrote the
+        // original entry: Gumroad's "create product" POST (answered 302 to the
+        // edit page) vanished from the capture. Record the redirected hop first.
+        const redirect = params.redirectResponse as { status?: number; mimeType?: string; headers?: Record<string, unknown> } | undefined
+        const prev = redirect ? pending.get(key) : undefined
+        if (prev) {
+          pending.delete(key)
+          const location = redirect?.headers?.location ?? redirect?.headers?.Location
+          push({
+            t: Math.round((prev.startedAt - startedAt) / 100) / 10,
+            method: prev.method,
+            url: prev.url,
+            status: redirect?.status,
+            mimeType: redirect?.mimeType,
+            from: prev.from,
+            postData: prev.postData,
+            reqHeaders: prev.headers,
+            target: prev.target,
+            preview: typeof location === 'string' ? `redirect -> ${location}` : 'redirect',
+          })
+        }
         const request = params.request as { url?: string; method?: string; postData?: string; headers?: Record<string, unknown> } | undefined
         const url = request?.url ?? ''
         if (!matchesUrl(url)) return
