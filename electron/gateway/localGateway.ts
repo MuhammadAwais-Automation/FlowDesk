@@ -104,6 +104,11 @@ import {
   pinterestNotifications, pinterestOutlier, pinterestPin, pinterestRelated, pinterestSavePin, pinterestScheduledPins, pinterestSearch,
   pinterestStatus, pinterestSuggest, pinterestTrends, pinterestUser, pinterestUserBoards, pinterestUserPins,
 } from '../pinterest'
+import {
+  gumroadCreateDiscount, gumroadCreateProduct, gumroadDashboard, gumroadDeleteDiscount, gumroadDeleteProduct, gumroadDiscounts,
+  gumroadEditProduct, gumroadProduct, gumroadProducts, gumroadSearch, gumroadSetPublished, gumroadStatus, gumroadUploadCover,
+  gumroadUploadFile,
+} from '../gumroad'
 
 // Any non-empty account value is passed on as text, so an odd value is refused as unknown instead of meaning account 1.
 const pinAccount = (p: Record<string, unknown>): string | undefined => p.account === undefined || p.account === null || p.account === '' ? undefined : String(p.account)
@@ -414,6 +419,25 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'pinterest.deletePin': async (p) => pinterestDeletePin({ pinId: p.pinId, account: pinAccount(p) }),
   'pinterest.deleteBoard': async (p) => pinterestDeleteBoard({ boardId: p.boardId, account: pinAccount(p) }),
   'pinterest.deleteScheduledPin': async (p) => pinterestDeleteScheduledPin({ scheduledPinId: p.scheduledPinId, account: pinAccount(p) }),
+  'gumroad.status': async (p) => gumroadStatus(pinAccount(p)),
+  'gumroad.products': async (p) => gumroadProducts({ page: p.page, account: pinAccount(p) }),
+  'gumroad.product': async (p) => gumroadProduct({ permalink: p.permalink, account: pinAccount(p) }),
+  'gumroad.dashboard': async (p) => gumroadDashboard(pinAccount(p)),
+  'gumroad.search': async (p) => gumroadSearch({ query: p.query, limit: p.limit, account: pinAccount(p) }),
+  'gumroad.discounts': async (p) => gumroadDiscounts(pinAccount(p)),
+  'gumroad.createProduct': async (p) => gumroadCreateProduct({ name: p.name, price: p.price, type: p.type, account: pinAccount(p) }),
+  'gumroad.editProduct': async (p) => gumroadEditProduct({
+    permalink: p.permalink, name: p.name, price: p.price, description: p.description, summary: p.summary, tags: p.tags, account: pinAccount(p),
+  }),
+  'gumroad.uploadCover': async (p) => gumroadUploadCover({ permalink: p.permalink, imagePath: p.imagePath, account: pinAccount(p) }),
+  'gumroad.uploadFile': async (p) => gumroadUploadFile({ permalink: p.permalink, filePath: p.filePath, account: pinAccount(p) }),
+  'gumroad.publishProduct': async (p) => gumroadSetPublished({ permalink: p.permalink, published: true, account: pinAccount(p) }),
+  'gumroad.unpublishProduct': async (p) => gumroadSetPublished({ permalink: p.permalink, published: false, account: pinAccount(p) }),
+  'gumroad.deleteProduct': async (p) => gumroadDeleteProduct({ permalink: p.permalink, account: pinAccount(p) }),
+  'gumroad.createDiscount': async (p) => gumroadCreateDiscount({
+    code: p.code, name: p.name, percent: p.percent, amount: p.amount, products: p.products, maxUses: p.maxUses, expiresAt: p.expiresAt, account: pinAccount(p),
+  }),
+  'gumroad.deleteDiscount': async (p) => gumroadDeleteDiscount({ id: p.id, account: pinAccount(p) }),
   'social.accounts': async (p) => socialAccountsStatus(isSocialPlatform(p.platform) ? p.platform : undefined),
   'social.addAccount': async (p) => isSocialPlatform(p.platform)
     ? (() => {

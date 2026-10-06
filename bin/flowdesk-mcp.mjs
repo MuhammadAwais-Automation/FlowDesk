@@ -93,7 +93,7 @@ function findGatewayConfig() {
 // page (first background-view load alone can take 15s) or on generation
 // (ask.*, Flow video, TikTok upload) failed on the client while the app kept
 // working. The gateway itself has no shorter limit, so match the real work.
-const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$)/
+const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover)$)/
 function rpcTimeoutMs(method) {
   return LONG_RPC.test(method) ? 15 * 60_000 : 120_000
 }
@@ -336,16 +336,16 @@ function formatBrainVisual(data) {
 
 // Sent to every MCP client on connect (the spec's `instructions`), so any agent
 // knows where the how-to lives before it picks a tool.
-const SERVER_INSTRUCTIONS = `FlowDesk drives the user's own signed-in accounts (ChatGPT, Google Flow, TikTok, LinkedIn, Reddit, WhatsApp, Facebook, Pinterest) through the FlowDesk desktop app, which must be running.
+const SERVER_INSTRUCTIONS = `FlowDesk drives the user's own signed-in accounts (ChatGPT, Google Flow, TikTok, LinkedIn, Reddit, WhatsApp, Facebook, Pinterest, Gumroad) through the FlowDesk desktop app, which must be running.
 
 Before using a family of tools, read its skill with flowdesk_skill_get — it says which tool fits which job, the order to call them in, timings, costs and what each error means (all verified live):
 - chatgpt_* and ask_chatgpt → flowdesk_skill_get { id: "chatgpt" }
 - flow_* (Google Flow images and video) → flowdesk_skill_get { id: "google-flow" }
-- tiktok_* / linkedin_* / reddit_* / whatsapp_* / facebook_* / pinterest_* → flowdesk_skill_get { id: "tiktok" | "linkedin" | "reddit" | "whatsapp" | "facebook" | "pinterest" }
+- tiktok_* / linkedin_* / reddit_* / whatsapp_* / facebook_* / pinterest_* / gumroad_* → flowdesk_skill_get { id: "tiktok" | "linkedin" | "reddit" | "whatsapp" | "facebook" | "pinterest" | "gumroad" }
 - several accounts per platform: social_accounts lists them; pass account (id, label or partition) to any social tool. An unknown account is an error, never another account.
 flowdesk_skills_list shows every other skill.
 
-Rules of thumb: still images and image edits → chatgpt_generate_image / chatgpt_edit_image; video → Google Flow. Long jobs return ids — poll chatgpt_image_jobs or flow_media_status instead of starting the same job again. A result with isError did not happen; read its error before retrying. Public or outbound actions (post, comment, send, like, vote, follow, delete, profile edits) need the user's explicit yes in chat for that exact action first.`
+Rules of thumb: still images and image edits → chatgpt_generate_image / chatgpt_edit_image; video → Google Flow. Long jobs return ids — poll chatgpt_image_jobs or flow_media_status instead of starting the same job again. A result with isError did not happen; read its error before retrying. Public or outbound actions (post, comment, send, like, vote, follow, delete, profile edits) need the user's explicit yes in chat for that exact action first; so do creating, editing or publishing Gumroad products.`
 
 const server = new McpServer({
   name: 'flowdesk-mcp',
@@ -2163,6 +2163,156 @@ server.tool(
   { scheduledPinId: z.string().regex(/^\d{1,25}$/).describe('Id from pinterest_scheduled_pins.'), account: PIN_ACCOUNT },
   { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('pinterest.deleteScheduledPin', args))
+)
+
+// ── GUMROAD ──────────────────────────────────────────────────────────────────
+// Gumroad's API cannot create products, so these drive the web app's own
+// endpoints inside the account's hidden window. New products start unpublished.
+
+const GUM_ACCOUNT = z.string().optional().describe('Gumroad account id, label or partition from social_accounts {platform:"gumroad"}. Omit for account 1. Unknown ids fail, never fall back.')
+const GUM_PERMALINK = z.string().min(2).max(300).describe('Product permalink from gumroad_products (e.g. "nwkdx"), or its product / edit URL.')
+const GUM_WRITE_NOTE = 'A real action on the user’s Gumroad store: get the user’s explicit yes in chat for this exact action first.'
+
+server.tool(
+  'gumroad_status',
+  'Which Gumroad account a call would use and whether it is signed in.',
+  { account: GUM_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: false },
+  async (args) => textResult(await callGatewayRpc('gumroad.status', args))
+)
+
+server.tool(
+  'gumroad_products',
+  'The account\'s own products: permalink, name, status (published / unpublished), price, sales, revenue and URL. 1-based pages.',
+  { page: z.number().int().min(1).optional(), account: GUM_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: false },
+  async (args) => textResult(await callGatewayRpc('gumroad.products', args))
+)
+
+server.tool(
+  'gumroad_product',
+  'One of the account\'s products in full: name, price, type, published, description (HTML), summary, tags, cover count, content files, sales and public URL.',
+  { permalink: GUM_PERMALINK, account: GUM_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: false },
+  async (args) => textResult(await callGatewayRpc('gumroad.product', args))
+)
+
+server.tool(
+  'gumroad_dashboard',
+  'Store numbers: balance, sales totals (7 / 28 days / all time), per-product sales, revenue and visits, and the payout status.',
+  { account: GUM_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: false },
+  async (args) => textResult(await callGatewayRpc('gumroad.dashboard', args))
+)
+
+server.tool(
+  'gumroad_search',
+  'Search Gumroad Discover (the public marketplace) to research a niche: total matching products, the most common tags, and top products with seller, price, ratings count and URL.',
+  { query: z.string().min(1).max(100), limit: z.number().int().min(1).max(50).optional().describe('Products to return (default 20).'), account: GUM_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.search', args))
+)
+
+server.tool(
+  'gumroad_discounts',
+  'The account\'s discount codes (id, code, amount, products, expiry) and the products a discount can apply to.',
+  { account: GUM_ACCOUNT },
+  { readOnlyHint: true, openWorldHint: false },
+  async (args) => textResult(await callGatewayRpc('gumroad.discounts', args))
+)
+
+server.tool(
+  'gumroad_create_product',
+  `Create a new product, unpublished (not for sale until gumroad_publish_product). Then add a cover (gumroad_upload_cover), the file buyers get (gumroad_upload_file) and the description (gumroad_edit_product). ${GUM_WRITE_NOTE}`,
+  {
+    name: z.string().min(1).max(255),
+    price: z.number().min(0).max(100000).describe('US dollars; 0 = free, otherwise at least 0.99.'),
+    type: z.enum(['digital', 'course', 'ebook']).optional().describe('Default digital.'),
+    account: GUM_ACCOUNT,
+  },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.createProduct', args))
+)
+
+server.tool(
+  'gumroad_edit_product',
+  `Change a product's name, price, description (HTML: <p>, <ul><li>, <strong>, <h2>…), summary (the short line under the buy button) or tags. Only the fields given change. ${GUM_WRITE_NOTE}`,
+  {
+    permalink: GUM_PERMALINK,
+    name: z.string().min(1).max(255).optional(),
+    price: z.number().min(0).max(100000).optional().describe('US dollars.'),
+    description: z.string().max(50000).optional(),
+    summary: z.string().max(500).optional(),
+    tags: z.array(z.string().min(1).max(50)).max(10).optional().describe('Replaces all tags.'),
+    account: GUM_ACCOUNT,
+  },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.editProduct', args))
+)
+
+server.tool(
+  'gumroad_upload_cover',
+  `Add a cover image to a product's page (png/jpg/gif/webp, max 20 MB; 1280x720 or larger looks best). Only images the user has the rights to. ${GUM_WRITE_NOTE}`,
+  { permalink: GUM_PERMALINK, imagePath: z.string().min(3).describe('Absolute path to a local image.'), account: GUM_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.uploadCover', args))
+)
+
+server.tool(
+  'gumroad_upload_file',
+  `Upload the file buyers receive (pdf, zip, images, audio, video…, max 500 MB) and add it to the product's content. Never upload personal documents. ${GUM_WRITE_NOTE}`,
+  { permalink: GUM_PERMALINK, filePath: z.string().min(3).describe('Absolute path to a local file.'), account: GUM_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.uploadFile', args))
+)
+
+server.tool(
+  'gumroad_publish_product',
+  `Put a product on sale publicly. FlowDesk also asks the user to allow it in the app. ${GUM_WRITE_NOTE}`,
+  { permalink: GUM_PERMALINK, account: GUM_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.publishProduct', args))
+)
+
+server.tool(
+  'gumroad_unpublish_product',
+  `Take a product off sale (it stays as an unpublished draft). ${GUM_WRITE_NOTE}`,
+  { permalink: GUM_PERMALINK, account: GUM_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.unpublishProduct', args))
+)
+
+server.tool(
+  'gumroad_delete_product',
+  `Delete a product. Cannot be undone; FlowDesk also asks the user to allow it in the app. ${GUM_WRITE_NOTE}`,
+  { permalink: GUM_PERMALINK, account: GUM_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.deleteProduct', args))
+)
+
+server.tool(
+  'gumroad_create_discount',
+  `Create a discount code: percent or a dollar amount off, for given products (omit products = every product), optionally limited uses and an expiry. ${GUM_WRITE_NOTE}`,
+  {
+    code: z.string().regex(/^[A-Za-z0-9_-]{2,32}$/).describe('What buyers type, e.g. XMAS20.'),
+    name: z.string().min(1).max(100).optional().describe('Internal name; default the code.'),
+    percent: z.number().int().min(1).max(100).optional(),
+    amount: z.number().min(0.01).optional().describe('US dollars off. Give percent or amount, not both.'),
+    products: z.array(GUM_PERMALINK).optional(),
+    maxUses: z.number().int().min(1).optional(),
+    expiresAt: z.string().optional().describe('ISO date-time, e.g. 2026-12-26T00:00:00Z.'),
+    account: GUM_ACCOUNT,
+  },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.createDiscount', args))
+)
+
+server.tool(
+  'gumroad_delete_discount',
+  `Delete a discount code (id from gumroad_discounts). FlowDesk also asks the user to allow it in the app. ${GUM_WRITE_NOTE}`,
+  { id: z.string().min(6).max(64), account: GUM_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.deleteDiscount', args))
 )
 
 const SOCIAL_PLATFORM = z.enum(['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook', 'pinterest', 'gumroad'])

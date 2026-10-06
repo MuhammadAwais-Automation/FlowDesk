@@ -39,9 +39,13 @@ export const EVAL_ACTIONS = ['flow_eval', 'linkedin_eval', 'tiktok_eval']
 
 /**
  * Always ask, even if the policy file leaves them out: wiping a whole account,
- * and Pinterest deletes (a pin, a board with all its pins, a scheduled pin).
+ * Pinterest deletes (a pin, a board with all its pins, a scheduled pin), and
+ * putting a Gumroad product on sale or deleting a product or discount.
  */
-export const ALWAYS_ASK = ['tiktok_delete_all_videos', 'pinterest_delete_pin', 'pinterest_delete_board', 'pinterest_delete_scheduled_pin']
+export const ALWAYS_ASK = [
+  'tiktok_delete_all_videos', 'pinterest_delete_pin', 'pinterest_delete_board', 'pinterest_delete_scheduled_pin',
+  'gumroad_publish_product', 'gumroad_delete_product', 'gumroad_delete_discount',
+]
 
 export const APPROVAL_TIMEOUT_MS = 60_000
 
@@ -55,7 +59,7 @@ export function actionName(method: string, params: Record<string, unknown>): str
   return canonicalAction(method === 'tools.call' && typeof params.name === 'string' ? params.name : method)
 }
 
-const WRITE = /(^|_)(send|create|delete|remove|like|unlike|comment|reply|react|share|follow|hide|update|upload|submit|vote|subscribe|mark_read|connection|edit|switch_account|generate|extend|remember|decide|save|run|ask|download|add|open|eval)(_|$)/
+const WRITE = /(^|_)(send|create|delete|remove|like|unlike|comment|reply|react|share|follow|hide|update|upload|submit|vote|subscribe|mark_read|connection|edit|switch_account|publish|unpublish|generate|extend|remember|decide|save|run|ask|download|add|open|eval)(_|$)/
 
 export function isWriteAction(canonical: string): boolean {
   return !canonical.startsWith('tools_list') && WRITE.test(canonical)
@@ -65,7 +69,7 @@ export function isWriteAction(canonical: string): boolean {
 export function summarizeParams(params: Record<string, unknown>): Record<string, string> {
   const args = (params.args && typeof params.args === 'object' ? params.args : params) as Record<string, unknown>
   const out: Record<string, string> = {}
-  for (const k of ['account', 'platform', 'activityId', 'commentId', 'chatId', 'msgId', 'videoId', 'itemId', 'postId', 'subreddit', 'conversationUrn', 'profileUrl', 'filePath', 'image', 'localFilePath', 'imagePath', 'mediaUrl', 'mediaId', 'fileId', 'conversationId', 'projectId', 'privacy', 'visibility']) {
+  for (const k of ['account', 'platform', 'activityId', 'commentId', 'chatId', 'msgId', 'videoId', 'itemId', 'postId', 'subreddit', 'conversationUrn', 'profileUrl', 'filePath', 'image', 'localFilePath', 'imagePath', 'mediaUrl', 'mediaId', 'fileId', 'conversationId', 'projectId', 'privacy', 'visibility', 'permalink', 'code']) {
     if (args[k] != null && args[k] !== '') out[k] = String(args[k]).slice(0, 120)
   }
   for (const k of ['text', 'message', 'caption', 'bio', 'title', 'body']) {
