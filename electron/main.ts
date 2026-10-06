@@ -153,6 +153,7 @@ import { executeBrainCapability } from './brain/capabilityProtocol'
 import { askClaudeSdk } from './claudeSdkProvider'
 import { startLocalGateway, setGatewayBrainHandler, knownWriteActions, executeWorkflow, resumeWorkflow, type GatewayServer } from './gateway/localGateway'
 import { setGooglePartitionGetter, setGoogleAccountsGetter } from './flow'
+import { waitForGoogleSignIn } from './googleSignInChooser'
 import { configureChatgptImages } from './chatgptImages'
 import { startRadar } from './tiktok/tiktokRadar'
 import { loadNiches } from './tiktok/tiktokRadarStore'
@@ -765,7 +766,8 @@ ipcMain.handle('gmail:add', async () => {
   loginWin.webContents.on('did-navigate', (_ev, url) => {
     try { loginWin.setTitle(`Sign in — ${new URL(url).hostname}`) } catch {}
   })
-  await new Promise<void>((resolve) => loginWin.on('closed', () => resolve()))
+  const { signedIn } = await waitForGoogleSignIn(loginWin, session.fromPartition(`persist:${partition}`))
+  if (!signedIn) return { error: 'cancelled' }
 
   // Step 2: Auto-detect email using a hidden window with the same session
   let email: string | null = null
@@ -1069,7 +1071,8 @@ ipcMain.handle('yt:add', async () => {
   loginWin.webContents.on('did-navigate', (_ev, url) => {
     try { loginWin.setTitle(`YouTube Login — ${new URL(url).hostname}`) } catch {}
   })
-  await new Promise<void>((resolve) => loginWin.on('closed', () => resolve()))
+  const { signedIn } = await waitForGoogleSignIn(loginWin, session.fromPartition(`persist:${partition}`))
+  if (!signedIn) return { error: 'cancelled' }
 
   // Step 2: Auto-detect email via hidden window with same session
   let email: string | null = null

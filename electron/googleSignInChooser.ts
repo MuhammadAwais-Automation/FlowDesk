@@ -30,6 +30,42 @@ export async function hasGoogleLogin(ses: Session): Promise<boolean> {
   return sid.length > 0
 }
 
+/**
+ * Waits for a Google sign-in window to finish. Google keeps the window open
+ * on its own pages after a successful sign-in, so waiting for the user to
+ * close it left "Adding…" spinning (and an app quit there lost the account).
+ * Resolves as soon as the session holds a Google login (then closes the
+ * window), or when the user closes it first. `signedIn` says which.
+ */
+export function waitForGoogleSignIn(
+  win: Pick<BrowserWindow, 'on' | 'close' | 'isDestroyed'>,
+  ses: Session,
+  o: { pollMs?: number; settleMs?: number; isSignedIn?: (s: Session) => Promise<boolean> } = {},
+): Promise<{ signedIn: boolean }> {
+  const check = o.isSignedIn ?? hasGoogleLogin
+  return new Promise(resolve => {
+    let done = false
+    let settling = false
+    const finish = (signedIn: boolean) => {
+      if (done) return
+      done = true
+      clearInterval(timer)
+      resolve({ signedIn })
+    }
+    const timer = setInterval(async () => {
+      if (done || settling || !(await check(ses).catch(() => false)) || done) return
+      settling = true
+      clearInterval(timer)
+      // Let Google's post-login redirects set the rest of its cookies first.
+      setTimeout(() => {
+        if (!win.isDestroyed()) win.close()
+        finish(true)
+      }, o.settleMs ?? 2000)
+    }, o.pollMs ?? 1000)
+    win.on('closed', () => { void check(ses).catch(() => false).then(finish) })
+  })
+}
+
 const isGoogleCookie = (c: Cookie) => !!c.domain && /(^|\.)google\.com$/.test(c.domain.replace(/^\./, ''))
 
 /** The cookie as cookies.set() needs it; host-only and __Host- cookies keep no domain. */
