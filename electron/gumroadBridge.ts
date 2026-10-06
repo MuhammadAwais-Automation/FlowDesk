@@ -123,7 +123,8 @@ export function checkPrice(v: unknown): number {
 
 export function checkTags(v: unknown): string[] {
   if (!Array.isArray(v)) throw new Error('tags must be a list of words')
-  const tags = [...new Set(v.map(t => checkText(t, 'tag', 50).toLowerCase()).filter(Boolean))]
+  // Gumroad refuses longer tags (422 "under 20 characters"; 20 itself is accepted).
+  const tags = [...new Set(v.map(t => checkText(t, 'tag', 20).toLowerCase()).filter(Boolean))]
   if (tags.length > 10) throw new Error('at most 10 tags')
   return tags
 }

@@ -2243,7 +2243,7 @@ server.tool(
     price: z.number().min(0).max(100000).optional().describe('US dollars.'),
     description: z.string().max(50000).optional(),
     summary: z.string().max(500).optional(),
-    tags: z.array(z.string().min(1).max(50)).max(10).optional().describe('Replaces all tags.'),
+    tags: z.array(z.string().min(1).max(20)).max(10).optional().describe('Replaces all tags; each at most 20 characters.'),
     account: GUM_ACCOUNT,
   },
   { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
