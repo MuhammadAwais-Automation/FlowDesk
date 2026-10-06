@@ -400,6 +400,32 @@ async function call(script: string, opts: CallOptions = {}): Promise<FlowResult>
   })
 }
 
+/**
+ * Runs `fn` with the account's Flow page open on `projectId`, inside the same
+ * one-at-a-time queue as every other call on that account (so a poll cannot
+ * navigate the page away mid-run). For flowUi, which drives the page itself.
+ */
+export async function withFlowPage(
+  projectId: string,
+  account: string | null | undefined,
+  fn: (wc: WebContents, partition: string | null) => Promise<FlowResult>,
+): Promise<FlowResult> {
+  const resolved = resolvePartition(projectId, account)
+  if ('error' in resolved) return { ok: false, error: resolved.error }
+  const partition = resolved.partition
+  return serialized(partition ?? '', async () => {
+    const wc = await ensureFlowWebContents(projectId, partition)
+    if (!wc) return { ok: false, error: NOT_OPEN + openUrlSummary() }
+    try {
+      const r = await fn(wc, partition)
+      if (partition) learnOwners(r, partition)
+      return r
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+}
+
 /** Every project and media id in a result belongs to the account it came from. */
 function learnOwners(r: FlowResult, partition: string) {
   if (!r.ok) return

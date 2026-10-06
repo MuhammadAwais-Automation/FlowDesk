@@ -135,6 +135,7 @@ import {
   flowEval,
   flowAccounts,
 } from '../flow'
+import { flowUiGenerateImage, flowUiImageModels } from '../flowUi'
 import {
   initSkillsRegistry,
   listSkills,
@@ -656,6 +657,15 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     typeof p.imageModel === 'string' ? p.imageModel : undefined,
     acct(p),
   ),
+  'flow.imageModels': async (p) => flowUiImageModels(String(p.projectId || ''), acct(p)),
+  'flow.uiGenerateImage': async (p) => flowUiGenerateImage({
+    prompt: String(p.prompt || ''),
+    projectId: String(p.projectId || ''),
+    account: acct(p),
+    model: typeof p.model === 'string' ? p.model : null,
+    aspectRatio: p.aspectRatio,
+    count: p.count,
+  }),
   'flow.generateVideo': async (p) => flowGenerateVideo(
     String(p.prompt || ''),
     String(p.projectId || ''),

@@ -93,7 +93,7 @@ function findGatewayConfig() {
 // page (first background-view load alone can take 15s) or on generation
 // (ask.*, Flow video, TikTok upload) failed on the client while the app kept
 // working. The gateway itself has no shorter limit, so match the real work.
-const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover)$|pinFactory\.nicheScan$)/
+const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover)$|pinFactory\.nicheScan$|flow\.(uiGenerateImage|imageModels)$)/
 function rpcTimeoutMs(method) {
   return LONG_RPC.test(method) ? 15 * 60_000 : 120_000
 }
@@ -2572,16 +2572,29 @@ server.tool(
 )
 
 server.tool(
-  'flow_generate_image',
-  'Generate one AI image in Google Flow (model Nano Banana 2; in the live test it spent no credits). Comes back in about 30 s with mediaId and imageUrl; download with flow_download_media or animate with flow_generate_video_from_image. Output is landscape: Flow\'s current API has no verified aspect-ratio setting. Runs on the project\'s account and moves to another account\'s "FlowDesk" project if that one is out of credits.',
+  'flow_image_models',
+  'The image models Google Flow offers right now (read off its own settings menu, e.g. Nano Banana Pro, Nano Banana 2 Lite, Nano Banana 2), plus the current model, aspect ratio and count, and the ratios/counts flow_generate_image accepts.',
   {
-    account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'),
     projectId: z.string().min(1).describe('Project ID (flow_list_projects or flow_create_project).'),
-    prompt: z.string().min(1).describe('Detailed prompt describing the image.'),
-    imageModel: z.enum(['NANO_BANANA_2', 'NANO_BANANA_PRO']).optional().describe('Image model. Default NANO_BANANA_2 (verified). NANO_BANANA_PRO was refused by Flow when tried live.'),
+    account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\x27s own account, else the default.'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('flow.imageModels', args))
+)
+
+server.tool(
+  'flow_generate_image',
+  'Generate AI images in Google Flow by driving Flow\x27s own page like a person: picks the model, aspect ratio and count in Agent settings, types the prompt, presses Start, and waits (up to 4 min) for the new images in the project. Returns mediaIds and images[{mediaId,imageUrl}]; save each with flow_download_media { mediaUrl: imageUrl }. Images spent no credits in the live test. Flow\x27s agent can still choose a ratio from the prompt, so say the ratio in the prompt too (e.g. "3:4 portrait").',
+  {
+    account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\x27s own account, else the default.'),
+    projectId: z.string().min(1).describe('Project ID (flow_list_projects or flow_create_project).'),
+    prompt: z.string().min(1).max(8000).describe('Detailed prompt describing the image.'),
+    model: z.string().optional().describe('Model name exactly as flow_image_models lists it, e.g. "Nano Banana 2". Omit to keep the current one.'),
+    aspectRatio: z.enum(['16:9', '4:3', '1:1', '3:4', '9:16']).optional().describe('Omit to keep the current one.'),
+    count: z.number().int().min(1).max(4).optional().describe('Images per prompt (1-4). Omit to keep the current one.'),
   },
   { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-  async (args) => textResult(await callGatewayRpc('flow.generateImage', args))
+  async (args) => textResult(await callGatewayRpc('flow.uiGenerateImage', args))
 )
 
 server.tool(

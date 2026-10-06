@@ -201,7 +201,7 @@ export async function workerFor(partition: string, url: string, prefix = 'cgimg'
   return webContents
 }
 
-async function withCdp<T>(wc: WebContents, fn: (send: (m: string, p?: object) => Promise<any>) => Promise<T>): Promise<T> {
+export async function withCdp<T>(wc: WebContents, fn: (send: (m: string, p?: object) => Promise<any>) => Promise<T>): Promise<T> {
   const wasAttached = wc.debugger.isAttached()
   if (!wasAttached) wc.debugger.attach('1.3')
   const send = (m: string, p?: object) => wc.debugger.sendCommand(m, p)

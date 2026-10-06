@@ -2,7 +2,7 @@
 name: google-flow
 title: "Google Flow (images, videos, projects, accounts)"
 description: "How to use every FlowDesk Google Flow tool: projects, image generation, upload, text-to-video, image-to-video, extending a video, polling status, downloading, and spreading work over several Google accounts' credits."
-version: 1.0.0
+version: 1.1.0
 domain: flow
 tools:
   - flow_accounts
@@ -10,6 +10,7 @@ tools:
   - flow_list_projects
   - flow_create_project
   - flow_list_project_media
+  - flow_image_models
   - flow_generate_image
   - flow_upload_image
   - flow_video_models
@@ -30,8 +31,8 @@ signed-in Google accounts in Google Flow; videos spend that account's Flow credi
 - Checking Flow credits, projects, or whether a generation is finished; downloading the result.
 
 ## When not to use
-- A still image with portrait/square framing, or an image edit: use the `chatgpt` skill
-  (`chatgpt_generate_image` / `chatgpt_edit_image`); Flow images are landscape only.
+- An image edit, or pin images (user rule: pins always come from ChatGPT): use the `chatgpt` skill
+  (`chatgpt_generate_image` / `chatgpt_edit_image`).
 - Writing the video prompt itself: `video-prompt-writer`. Posting the video: `tiktok-publisher`.
 
 ## The flow of work
@@ -80,9 +81,15 @@ flow_generate_image         flow_upload_image            flow_generate_video
 
 ## Images
 
-- `flow_generate_image {projectId, prompt, account?, imageModel?}` returns in ~30 s with `mediaId` and `imageUrl`.
-  Output is landscape (1376×768). There is no aspect-ratio option. `imageModel` accepts only
-  `NANO_BANANA_2` (default, verified) or `NANO_BANANA_PRO` (was refused when tried live); anything else is refused.
+- `flow_image_models {projectId, account?}` reads Flow's own settings: the image models on offer (live
+  2026-10-06: Nano Banana Pro, Nano Banana 2 Lite, Nano Banana 2) and the current model, ratio and count.
+- `flow_generate_image {projectId, prompt, account?, model?, aspectRatio?, count?}` drives Flow's page like
+  a person (Flow moved to a creation agent in 2026-10 and its old direct call stopped working): sets model,
+  ratio (16:9, 4:3, 1:1, 3:4, 9:16) and count (1-4) in Agent settings, types the prompt, presses Start, and
+  waits up to 4 min. Returns `mediaIds` and `images[{mediaId, imageUrl}]`; save each with
+  `flow_download_media {mediaUrl: imageUrl}` (the bare mediaId failed to download live). Flow's agent can
+  still pick a ratio from the prompt — a "portrait" prompt came back 9:16 — so put the ratio in the prompt
+  too ("3:4 portrait aspect ratio"); that came back 3:4 (896×1200). No credits were spent on images.
 - `flow_upload_image {projectId, localFilePath, account?}` → `mediaId` in ~20 s. The path must be an absolute
   local path (no network/UNC paths) to a real PNG, JPEG or WebP file of at most 25 MB. Use it to animate
   an image from anywhere (for example one made with ChatGPT).
