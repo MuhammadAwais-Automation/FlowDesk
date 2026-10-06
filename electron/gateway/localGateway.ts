@@ -106,7 +106,7 @@ import {
 } from '../pinterest'
 import {
   gumroadCreateDiscount, gumroadCreateProduct, gumroadDashboard, gumroadDeleteDiscount, gumroadDeleteProduct, gumroadDiscounts,
-  gumroadEditProduct, gumroadProduct, gumroadProducts, gumroadSearch, gumroadSetPublished, gumroadStatus, gumroadUploadCover,
+  gumroadEditProduct, gumroadProduct, gumroadProducts, gumroadSearch, gumroadSetPublished, gumroadStatus, gumroadUploadCover, gumroadUploadThumbnail,
   gumroadUploadFile,
 } from '../gumroad'
 import { pinFactoryNicheScan } from '../pinFactory'
@@ -432,6 +432,7 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     permalink: p.permalink, name: p.name, price: p.price, description: p.description, summary: p.summary, tags: p.tags, account: pinAccount(p),
   }),
   'gumroad.uploadCover': async (p) => gumroadUploadCover({ permalink: p.permalink, imagePath: p.imagePath, account: pinAccount(p) }),
+  'gumroad.uploadThumbnail': async (p) => gumroadUploadThumbnail({ permalink: p.permalink, imagePath: p.imagePath, account: pinAccount(p) }),
   'gumroad.uploadFile': async (p) => gumroadUploadFile({ permalink: p.permalink, filePath: p.filePath, account: pinAccount(p) }),
   'gumroad.publishProduct': async (p) => gumroadSetPublished({ permalink: p.permalink, published: true, account: pinAccount(p) }),
   'gumroad.unpublishProduct': async (p) => gumroadSetPublished({ permalink: p.permalink, published: false, account: pinAccount(p) }),

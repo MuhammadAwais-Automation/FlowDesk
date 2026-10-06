@@ -219,13 +219,17 @@ async function checkLocalFile(path: unknown, max: number, what: string): Promise
   return { path, size: st.size, ext: extname(path).toLowerCase() }
 }
 
-/** Adds a cover image (the product page's gallery). */
-export function gumroadUploadCover(o: { permalink?: unknown; imagePath?: unknown; account?: GumroadAccountRef } = {}): Promise<GumroadResult> {
+/**
+ * Rails direct upload of one local image, then attaches it with `attach`:
+ *   cover:     POST /links/<p>/asset_previews {asset_preview:{signed_blob_id}}
+ *   thumbnail: POST /links/<p>/thumbnails     {thumbnail:{signed_blob_id}}   (captured 2026-10-06, probe gum-10)
+ */
+function uploadImage(o: { permalink?: unknown; imagePath?: unknown; account?: GumroadAccountRef }, what: 'cover' | 'thumbnail'): Promise<GumroadResult> {
   return withAccount(o.account, async acc => {
     const permalink = checkPermalink(o.permalink)
     const f = await checkLocalFile(o.imagePath, MAX_COVER_BYTES, 'imagePath')
     const mime = IMAGE_TYPES[f.ext]
-    if (!mime) throw new GumroadError(`cover must be one of ${Object.keys(IMAGE_TYPES).join(' ')}`)
+    if (!mime) throw new GumroadError(`${what} must be one of ${Object.keys(IMAGE_TYPES).join(' ')}`)
     const bytes = await readFile(f.path)
     const checksum = createHash('md5').update(bytes).digest('base64')
     const blob = await call(acc, {
@@ -233,13 +237,25 @@ export function gumroadUploadCover(o: { permalink?: unknown; imagePath?: unknown
       json: { blob: { filename: `${randomUUID()}${f.ext}`, content_type: mime, byte_size: f.size, checksum } },
     })
     const b = blob.json as { signed_id?: string; direct_upload?: { url?: string; headers?: Record<string, string> } } | null
-    if (!blob.ok || !b?.signed_id || !b.direct_upload?.url) throw new GumroadError(errorText(blob, 'cover upload start'))
+    if (!blob.ok || !b?.signed_id || !b.direct_upload?.url) throw new GumroadError(errorText(blob, `${what} upload start`))
     const put = await call(acc, { method: 'PUT', url: b.direct_upload.url, external: true, headers: b.direct_upload.headers ?? {}, base64: bytes.toString('base64') }, 120_000)
-    if (!put.ok) throw new GumroadError(errorText(put, 'cover upload'))
-    const prev = await call(acc, { method: 'POST', url: `${ORIGIN}/links/${permalink}/asset_previews`, json: { asset_preview: { signed_blob_id: b.signed_id } } })
-    expectSuccess(prev, 'attach cover')
+    if (!put.ok) throw new GumroadError(errorText(put, `${what} upload`))
+    const attach = what === 'cover'
+      ? { url: `${ORIGIN}/links/${permalink}/asset_previews`, json: { asset_preview: { signed_blob_id: b.signed_id } } }
+      : { url: `${ORIGIN}/links/${permalink}/thumbnails`, json: { thumbnail: { signed_blob_id: b.signed_id } } }
+    expectSuccess(await call(acc, { method: 'POST', ...attach }), `attach ${what}`)
     return { ok: true, product: mapProduct(await editProps(acc, permalink)) }
   })
+}
+
+/** Adds a cover image (the product page's gallery). */
+export function gumroadUploadCover(o: { permalink?: unknown; imagePath?: unknown; account?: GumroadAccountRef } = {}): Promise<GumroadResult> {
+  return uploadImage(o, 'cover')
+}
+
+/** Sets the square thumbnail shown on the profile/store grid, Library and Discover (replaces any old one). */
+export function gumroadUploadThumbnail(o: { permalink?: unknown; imagePath?: unknown; account?: GumroadAccountRef } = {}): Promise<GumroadResult> {
+  return uploadImage(o, 'thumbnail')
 }
 
 async function signedS3(acc: SocialAccount, c: PageCall & { method: 'POST' | 'PUT' }, sign: { contentType: string; resource: string; acl?: boolean }, awsKey: string, timeoutMs?: number): Promise<PageAnswer> {

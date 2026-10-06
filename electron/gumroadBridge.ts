@@ -335,6 +335,7 @@ export function mapProduct(props: unknown) {
     type: str(pr.native_type), published: pr.is_published === true,
     description: str(pr.description), summary: str(pr.custom_summary), tags: Array.isArray(pr.tags) ? pr.tags : [],
     covers: Array.isArray(pr.covers) ? pr.covers.length : 0,
+    thumbnail: p.thumbnail != null,
     files: arr(pr.files).map(f => ({ id: str(f.id), name: str(f.display_name), extension: str(f.extension), size: num(f.file_size) })),
     contentPages: Array.isArray(pr.rich_content) ? pr.rich_content.length : 0,
     sales: num(p.successful_sales_count), listedOnDiscover: p.is_listed_on_discover === true,

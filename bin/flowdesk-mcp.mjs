@@ -93,7 +93,7 @@ function findGatewayConfig() {
 // page (first background-view load alone can take 15s) or on generation
 // (ask.*, Flow video, TikTok upload) failed on the client while the app kept
 // working. The gateway itself has no shorter limit, so match the real work.
-const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover)$|pinFactory\.nicheScan$|flow\.(uiGenerateImage|imageModels)$)/
+const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover|uploadThumbnail)$|pinFactory\.nicheScan$|flow\.(uiGenerateImage|imageModels)$)/
 function rpcTimeoutMs(method) {
   return LONG_RPC.test(method) ? 15 * 60_000 : 120_000
 }
@@ -2256,6 +2256,14 @@ server.tool(
   { permalink: GUM_PERMALINK, imagePath: z.string().min(3).describe('Absolute path to a local image.'), account: GUM_ACCOUNT },
   { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('gumroad.uploadCover', args))
+)
+
+server.tool(
+  'gumroad_upload_thumbnail',
+  `Set the product's square thumbnail: the picture on the store/profile grid, Library and Discover (png/jpg/gif/webp; square, at least 600x600). Replaces the old one. This is NOT a cover: gumroad_upload_cover only adds to the product page's gallery. ${GUM_WRITE_NOTE}`,
+  { permalink: GUM_PERMALINK, imagePath: z.string().min(3).describe('Absolute path to a local square image.'), account: GUM_ACCOUNT },
+  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('gumroad.uploadThumbnail', args))
 )
 
 server.tool(
