@@ -464,6 +464,7 @@ function createWindow() {
   })
 
   const devServerUrl = process.env['ELECTRON_RENDERER_URL']
+  watchRendererMount(mainWindow)
   if (devServerUrl) {
     mainWindow.loadURL(devServerUrl)
     if (!isHeadless) {
@@ -490,6 +491,40 @@ function createWindow() {
   }
 
   registerShortcuts()
+}
+
+// A cold start sometimes finishes loading the page without React ever mounting
+// (an entry module request fails while the dev server is still warming up, or
+// the load itself fails) and nothing retries, so the window stays white until
+// the app is restarted. Reload when #root is still empty a while after load.
+function watchRendererMount(win: BrowserWindow) {
+  const MAX_RELOADS = 3
+  let reloads = 0
+  let timer: NodeJS.Timeout | undefined
+  const retry = (why: string) => {
+    if (win.isDestroyed() || reloads >= MAX_RELOADS) return
+    reloads++
+    console.warn(`[FlowDesk] renderer ${why}, reloading (${reloads}/${MAX_RELOADS})`)
+    win.webContents.reloadIgnoringCache()
+  }
+  win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level >= 3) console.error(`[renderer] ${message} (${sourceId}:${line})`)
+  })
+  win.webContents.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return // -3 = aborted by a newer navigation
+    clearTimeout(timer)
+    timer = setTimeout(() => retry(`load failed (${desc})`), 1500)
+  })
+  win.webContents.on('did-finish-load', () => {
+    clearTimeout(timer)
+    timer = setTimeout(async () => {
+      if (win.isDestroyed()) return
+      const kids = await win.webContents
+        .executeJavaScript(`document.getElementById('root')?.childElementCount ?? 0`)
+        .catch(() => 0)
+      if (!kids) retry('did not mount')
+    }, 10_000)
+  })
 }
 
 function registerShortcuts() {

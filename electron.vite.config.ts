@@ -43,6 +43,20 @@ export default defineConfig({
         '@': resolve('src')
       }
     },
+    // Vite's cold-start dep scan crawls every .html under root by default, and
+    // the repo root also holds git worktrees and unpacked builds (Chromium
+    // LICENSE pages), which stalled first load for minutes (white window).
+    optimizeDeps: {
+      entries: ['index.html'],
+    },
+    server: {
+      watch: {
+        ignored: [
+          '**/.worktrees/**', '**/.kilo/**', '**/.agents/**', '**/.superpowers/**',
+          '**/dist/**', '**/dist-*/**', '**/out/**', '**/probes/**', '**/scratch/**',
+        ],
+      },
+    },
     plugins: [react()],
     css: {
       postcss: {
