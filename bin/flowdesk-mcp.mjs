@@ -93,7 +93,7 @@ function findGatewayConfig() {
 // page (first background-view load alone can take 15s) or on generation
 // (ask.*, Flow video, TikTok upload) failed on the client while the app kept
 // working. The gateway itself has no shorter limit, so match the real work.
-const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover)$)/
+const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover)$|pinFactory\.nicheScan$)/
 function rpcTimeoutMs(method) {
   return LONG_RPC.test(method) ? 15 * 60_000 : 120_000
 }
@@ -2313,6 +2313,28 @@ server.tool(
   { id: z.string().min(6).max(64), account: GUM_ACCOUNT },
   { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('gumroad.deleteDiscount', args))
+)
+
+// ── PIN FACTORY ──────────────────────────────────────────────────────────────
+
+server.tool(
+  'pin_factory_niche_scan',
+  'Rank candidate niches for Pinterest → digital product selling. For each: Pinterest niche research (saves, autocomplete breadth, shop links, how recent the ranking pins are, trend match) plus a Gumroad Discover search (buyers\' ratings, crowding, price), scored 0-100 with every part shown. Signed-in Pinterest account needed. ~15-25 s per candidate. Read-only. Skill: "pin-factory".',
+  {
+    candidates: z.array(z.union([
+      z.string().min(1).max(100),
+      z.object({
+        niche: z.string().min(1).max(100),
+        peak: z.string().regex(/^(\d{4}-)?\d{2}-\d{2}$/).optional().describe('Next seasonal peak, MM-DD, e.g. "12-25". Adds a timing score (best 4-10 weeks ahead).'),
+        productQuery: z.string().max(100).optional().describe('Gumroad search phrase when it differs from the niche.'),
+      }),
+    ])).min(1).max(12),
+    country: z.string().length(2).optional().describe('Pinterest Trends country, default US.'),
+    account: PIN_ACCOUNT,
+    gumroadAccount: GUM_ACCOUNT,
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('pinFactory.nicheScan', args))
 )
 
 const SOCIAL_PLATFORM = z.enum(['whatsapp', 'tiktok', 'linkedin', 'reddit', 'facebook', 'pinterest', 'gumroad'])

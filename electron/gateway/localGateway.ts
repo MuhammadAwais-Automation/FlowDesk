@@ -109,6 +109,7 @@ import {
   gumroadEditProduct, gumroadProduct, gumroadProducts, gumroadSearch, gumroadSetPublished, gumroadStatus, gumroadUploadCover,
   gumroadUploadFile,
 } from '../gumroad'
+import { pinFactoryNicheScan } from '../pinFactory'
 
 // Any non-empty account value is passed on as text, so an odd value is refused as unknown instead of meaning account 1.
 const pinAccount = (p: Record<string, unknown>): string | undefined => p.account === undefined || p.account === null || p.account === '' ? undefined : String(p.account)
@@ -438,6 +439,10 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     code: p.code, name: p.name, percent: p.percent, amount: p.amount, products: p.products, maxUses: p.maxUses, expiresAt: p.expiresAt, account: pinAccount(p),
   }),
   'gumroad.deleteDiscount': async (p) => gumroadDeleteDiscount({ id: p.id, account: pinAccount(p) }),
+  'pinFactory.nicheScan': async (p) => pinFactoryNicheScan({
+    candidates: p.candidates, country: p.country, account: pinAccount(p),
+    gumroadAccount: p.gumroadAccount === undefined || p.gumroadAccount === null || p.gumroadAccount === '' ? undefined : String(p.gumroadAccount),
+  }),
   'social.accounts': async (p) => socialAccountsStatus(isSocialPlatform(p.platform) ? p.platform : undefined),
   'social.addAccount': async (p) => isSocialPlatform(p.platform)
     ? (() => {
