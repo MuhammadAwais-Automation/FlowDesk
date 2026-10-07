@@ -138,6 +138,7 @@ import { setGooglePartitionGetter, setGoogleAccountsGetter } from './flow'
 import { waitForGoogleSignIn } from './googleSignInChooser'
 import { configureChatgptImages } from './chatgptImages'
 import { mcpServerEntry } from './mcpConfig'
+import { startAutoUpdate } from './updater'
 import { startRadar } from './tiktok/tiktokRadar'
 import { loadNiches } from './tiktok/tiktokRadarStore'
 import { setActiveTikTokAccount, setOnAccountSwitchedListener } from './tiktok/tiktok'
@@ -2139,6 +2140,7 @@ let localGatewayServer: GatewayServer | null = null
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  startAutoUpdate(() => mainWindow ?? null)
   try {
     await initSkillsRegistry({ userDataDir: app.getPath('userData') })
     await configureRunStore(join(app.getPath('userData'), 'workflow-runs'))

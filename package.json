@@ -80,7 +80,13 @@
       "include": "resources/installer.nsh",
       "deleteAppDataOnUninstall": false
     },
-    "publish": null
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "MuhammadAwais-Automation",
+        "repo": "FlowDesk"
+      }
+    ]
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "^5.3.0",
@@ -91,6 +97,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "electron-store": "^8.2.0",
+    "electron-updater": "^6.8.9",
     "fflate": "^0.8.3",
     "graphology": "^0.26.0",
     "graphology-layout-forceatlas2": "^0.10.1",

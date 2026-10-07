@@ -6,7 +6,9 @@ import autoprefixer from 'autoprefixer'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // electron-builder leaves electron-updater out of app.asar, so it is
+    // bundled into main.js instead of loaded from node_modules.
+    plugins: [externalizeDepsPlugin({ exclude: ['electron-updater'] })],
     build: {
       lib: {
         entry: {
