@@ -118,10 +118,22 @@ const IMAGE_MODEL_MAP: Record<ImageModel, string> = {
   NANO_BANANA_2: 'NARWHAL',
 }
 
+/**
+ * The service method each pinned rpc id is declared with in Flow's bundle
+ * (probes/nid-03-flow.js). Only ids whose method was seen live are listed;
+ * the others stay pinned until their chunk is captured.
+ */
+const FLOW_RPC_METHODS: Record<string, string> = {
+  jHPbke: '/AiSandbox.CreateProject',
+  UpteDb: '/FlowService.GetProjects',
+  QI2zvc: '/AiSandbox.DeleteProject',
+}
+
 const PRELUDE = `
   var AISANDBOX_API = ${JSON.stringify(AISANDBOX_API)}
   var RECAPTCHA_SITE_KEY = ${JSON.stringify(RECAPTCHA_SITE_KEY)}
   var AISANDBOX_API_KEY = ${JSON.stringify(AISANDBOX_API_KEY)}
+  var FLOW_RPC_METHODS = ${JSON.stringify(FLOW_RPC_METHODS)}
 
   async function getAccessToken() {
     var res = await fetch('/fx/api/auth/session', { credentials: 'include' })
@@ -238,7 +250,35 @@ const PRELUDE = `
    * at / bl / f.sid are per-session and come from the page; see
    * probes/flow-01-boq-params.js for how each key was confirmed.
    */
-  async function callBatch(rpcId, arg) {
+  // rpc ids are short codes Google can reassign per build; the service METHOD
+  // each one is declared with (new _.Nx("jHPbke", ..., "/AiSandbox.CreateProject"))
+  // stays. The ids the page itself uses are read from the scripts it loaded,
+  // once per build, and replace ours when the method is known (2026-10-07).
+  async function rpcIdsByMethod() {
+    var wiz = window.WIZ_global_data || {}
+    var key = String(wiz.cfb2h || '')
+    if (window.__fdRpcMap && window.__fdRpcMap.key === key) return window.__fdRpcMap.map
+    var map = {}
+    var urls = performance.getEntriesByType('resource').map(function (e) { return e.name }).filter(function (u) { return /\\.js(\\?|$)|\\/_\\/mss\\//.test(u) })
+    var re = /new _\\.[A-Za-z0-9$]+\\("([A-Za-z0-9_]{6})",(?:(?!new _\\.)[\\s\\S]){0,400}?"(\\/[A-Za-z0-9_.]+)"\\]/g
+    for (var i = 0; i < urls.length && i < 200; i++) {
+      var t = ''
+      try { t = await (await fetch(urls[i], { cache: 'force-cache' })).text() } catch (e) { continue }
+      var m
+      while ((m = re.exec(t))) map[m[2]] = m[1]
+    }
+    window.__fdRpcMap = { key: key, map: map }
+    return map
+  }
+
+  async function currentRpcId(pinned) {
+    var method = FLOW_RPC_METHODS[pinned]
+    if (!method) return pinned
+    try { return (await rpcIdsByMethod())[method] || pinned } catch (e) { return pinned }
+  }
+
+  async function callBatch(pinnedRpcId, arg) {
+    var rpcId = await currentRpcId(pinnedRpcId)
     var wiz = window.WIZ_global_data
     if (!wiz || !wiz.SNlM0e) {
       return { ok: false, error: 'Flow page has no session token yet (WIZ_global_data.SNlM0e missing) -- let the page finish loading and retry' }
@@ -286,7 +326,7 @@ const PRELUDE = `
     if (payload === null) {
       return { ok: false, error: 'Google Flow answered but carried no ' + rpcId + ' result', detail: text.slice(0, 300) }
     }
-    return { ok: true, payload: payload }
+    return { ok: true, payload: payload, rpcId: rpcId, rpcIdFrom: rpcId === pinnedRpcId ? 'pinned' : 'page' }
   }
 
   /** Uppercase UUID, matching the casing every captured Flow request used. */
@@ -343,7 +383,7 @@ const VIDEO_IDS_JS = `(function (p) {
   }
 })(out.payload)`
 
-export const __testing = { AISANDBOX_API, RECAPTCHA_SITE_KEY, AISANDBOX_API_KEY, ASPECT_RATIO_MAP, IMAGE_MODEL_MAP, VIDEO_MODEL_KEYS, buildScript }
+export const __testing = { AISANDBOX_API, RECAPTCHA_SITE_KEY, AISANDBOX_API_KEY, FLOW_RPC_METHODS, ASPECT_RATIO_MAP, IMAGE_MODEL_MAP, VIDEO_MODEL_KEYS, buildScript }
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Flow's current API (flow.google.com, batchexecute).

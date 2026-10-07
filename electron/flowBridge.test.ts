@@ -162,3 +162,45 @@ describe('mediaStatusScript', () => {
     expect(mediaStatusScript('8136473e')).toContain('[null, null, [[id]]]')
   })
 })
+
+describe('batchexecute rpc ids follow the service method, not a pinned code', () => {
+  // Runs the real in-page callBatch against a fake Flow page whose loaded
+  // bundle declares CreateProject under a NEW id.
+  async function run(bundle: string) {
+    const { __testing } = await import('./flowBridge')
+    const sentIds: string[] = []
+    const window = { WIZ_global_data: { SNlM0e: 'at-token', cfb2h: 'boq_x_20261007.01_p0' } } as Record<string, unknown>
+    const performance = { getEntriesByType: () => [{ name: 'https://www.gstatic.com/_/mss/boq-labs-ai-sandbox/_/js/k=main.js' }] }
+    const fetch = async (url: string) => {
+      if (url.includes('gstatic')) return { text: async () => bundle }
+      const id = new URL('https://flow.google.com' + url).searchParams.get('rpcids') ?? ''
+      sentIds.push(id)
+      return { status: 200, text: async () => `)]}'\n\n123\n[["wrb.fr","${id}","[\\"ok\\"]",null,null,null,"generic"]]\n` }
+    }
+    const script = __testing.buildScript(`
+      var r = await callBatch('jHPbke', ['projects/*', [null, ['t']], [null, 22]])
+      return { ok: r.ok, rpcId: r.rpcId, from: r.rpcIdFrom }
+    `)
+    const out = await new Function('window', 'performance', 'fetch', `return ${script}`)(window, performance, fetch)
+    return { out, sentIds }
+  }
+
+  it('uses the id the page declares for /AiSandbox.CreateProject', async () => {
+    const bundle = 'x;ETa=new _.Nx("Abc123",_.WK,_.XK,[_.hm,!1,_.em,"/AiSandbox.CreateProject"]);FTa=class{}'
+    const { out, sentIds } = await run(bundle)
+    expect(sentIds).toEqual(['Abc123'])
+    expect(out).toEqual({ ok: true, rpcId: 'Abc123', from: 'page' })
+  })
+
+  it('keeps the pinned id when the method is not in the loaded code', async () => {
+    const { out, sentIds } = await run('nothing relevant here')
+    expect(sentIds).toEqual(['jHPbke'])
+    expect(out).toMatchObject({ from: 'pinned' })
+  })
+
+  it('does not pair an id with the next declaration\'s method', async () => {
+    const bundle = 'a=new _.Nx("Zzz111",_.A,_.B,[_.hm]);b=new _.Nx("jHPbke",_.C,_.D,[_.hm,!1,_.em,"/AiSandbox.CreateProject"])'
+    const { sentIds } = await run(bundle)
+    expect(sentIds).toEqual(['jHPbke'])
+  })
+})
