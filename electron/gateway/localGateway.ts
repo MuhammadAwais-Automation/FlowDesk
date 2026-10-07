@@ -137,7 +137,8 @@ import {
 } from '../flow'
 import { flowUiGenerateImage, flowUiImageModels } from '../flowUi'
 import { rehearse } from '../rehearsal'
-import { getViewById } from '../sessions'
+import { scanBundles } from '../bundleScan'
+import { findAnyViewByUrl, getViewById } from '../sessions'
 import {
   initSkillsRegistry,
   listSkills,
@@ -674,6 +675,15 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     const r = await rehearse(wc, { urlPattern: String(p.urlPattern || ''), method: typeof p.method === 'string' ? p.method : undefined },
       () => workflowTool(method, inner), typeof p.timeoutMs === 'number' ? p.timeoutMs : undefined)
     return { ok: true, ...r }
+  },
+  // Searches the JS the view `tab` has loaded for request identifiers (bundleScan.ts).
+  'dev.bundleScan': async (p) => {
+    const tab = String(p.tab || '')
+    const wc = (tab ? getViewById(tab)?.webContents : null) ?? (typeof p.url === 'string' && p.url ? findAnyViewByUrl(p.url)?.webContents : null)
+    if (!wc || wc.isDestroyed()) return { ok: false, error: `no open view for "${tab || p.url}"` }
+    const needles = Array.isArray(p.needles) ? p.needles.filter((n): n is string => typeof n === 'string' && n.length >= 3).slice(0, 200) : []
+    if (!needles.length) return { ok: false, error: 'needles must list at least one identifier (3+ characters)' }
+    return { ok: true, ...(await scanBundles(wc, needles)) }
   },
   'flow.imageModels': async (p) => flowUiImageModels(String(p.projectId || ''), acct(p)),
   'flow.uiGenerateImage': async (p) => flowUiGenerateImage({
