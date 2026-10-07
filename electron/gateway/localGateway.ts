@@ -136,6 +136,8 @@ import {
   flowAccounts,
 } from '../flow'
 import { flowUiGenerateImage, flowUiImageModels } from '../flowUi'
+import { rehearse } from '../rehearsal'
+import { getViewById } from '../sessions'
 import {
   initSkillsRegistry,
   listSkills,
@@ -658,6 +660,21 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     typeof p.imageModel === 'string' ? p.imageModel : undefined,
     acct(p),
   ),
+  // Runs one other RPC while requests matching urlPattern (and method) on the
+  // view `tab` are recorded and blocked before they leave — see rehearsal.ts.
+  // The inner call still goes through the action guard.
+  'dev.rehearse': async (p) => {
+    const tab = String(p.tab || '')
+    const wc = getViewById(tab)?.webContents
+    if (!wc || wc.isDestroyed()) return { ok: false, error: `no open view "${tab}"` }
+    const call = (p.call && typeof p.call === 'object' ? p.call : {}) as { method?: unknown; params?: unknown }
+    const method = String(call.method || '')
+    if (!method || method === 'dev.rehearse') return { ok: false, error: 'call.method must name another RPC' }
+    const inner = (call.params && typeof call.params === 'object' ? call.params : {}) as Record<string, unknown>
+    const r = await rehearse(wc, { urlPattern: String(p.urlPattern || ''), method: typeof p.method === 'string' ? p.method : undefined },
+      () => workflowTool(method, inner), typeof p.timeoutMs === 'number' ? p.timeoutMs : undefined)
+    return { ok: true, ...r }
+  },
   'flow.imageModels': async (p) => flowUiImageModels(String(p.projectId || ''), acct(p)),
   'flow.uiGenerateImage': async (p) => flowUiGenerateImage({
     prompt: String(p.prompt || ''),
