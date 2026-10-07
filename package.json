@@ -33,9 +33,10 @@
       "buildResources": "resources"
     },
     "files": [
-      "out/**/*",
+      "out/main/**/*",
+      "out/preload/**/*",
+      "out/renderer/**/*",
       "!out/**/*.map",
-      "!out/mcp/**",
       "node_modules/@huggingface/transformers/**/*",
       "node_modules/onnxruntime-common/**/*",
       "node_modules/onnxruntime-node/package.json",
