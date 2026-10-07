@@ -254,7 +254,7 @@ async function removeGatewayFiles(token: string, userDataPath?: string): Promise
 type RpcHandler = (params: Record<string, unknown>) => Promise<unknown>
 
 // ── Agent tool parity ────────────────────────────────────────────────────────
-// The in-app agent's tools (claude-agent-sdk `tool()` items) are exposed
+// The LinkedIn / WhatsApp / Facebook tool definitions (agent/defineTool.ts) are exposed
 // generically so the external MCP server can mirror them without hand-written
 // wrappers. The external caller is the approver here, so actions auto-approve.
 interface AgentToolDef {

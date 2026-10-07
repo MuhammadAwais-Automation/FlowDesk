@@ -4,13 +4,11 @@ import AIBrowser from '@/pages/AIBrowser'
 import { useThemeStore } from '@/store/useThemeStore'
 import type { Page } from '@/types/pages'
 
-const Agent = lazy(() => import('@/pages/Agent'))
 const NotebookLM = lazy(() => import('@/pages/NotebookLM'))
 const Accounts = lazy(() => import('@/pages/Accounts'))
 const Settings = lazy(() => import('@/pages/Settings'))
 const YTStudio = lazy(() => import('@/pages/YTStudio'))
 const Social = lazy(() => import('@/pages/Social'))
-const Jarvis = lazy(() => import('@/pages/Jarvis'))
 const Brain = lazy(() => import('@/pages/Brain'))
 const Intelligence = lazy(() => import('@/pages/Intelligence'))
 const Skills = lazy(() => import('@/pages/Skills'))
@@ -20,7 +18,7 @@ const Studio = lazy(() => import('@/pages/Studio'))
 const api = window.electronAPI
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState<Page>('agent')
+  const [currentPage, setCurrentPage] = useState<Page>('social')
   const [apiError] = useState(!api)
 
   useEffect(() => {
@@ -81,7 +79,6 @@ export default function App() {
 
   function renderPage() {
     switch (currentPage) {
-      case 'agent': return <Agent />
       case 'skills': return <Skills />
       case 'brain': return <Brain />
       case 'intelligence': return <Intelligence />
@@ -91,7 +88,6 @@ export default function App() {
       case 'youtube': return <YTStudio isActive={currentPage === 'youtube'} />
       case 'social': return <Social isActive={currentPage === 'social'} />
       case 'studio': return <Studio isActive={currentPage === 'studio'} />
-      case 'jarvis': return <Jarvis />
       default: return null
     }
   }

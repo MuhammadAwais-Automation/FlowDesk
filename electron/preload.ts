@@ -271,20 +271,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onInlineDictationEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.on('inlineDictation:event', cb),
   offInlineDictationEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('inlineDictation:event', cb),
 
-  // Agent: selected lead SDK provider that can call the browser-driven worker tools
-  agentSendMessage: (input: { prompt: string; sessionId: string; runId: string; brain?: { use: boolean; learn: boolean; temporary: boolean } }) => ipcRenderer.invoke('agent:sendMessage', input),
-  agentGetRunState: () => ipcRenderer.invoke('agent:getRunState'),
-
-  agentSessionList: () => ipcRenderer.invoke('agentSession:list'),
-  agentSessionCreate: (title?: string) => ipcRenderer.invoke('agentSession:create', title),
-  agentSessionTurns: (id: string) => ipcRenderer.invoke('agentSession:turns', id),
-  agentSessionRename: (id: string, title: string) => ipcRenderer.invoke('agentSession:rename', id, title),
-  agentSessionDelete: (id: string) => ipcRenderer.invoke('agentSession:delete', id),
-  agentAbort: () => ipcRenderer.invoke('agent:abort'),
-  agentApprovalResponse: (requestId: string, approved: boolean) => ipcRenderer.invoke('agent:approvalResponse', requestId, approved),
-  onAgentEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.on('agent:event', cb),
-  offAgentEvent: (cb: (e: unknown, data: unknown) => void) => ipcRenderer.removeListener('agent:event', cb),
-
   // Project Command Center: directory selection and project-boundary persistence.
   projectList: () => ipcRenderer.invoke('project:list'),
   projectChooseFolder: () => ipcRenderer.invoke('project:chooseFolder'),
@@ -293,20 +279,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Generated images: Save-As dialog for a flowdesk-image:// URL
   imageDownload: (url: string) => ipcRenderer.invoke('image:download', url),
-
-  // Jarvis: Real-time Voice & Two-Tier AI Orchestrator
-  jarvisGenerateToken: (input?: { roomName?: string; participantIdentity?: string; participantName?: string }) =>
-    ipcRenderer.invoke('jarvis:generateToken', input),
-  jarvisSendMessage: (input: { messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>; runId?: string }) =>
-    ipcRenderer.invoke('jarvis:sendMessage', input),
-  jarvisAbort: () => ipcRenderer.invoke('jarvis:abort'),
-  onJarvisEvent: (cb: (data: any) => void) => {
-    const handler = (_e: unknown, data: any) => cb(data)
-    ipcRenderer.on('jarvis:event', handler)
-    return () => {
-      ipcRenderer.removeListener('jarvis:event', handler)
-    }
-  },
 
   // Dark mode: OS theme readout + live change notifications
   themeGetSystem: () => ipcRenderer.invoke('theme:getSystem'),

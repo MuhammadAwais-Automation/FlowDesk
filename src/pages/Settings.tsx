@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useThemeStore } from '@/store/useThemeStore'
 import {
-  Monitor, Info, Bot,
+  Monitor, Info,
   Check, Zap, Shield, RefreshCw,
 } from 'lucide-react'
 import type { AppSettings } from '@/types/database'
@@ -11,16 +11,12 @@ const DEFAULT_SETTINGS: AppSettings = {
   launchOnStartup: false,
   minimizeToTray: false,
   theme: 'system',
-  leadAgentProvider: 'claude',
-  claudeAgentModel: 'claude-sonnet-5',
-  agentBypassPermissions: false,
 }
 
-type Section = 'general' | 'agent' | 'security' | 'about'
+type Section = 'general' | 'security' | 'about'
 
 const NAV: { id: Section; icon: React.ElementType; label: string }[] = [
   { id: 'general',    icon: Monitor,  label: 'General'    },
-  { id: 'agent',      icon: Bot,      label: 'Agent'      },
   { id: 'security',   icon: Shield,   label: 'Security'   },
   { id: 'about',      icon: Info,     label: 'About'      },
 ]
@@ -172,51 +168,6 @@ function GeneralSection({ settings, set }: {
         </Row>
       </Card>
     </>
-  )
-}
-
-function AgentSection({ settings, set }: {
-  settings: AppSettings
-  set: (patch: Partial<AppSettings>) => void
-}) {
-  return (
-    <Card title="Lead agent">
-      <Row
-        label="Orchestrator provider"
-        desc="Choose which local agent SDK plans work, calls worker tools, and produces the final response"
-      >
-        <select
-          style={selectStyle}
-          value={settings.leadAgentProvider}
-          onChange={event => set({ leadAgentProvider: event.target.value as AppSettings['leadAgentProvider'] })}
-          aria-label="Lead agent provider"
-        >
-          <option value="claude">Claude Agent SDK</option>
-          <option value="codex">Codex SDK</option>
-          <option value="antigravity">Antigravity (Google Gemini)</option>
-        </select>
-      </Row>
-      <Row
-        label="Claude model"
-        desc="Which Claude the orchestrator runs on. Only applies when the provider above is Claude."
-      >
-        <select
-          style={selectStyle}
-          value={settings.claudeAgentModel}
-          onChange={event => set({ claudeAgentModel: event.target.value as AppSettings['claudeAgentModel'] })}
-          aria-label="Claude agent model"
-          disabled={settings.leadAgentProvider !== 'claude'}
-        >
-          <option value="claude-opus-5">Opus 5 — most capable</option>
-          <option value="claude-sonnet-5">Sonnet 5 — balanced</option>
-          <option value="claude-haiku-4-5">Haiku 4.5 — cheapest</option>
-        </select>
-      </Row>
-      <div style={{ padding: '12px 0', fontSize: 11, lineHeight: 1.6, color: 'var(--text-3)' }}>
-        The selected provider is used from the next Agent run. Browser workers, NotebookLM, project approvals,
-        run history, and Stop behaviour stay the same.
-      </div>
-    </Card>
   )
 }
 
@@ -417,7 +368,6 @@ export default function Settings() {
 
   const sectionTitle: Record<Section, string> = {
     general:    'General',
-    agent:      'Agent',
     security:   'Security',
     about:      'About',
   }
@@ -511,7 +461,6 @@ export default function Settings() {
         {/* Section content */}
         <div style={{ flex: 1 }}>
           {section === 'general' && <GeneralSection settings={settings} set={patch} />}
-          {section === 'agent' && <AgentSection settings={settings} set={patch} />}
           {section === 'security' && <SecuritySection />}
           {section === 'about' && <AboutSection />}
         </div>

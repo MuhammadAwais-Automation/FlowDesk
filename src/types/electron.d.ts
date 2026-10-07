@@ -128,36 +128,6 @@ export interface YouTubeAccount {
   lastActiveTab: 'overview' | 'content' | 'analytics'
 }
 
-export interface AgentSessionToolCall {
-  tool: string
-  prompt: string
-  result: string
-  isError: boolean
-}
-
-export interface AgentSessionTurn {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  toolCalls: AgentSessionToolCall[]
-  provider?: 'claude' | 'codex'
-  createdAt: string
-}
-
-export interface AgentSessionProviderLink {
-  id: string
-  syncedThroughTurn: number
-}
-
-export interface AgentSessionMeta {
-  id: string
-  title: string
-  createdAt: string
-  updatedAt: string
-  turnCount: number
-  providers: Partial<Record<'claude' | 'codex', AgentSessionProviderLink>>
-}
-
 export interface ElectronAPI {
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<void>
@@ -376,20 +346,6 @@ export interface ElectronAPI {
   onInlineDictationEvent: (cb: (e: unknown, data: { type: string; run: InlineDictationRun }) => void) => () => void
   offInlineDictationEvent: (cb: (e: unknown, data: { type: string; run: InlineDictationRun }) => void) => void
 
-  // Agent: selected lead SDK provider that can call the browser-driven worker tools
-  agentSendMessage: (input: { prompt: string; sessionId: string; runId: string; brain?: { use: boolean; learn: boolean; temporary: boolean } }) => Promise<{ runId: string }>
-  agentGetRunState: () => Promise<AgentRunSnapshot>
-
-  agentSessionList: () => Promise<AgentSessionMeta[]>
-  agentSessionCreate: (title?: string) => Promise<AgentSessionMeta>
-  agentSessionTurns: (id: string) => Promise<AgentSessionTurn[]>
-  agentSessionRename: (id: string, title: string) => Promise<void>
-  agentSessionDelete: (id: string) => Promise<void>
-  agentAbort: () => Promise<void>
-  agentApprovalResponse: (requestId: string, approved: boolean) => Promise<boolean>
-  onAgentEvent: (cb: (e: unknown, data: AgentRunEvent) => void) => void
-  offAgentEvent: (cb: (e: unknown, data: AgentRunEvent) => void) => void
-
   // Project Command Center
   projectList: () => Promise<ProjectSessionSnapshot>
   projectChooseFolder: () => Promise<ProjectSessionSnapshot | null>
@@ -399,17 +355,6 @@ export interface ElectronAPI {
   // Generated images: Save-As dialog for a flowdesk-image:// URL. Resolves
   // false if the user cancels the dialog or the save fails.
   imageDownload: (url: string) => Promise<boolean>
-
-  // Jarvis: Real-time Voice & Two-Tier AI Orchestrator
-  jarvisGenerateToken: (input?: { roomName?: string; participantIdentity?: string; participantName?: string }) => Promise<{
-    token: string
-    url: string
-    roomName: string
-    participantIdentity: string
-  }>
-  jarvisSendMessage: (input: { messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>; runId?: string }) => Promise<{ ok: boolean; text: string }>
-  jarvisAbort: () => Promise<boolean>
-  onJarvisEvent: (cb: (data: JarvisStreamEvent) => void) => () => void
 
   // Dark mode: OS theme readout + live change notifications
   themeGetSystem: () => Promise<{ shouldUseDarkColors: boolean }>
@@ -448,46 +393,7 @@ export interface ElectronAPI {
   workflowsResume: (runId: string) => Promise<WorkflowRun>
 }
 
-export type JarvisStreamEvent =
-  | { type: 'text_chunk'; text: string }
-  | { type: 'tool_call'; toolName: string; toolPrompt: string; progressMessage?: string }
-  | { type: 'heavy_progress'; progressMessage: string }
-  | { type: 'done'; text: string }
-  | { type: 'audio_chunk'; base64Audio: string }
-  | { type: 'error'; error: string }
-
-
-// Mirrors electron/agent/leadAgent.ts's AgentStreamEvent — main and renderer
-// are separate TS build roots (same reason claudeSdkProvider.ts needs a
-// dynamic import), so this is kept in sync by hand, matching the existing
-// CaptureChunk/onCaptureComplete precedent.
 export type AgentToolName = 'chatgpt' | 'claude' | 'gemini' | 'grok' | 'perplexity'
-
-export type AgentStreamEvent =
-  | { type: 'text'; text: string }
-  | { type: 'tool_call'; toolUseId: string; tool: string; prompt: string }
-  | { type: 'tool_progress'; toolUseId: string; tool: string; elapsedSeconds: number; percent?: number; stage?: string }
-  | { type: 'tool_result'; toolUseId: string; tool: string; text: string; isError: boolean }
-  | { type: 'approval_request'; requestId: string; tool: string; title: string; detail?: string; input?: Record<string, unknown> }
-  | { type: 'done'; text: string }
-  | { type: 'error'; message: string }
-
-export interface AgentRunEvent {
-  sequence: number
-  runId: string
-  sessionId: string
-  event: AgentStreamEvent
-  createdAt: string
-}
-
-export interface AgentRunSnapshot {
-  runId: string | null
-  sessionId: string | null
-  status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
-  startedAt: string | null
-  updatedAt: string | null
-  events: AgentRunEvent[]
-}
 
 declare global {
   interface Window {

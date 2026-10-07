@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import {
   Globe, Users,
   Settings, Zap, Youtube,
-  ChevronLeft, ChevronRight, Bot, BookOpen, Share2, Sparkles, BrainCircuit, Radar, Workflow, Clapperboard,
+  ChevronLeft, ChevronRight, BookOpen, Share2, BrainCircuit, Radar, Workflow, Clapperboard,
 } from 'lucide-react'
 import type { Page } from '@/types/pages'
 
@@ -18,9 +18,7 @@ interface NavItem {
 }
 
 const items: NavItem[] = [
-  { icon: Sparkles,        page: 'jarvis',    label: 'Jarvis Voice' },
   { icon: Globe,           page: 'browser',   label: 'AI Browser' },
-  { icon: Bot,             page: 'agent',     label: 'Agent'       },
   { icon: Workflow,        page: 'skills',    label: 'Skills'      },
   { icon: BrainCircuit,    page: 'brain',     label: 'Brain'       },
   { icon: Radar,           page: 'intelligence', label: 'Intelligence' },

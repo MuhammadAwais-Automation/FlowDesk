@@ -6,7 +6,6 @@ import { BrainBackupManager } from './backup'
 import type { BrainCapabilityEnvelope, BrainCapabilityResult } from './capabilityProtocol'
 import { BrainJobRunner } from './jobRunner'
 import { BrainService } from './service'
-import { configureBrainTools, createBrainTools } from '../agent/brainTools'
 import type { BrainDecisionBrief, BrainOpportunity } from '../../src/types/brain'
 
 /**
@@ -134,28 +133,6 @@ describe('Brain operational acceptance: capture to cited Agent action', () => {
     expect(service.handle({ id: 'consume', method: 'consumeContinuation', payload: { id: queued[0].id } })).toBe(true)
     expect(service.handle({ id: 'consume-again', method: 'consumeContinuation', payload: { id: queued[0].id } })).toBe(false)
     expect(service.database.listQueuedContinuations()).toEqual([])
-  })
-
-  it('keeps durable Brain writes out of a temporary Agent turn while explicit reads still work', async () => {
-    const calls: Array<[string, unknown]> = []
-    const request = async (method: string, payload: unknown) => { calls.push([method, payload]); return { ok: true } }
-    configureBrainTools({ request: request as never, getScopeId: () => 'scope-temporary', allowWrites: () => false })
-    const tools = createBrainTools(async () => true) as unknown as Array<{ name: string; handler: (input: Record<string, unknown>) => Promise<unknown> }>
-    const tool = (name: string) => tools.find(item => item.name === name)!
-
-    for (const [name, input] of [
-      ['brain_remember', { kind: 'fact', text: 'Durable write attempt' }],
-      ['brain_run_recipe', { recipeId: 'linkedin.opportunity_scan', recipeVersion: 1, parameters: {}, mode: 'interactive', sessionId: 'temporary' }],
-      ['brain_review_opportunity', { id: 'opportunity-a', decision: 'qualify' }],
-    ] as const) {
-      await expect(tool(name).handler(input as Record<string, unknown>)).rejects.toThrow(/learning is disabled/i)
-    }
-    expect(calls).toEqual([])
-
-    // Explicit read-only search and briefing remain available in temporary mode.
-    await tool('brain_search').handler({ text: 'backlog' })
-    await tool('brain_build_decision_brief').handler({ question: 'Should I pitch?' })
-    expect(calls.map(([method]) => method)).toEqual(['search', 'buildDecisionBrief'])
   })
 })
 

@@ -46,7 +46,7 @@ const api = {
   brainKnowledgeImportVault: vi.fn(), brainKnowledgeCompact: vi.fn(), brainKnowledgeMigrateMemories: vi.fn(),
   brainExportBackup: vi.fn(), brainImportBackup: vi.fn(), brainKnowledgeDailyNote: vi.fn(),
   brainListEvents: vi.fn(), brainKnowledgeNeighbors: vi.fn(), brainKnowledgeBuildVectors: vi.fn(),
-  brainKnowledgeVectorStatus: vi.fn(), brainKnowledgeAnswerPack: vi.fn(), agentSessionTurns: vi.fn(),
+  brainKnowledgeVectorStatus: vi.fn(), brainKnowledgeAnswerPack: vi.fn(),
   brainEntityList: vi.fn(), brainEntityBackfill: vi.fn(),
   brainKnowledgeGraph: vi.fn(),
 }
@@ -77,7 +77,6 @@ beforeEach(() => {
   api.brainListEvents.mockResolvedValue([turnEvent])
   api.brainKnowledgeVectorStatus.mockResolvedValue({ documents: 1, vectors: 0, model: 'test', failed: false })
   api.onBrainEvent.mockReturnValue(() => undefined)
-  api.agentSessionTurns.mockResolvedValue([])
   api.brainEntityList.mockResolvedValue([])
   // The graph is what the map -- and so the command bar's result list -- is
   // built from, so the one document has to be in it for anything to be
@@ -241,11 +240,6 @@ describe('Brain document reader', () => {
 })
 
 describe('Brain turn reader', () => {
-  const conversation = [
-    { id: 'turn-1', role: 'user' as const, content: 'mere clients kaun hain', toolCalls: [], createdAt: turnEvent.createdAt },
-    { id: 'turn-2', role: 'assistant' as const, content: 'Yasir aur Bilal.', toolCalls: [], createdAt: turnEvent.createdAt },
-  ]
-
   /** The timeline is a panel now, so it has to be opened before a turn is. */
   async function openTimeline() {
     await mount()
@@ -258,16 +252,12 @@ describe('Brain turn reader', () => {
     fireEvent.click(await screen.findByRole('button', { name: /mere clients kaun hain/ }))
   }
 
-  it('shows the conversation behind an agent turn', async () => {
-    api.agentSessionTurns.mockResolvedValue(conversation)
+  it('says plainly that the conversation is gone now the in-app agent is removed', async () => {
     await openTurn()
-    await waitFor(() => expect(within(detail()).getByText('Yasir aur Bilal.')).toBeTruthy())
-    expect(api.agentSessionTurns).toHaveBeenCalledWith('s1')
-    expect(within(detail()).getAllByText('mere clients kaun hain').length).toBeGreaterThan(0)
+    await waitFor(() => expect(within(detail()).getByText(/Agent .* hata diya gaya hai/)).toBeTruthy())
   })
 
   it('shows what the turn cost', async () => {
-    api.agentSessionTurns.mockResolvedValue(conversation)
     await openTurn()
     await waitFor(() => expect(within(detail()).getByText(/\$0\.0123/)).toBeTruthy())
     expect(within(detail()).getByText(/4\.2s/)).toBeTruthy()
@@ -281,8 +271,6 @@ describe('Brain turn reader', () => {
     await openTimeline()
     fireEvent.click(await screen.findByRole('button', { name: /Agent turn/ }))
     await waitFor(() => expect(within(detail()).getByText(/Temporary mode/)).toBeTruthy())
-    // The session store must not even be asked for a turn that was never kept.
-    expect(api.agentSessionTurns).not.toHaveBeenCalled()
   })
 })
 

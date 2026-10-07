@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { tool } from '@anthropic-ai/claude-agent-sdk'
+import { tool } from './defineTool'
 import { fbFeed, fbReact, fbComment, fbReply, fbShare, fbFollow, fbHide, unknownFacebookAccount, type FacebookResult } from '../facebook'
 import type { RequestApproval } from './approval'
 

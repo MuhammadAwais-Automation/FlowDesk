@@ -1,10 +1,6 @@
-import { useEffect, useState } from 'react'
 import { describeEvent, documentsRead, eventTime } from '@/lib/brainFormat'
 import type { Selection } from '@/lib/brainSelection'
-import type { AgentSessionTurn } from '@/types/electron'
 import type { BrainEvent } from '@/types/brainKnowledge'
-
-const api = window.electronAPI
 
 function numberField(event: BrainEvent, key: string): number | null {
   const value = event.metadata[key]
@@ -26,28 +22,8 @@ export function TurnDetail({ event, events, onSelect }: {
   events: BrainEvent[]
   onSelect: (next: Selection) => void
 }) {
-  const [turns, setTurns] = useState<AgentSessionTurn[] | null>(null)
-  const [unavailable, setUnavailable] = useState(false)
-
-  const sessionId = typeof event.metadata.sessionId === 'string' ? event.metadata.sessionId : null
-  // Temporary mode records what a turn cost but never what was said. An empty
-  // conversation block would read as a bug; saying so is the honest version.
+  // Temporary mode records what a turn cost but never what was said.
   const temporary = event.metadata.prompt === undefined
-
-  useEffect(() => {
-    if (sessionId === null || temporary) return
-    let live = true
-    setTurns(null)
-    setUnavailable(false)
-    void api.agentSessionTurns(sessionId)
-      .then(loaded => { if (live) setTurns(loaded) })
-      .catch(() => { if (live) setUnavailable(true) })
-    return () => { live = false }
-  }, [sessionId, temporary])
-
-  const index = turns?.findIndex(turn => turn.id === event.targetId) ?? -1
-  const assistant = index >= 0 ? turns?.[index] : undefined
-  const question = index > 0 ? turns?.slice(0, index).reverse().find(turn => turn.role === 'user') : undefined
 
   const cost = numberField(event, 'totalCostUsd')
   const duration = numberField(event, 'durationMs')
@@ -68,14 +44,7 @@ export function TurnDetail({ event, events, onSelect }: {
         ? <p className="rounded-xl border border-[#2a3142] bg-[#1a2030] p-3 text-sm text-slate-200">
             Temporary mode — baat mehfooz nahi ki gayi, sirf kharcha.
           </p>
-        : <div className="space-y-3">
-            {question && <Bubble role="Aap" text={question.content} />}
-            {assistant && <Bubble role="Agent" text={assistant.content} />}
-            {sessionId === null && <p className="text-sm text-[#94a3b8]">Is turn par koi session ref nahi hai.</p>}
-            {sessionId !== null && (unavailable || (turns !== null && assistant === undefined)) &&
-              <p className="text-sm text-[#94a3b8]">Is turn ki baat ab mehfooz nahi — session store mein nahi mili.</p>}
-            {sessionId !== null && !unavailable && turns === null && <p className="text-sm text-[#94a3b8]">Load ho raha hai…</p>}
-          </div>}
+        : <p className="text-sm text-[#94a3b8]">Is turn ki baat ab dikhayi nahi ja sakti — app ke andar wala Agent (aur us ki sessions) hata diya gaya hai.</p>}
 
       {(cost !== null || duration !== null || input !== null) && <div>
         <h3 className="text-sm font-semibold text-slate-200">Kharcha</h3>
@@ -107,15 +76,6 @@ export function TurnDetail({ event, events, onSelect }: {
           </li>)}
         </ul>
       </div>}
-    </div>
-  )
-}
-
-function Bubble({ role, text }: { role: string; text: string }) {
-  return (
-    <div className="rounded-xl border border-[#2a3142] bg-[#1a2030] p-3">
-      <p className="text-xs font-semibold uppercase tracking-wide text-amber-500">{role}</p>
-      <p className="mt-1 whitespace-pre-wrap text-sm text-slate-200">{text}</p>
     </div>
   )
 }
