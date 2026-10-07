@@ -45,11 +45,16 @@ export const worst = (all: readonly Status[]): Status => all.reduce<Status>((a, 
 
 const short = (s: unknown) => String(s ?? '').replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/g, '***').slice(0, 200)
 
-/** Key paths with value types, arrays collapsed to their first item. Values never leave this function. */
+/**
+ * Key paths with their kind (object, array or scalar), arrays collapsed to
+ * their first item. Scalars are one kind because the same field is a string in
+ * one answer and null in the next (a Facebook post without text); a parser
+ * breaks on lost keys or changed structure. Values never leave this function.
+ */
 export function shapeOf(value: unknown, depth = 6): string[] {
   const out = new Set<string>()
   const walk = (v: unknown, path: string, d: number) => {
-    const t = v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v
+    const t = Array.isArray(v) ? 'array' : v && typeof v === 'object' ? 'object' : 'scalar'
     out.add(`${path}:${t}`)
     if (d <= 0) return
     if (Array.isArray(v)) { if (v.length) walk(v[0], `${path}[]`, d - 1); return }
@@ -59,7 +64,9 @@ export function shapeOf(value: unknown, depth = 6): string[] {
   return [...out].sort()
 }
 
-export const shapeHash = (value: unknown) => createHash('sha1').update(shapeOf(value).join('\n')).digest('hex').slice(0, 12)
+/** Versioned so a baseline from an older shapeOf counts as "no baseline" instead of a change. */
+const SHAPE_VERSION = 's2:'
+export const shapeHash = (value: unknown) => SHAPE_VERSION + createHash('sha1').update(shapeOf(value).join('\n')).digest('hex').slice(0, 12)
 
 function signedOut(r: Record<string, unknown>): boolean {
   return r.signedIn === false || r.loggedIn === false || /signed out|not signed in/i.test(String(r.error ?? ''))
@@ -72,8 +79,9 @@ async function readCheck(spec: PlatformSpec, deps: HealthDeps, base: Baseline, n
     if (!r || r.ok === false) return { level: 'L1', name, status: 'fail', note: signedOut(r ?? {}) ? 'signed out' : short(r?.error ?? 'no answer') }
     if (signedOut(r)) return { level: 'L1', name, status: 'fail', note: 'signed out' }
     next.shape = shapeHash(r)
-    if (base.shape && base.shape !== next.shape) return { level: 'L1', name, status: 'warn', note: 'answer shape changed since last good run; check the parser' }
-    return { level: 'L1', name, status: 'ok', note: base.shape ? 'same shape as last good run' : 'first run: shape recorded' }
+    const known = base.shape?.startsWith(SHAPE_VERSION) ? base.shape : undefined
+    if (known && known !== next.shape) return { level: 'L1', name, status: 'warn', note: 'answer shape changed since last good run; check the parser' }
+    return { level: 'L1', name, status: 'ok', note: known ? 'same shape as last good run' : 'first run: shape recorded' }
   } catch (e) {
     return { level: 'L1', name, status: 'fail', note: short(e instanceof Error ? e.message : e) }
   }
@@ -102,7 +110,8 @@ async function bundleCheck(spec: PlatformSpec, deps: HealthDeps, base: Baseline,
 
 async function rehearsalCheck(r: RehearsalSpec, deps: HealthDeps): Promise<CheckResult> {
   try {
-    const params = r.prepare ? await r.prepare(deps.invoke) : r.params
+    // A read can miss while the site's page is still loading; one retry.
+    const params = r.prepare ? (await r.prepare(deps.invoke)) ?? (await r.prepare(deps.invoke)) : r.params
     if (!params) return { level: 'L3', name: r.tool, status: 'skipped', note: 'nothing safe to rehearse with' }
     const a = await deps.invoke('dev.rehearse', { ...r.view, urlPattern: r.urlPattern, method: r.method, call: { method: r.rpc, params }, timeoutMs: 90_000 }) as RehearseAnswer
     if (!a?.ok) return { level: 'L3', name: r.tool, status: 'fail', note: short(a?.error ?? 'no answer') }

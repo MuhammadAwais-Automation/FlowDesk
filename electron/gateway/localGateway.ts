@@ -17,7 +17,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, writeFile, unlink, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, webContents as allWebContents } from 'electron'
 import { z } from 'zod'
 import {
   rdStatus,
@@ -664,17 +664,20 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     acct(p),
   ),
   // Runs one other RPC while requests matching urlPattern (and method) on the
-  // view `tab` are recorded and blocked before they leave — see rehearsal.ts.
+  // view `tab` (or on every open view showing `url`, so no tab of the site can
+  // leak) are recorded and blocked before they leave — see rehearsal.ts.
   // The inner call still goes through the action guard.
   'dev.rehearse': async (p) => {
     const tab = String(p.tab || '')
-    const wc = getViewById(tab)?.webContents
-    if (!wc || wc.isDestroyed()) return { ok: false, error: `no open view "${tab}"` }
+    const url = typeof p.url === 'string' ? p.url : ''
+    const tabWc = tab ? getViewById(tab)?.webContents : null
+    const wcs = tab ? (tabWc ? [tabWc] : []) : url ? allWebContents.getAllWebContents().filter(w => !w.isDestroyed() && w.getURL().includes(url)) : []
+    if (!wcs.length || wcs.some(w => w.isDestroyed())) return { ok: false, error: `no open view for "${tab || url}"` }
     const call = (p.call && typeof p.call === 'object' ? p.call : {}) as { method?: unknown; params?: unknown }
     const method = String(call.method || '')
     if (!method || method === 'dev.rehearse') return { ok: false, error: 'call.method must name another RPC' }
     const inner = (call.params && typeof call.params === 'object' ? call.params : {}) as Record<string, unknown>
-    const r = await rehearse(wc, { urlPattern: String(p.urlPattern || ''), method: typeof p.method === 'string' ? p.method : undefined },
+    const r = await rehearse(wcs, { urlPattern: String(p.urlPattern || ''), method: typeof p.method === 'string' ? p.method : undefined },
       () => workflowTool(method, inner), typeof p.timeoutMs === 'number' ? p.timeoutMs : undefined)
     return { ok: true, ...r }
   },

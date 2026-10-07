@@ -34,6 +34,19 @@ describe('rehearsal', () => {
     expect(d.isAttached()).toBe(false)
   })
 
+  it('guards every given view, so a tool using another tab of the site cannot leak', async () => {
+    const a = fakeDebugger()
+    const b = fakeDebugger()
+    const r = await rehearse([a.wc, b.wc], { urlPattern: '*', method: 'POST' }, async () => {
+      b.pause('9', 'POST', 'https://x.com/svc/graphql', '{}')
+      return 'done'
+    })
+    expect(r.blocked.map(x => x.url)).toEqual(['https://x.com/svc/graphql'])
+    expect(a.sent.map(s => s.method)).toEqual(['Fetch.enable', 'Fetch.disable'])
+    expect(b.sent.map(s => s.method)).toEqual(['Fetch.enable', 'Fetch.failRequest', 'Fetch.disable'])
+    expect(a.isAttached() || b.isAttached()).toBe(false)
+  })
+
   it('reports the inner error instead of throwing, and still disables Fetch', async () => {
     const d = fakeDebugger()
     const r = await rehearse(d.wc, { urlPattern: '*' }, async () => { throw new Error('Failed to fetch') })

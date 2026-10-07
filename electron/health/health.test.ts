@@ -26,8 +26,13 @@ function deps(answers: Record<string, unknown>, dir: string) {
 describe('health', () => {
   it('describes shape without values', () => {
     expect(shapeOf({ ok: true, items: [{ id: 'secret', n: 3 }], byId: { 123: 'x' } })).toEqual([
-      '$.byId.#:string', '$.byId:object', '$.items:array', '$.items[].id:string', '$.items[].n:number', '$.items[]:object', '$.ok:boolean', '$:object',
+      '$.byId.#:scalar', '$.byId:object', '$.items:array', '$.items[].id:scalar', '$.items[].n:scalar', '$.items[]:object', '$.ok:scalar', '$:object',
     ])
+  })
+
+  it('treats a field that is text in one answer and null in the next as the same shape', () => {
+    expect(shapeOf({ posts: [{ text: 'hi' }] })).toEqual(shapeOf({ posts: [{ text: null }] }))
+    expect(shapeOf({ posts: [{ text: 'hi' }] })).not.toEqual(shapeOf({ posts: [{ body: 'hi' }] }))
   })
 
   it('ranks statuses', () => {

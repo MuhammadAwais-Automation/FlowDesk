@@ -55,35 +55,43 @@ interface PausedParams {
   responseErrorReason?: string
 }
 
-export async function rehearse<T>(wc: WebContents, match: RehearsalMatch, run: () => Promise<T>, timeoutMs = 120_000): Promise<RehearsalResult<T>> {
+/**
+ * Runs `run` with matching requests blocked on every given view. Pass every
+ * view the tool might use (e.g. all tabs of the site), so none can leak.
+ */
+export async function rehearse<T>(views: WebContents | WebContents[], match: RehearsalMatch, run: () => Promise<T>, timeoutMs = 120_000): Promise<RehearsalResult<T>> {
   if (!match.urlPattern) throw new Error('rehearse needs a urlPattern')
-  const dbg = wc.debugger
-  const wasAttached = dbg.isAttached()
-  if (!wasAttached) dbg.attach('1.3')
   const blocked: RehearsedRequest[] = []
   const passed: { method: string; url: string }[] = []
   const wantMethod = match.method?.toUpperCase()
 
-  const onMessage = (_e: unknown, method: string, params: PausedParams) => {
-    if (method !== 'Fetch.requestPaused') return
-    const r = params.request
-    // Only request-stage pauses are asked for; anything else just continues.
-    const atResponse = params.responseStatusCode !== undefined || params.responseErrorReason !== undefined
-    if (atResponse || (wantMethod && r.method.toUpperCase() !== wantMethod)) {
-      passed.push({ method: r.method, url: r.url })
-      void dbg.sendCommand('Fetch.continueRequest', { requestId: params.requestId }).catch(() => {})
-      return
+  const hooks = (Array.isArray(views) ? views : [views]).map(wc => {
+    const dbg = wc.debugger
+    const wasAttached = dbg.isAttached()
+    if (!wasAttached) dbg.attach('1.3')
+    const onMessage = (_e: unknown, method: string, params: PausedParams) => {
+      if (method !== 'Fetch.requestPaused') return
+      const r = params.request
+      // Only request-stage pauses are asked for; anything else just continues.
+      const atResponse = params.responseStatusCode !== undefined || params.responseErrorReason !== undefined
+      if (atResponse || (wantMethod && r.method.toUpperCase() !== wantMethod)) {
+        passed.push({ method: r.method, url: r.url })
+        void dbg.sendCommand('Fetch.continueRequest', { requestId: params.requestId }).catch(() => {})
+        return
+      }
+      blocked.push({
+        method: r.method, url: r.url, headers: redactHeaders(r.headers ?? {}),
+        postData: r.postData ?? null, bodyNotInlined: !!r.hasPostData && r.postData === undefined,
+      })
+      void dbg.sendCommand('Fetch.failRequest', { requestId: params.requestId, errorReason: 'BlockedByClient' }).catch(() => {})
     }
-    blocked.push({
-      method: r.method, url: r.url, headers: redactHeaders(r.headers ?? {}),
-      postData: r.postData ?? null, bodyNotInlined: !!r.hasPostData && r.postData === undefined,
-    })
-    void dbg.sendCommand('Fetch.failRequest', { requestId: params.requestId, errorReason: 'BlockedByClient' }).catch(() => {})
-  }
+    dbg.on('message', onMessage as never)
+    return { dbg, wasAttached, onMessage }
+  })
 
-  dbg.on('message', onMessage as never)
   try {
-    await dbg.sendCommand('Fetch.enable', { patterns: [{ urlPattern: match.urlPattern, requestStage: 'Request' }] })
+    // Every view must be guarded before the tool runs; a failed enable aborts the rehearsal.
+    for (const { dbg } of hooks) await dbg.sendCommand('Fetch.enable', { patterns: [{ urlPattern: match.urlPattern, requestStage: 'Request' }] })
     let timer: NodeJS.Timeout | undefined
     try {
       const result = await Promise.race([
@@ -97,8 +105,10 @@ export async function rehearse<T>(wc: WebContents, match: RehearsalMatch, run: (
       clearTimeout(timer)
     }
   } finally {
-    await dbg.sendCommand('Fetch.disable').catch(() => {})
-    dbg.removeListener('message', onMessage as never)
-    if (!wasAttached) { try { dbg.detach() } catch { /* gone */ } }
+    for (const { dbg, wasAttached, onMessage } of hooks) {
+      await dbg.sendCommand('Fetch.disable').catch(() => {})
+      dbg.removeListener('message', onMessage as never)
+      if (!wasAttached) { try { dbg.detach() } catch { /* gone */ } }
+    }
   }
 }
