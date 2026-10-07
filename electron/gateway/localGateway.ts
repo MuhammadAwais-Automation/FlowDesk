@@ -17,7 +17,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, writeFile, unlink, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { z } from 'zod'
 import {
   rdStatus,
@@ -138,6 +138,8 @@ import {
 import { flowUiGenerateImage, flowUiImageModels } from '../flowUi'
 import { rehearse } from '../rehearsal'
 import { scanBundles } from '../bundleScan'
+import { runHealth } from '../health/health'
+import { PLATFORMS, toolRegistry } from '../health/spec'
 import { findAnyViewByUrl, getViewById } from '../sessions'
 import {
   initSkillsRegistry,
@@ -676,6 +678,12 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
       () => workflowTool(method, inner), typeof p.timeoutMs === 'number' ? p.timeoutMs : undefined)
     return { ok: true, ...r }
   },
+  // One-click tool health (health/health.ts): reads + bundle ids, and rehearsals when asked. Never posts.
+  'health.check': async (p) => runHealth(PLATFORMS, {
+    platforms: Array.isArray(p.platforms) ? p.platforms.filter((x): x is string => typeof x === 'string') : undefined,
+    rehearse: p.rehearse === true,
+  }, { invoke: (m, params) => workflowTool(m, params), dir: join(app.getPath('userData'), 'health') }),
+  'health.registry': async () => toolRegistry(Object.keys(RPC_HANDLERS)),
   // Searches the JS the view `tab` has loaded for request identifiers (bundleScan.ts).
   'dev.bundleScan': async (p) => {
     const tab = String(p.tab || '')

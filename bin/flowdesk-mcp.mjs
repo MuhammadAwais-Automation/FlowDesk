@@ -93,7 +93,7 @@ function findGatewayConfig() {
 // page (first background-view load alone can take 15s) or on generation
 // (ask.*, Flow video, TikTok upload) failed on the client while the app kept
 // working. The gateway itself has no shorter limit, so match the real work.
-const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover|uploadThumbnail)$|pinFactory\.nicheScan$|flow\.(uiGenerateImage|imageModels)$)/
+const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover|uploadThumbnail)$|pinFactory\.nicheScan$|flow\.(uiGenerateImage|imageModels)$|health\.check$|dev\.(rehearse|bundleScan)$)/
 function rpcTimeoutMs(method) {
   return LONG_RPC.test(method) ? 15 * 60_000 : 120_000
 }
@@ -2869,6 +2869,27 @@ server.tool(
     editedText: z.string().optional().describe('Optional edited text when accepting.'),
   },
   async (args) => textResult(await callGatewayRpc('brain.decideCandidate', args))
+)
+
+// ── TOOL HEALTH ──────────────────────────────────────────────────────────────
+
+server.tool(
+  'flowdesk_health_check',
+  'One-click check of whether FlowDesk\'s tools still work, WITHOUT posting, sending or spending anything. Per platform: L1 signed in + one read (answer shape compared with the last good run), L2 the ids our tools send looked up in the site\'s already-loaded JS (a changed build or a lost id = re-verify). With rehearse:true also L3: write tools build their real request and it is blocked before it leaves (nothing reaches the site). Status per check: ok / warn / fail / skipped. Use this before a work session and whenever a tool errors; report fails to the user instead of editing code.',
+  {
+    platforms: z.array(z.string()).optional().describe('Only these platform ids (chatgpt, flow, pinterest, gumroad, linkedin, facebook, reddit, tiktok, whatsapp). Omit for all.'),
+    rehearse: z.boolean().optional().describe('Also run the L3 rehearsals (blocked write requests). Default false.'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('health.check', args))
+)
+
+server.tool(
+  'flowdesk_tool_registry',
+  'Every FlowDesk gateway tool grouped by platform: read or write, and how flowdesk_health_check covers it (L1 read, L2 bundle ids, L3 rehearsal, or not covered).',
+  {},
+  { readOnlyHint: true },
+  async () => textResult(await callGatewayRpc('health.registry'))
 )
 
 // ── META-TOOL TIER: SKILLS & WORKFLOW ENGINE (<250 TOKENS) ───────────────────
