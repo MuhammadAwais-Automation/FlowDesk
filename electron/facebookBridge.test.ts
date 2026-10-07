@@ -426,3 +426,86 @@ describe('hideScript', () => {
     expect(script).toContain('did not confirm the hide')
   })
 })
+
+describe('doc_id follows the operation name, not a pinned number', () => {
+  // Runs the real in-page helper against a fake page: window.require answers
+  // like Facebook's module system, fetch records which doc_id was sent.
+  async function run(pageIds: Record<string, string>, answers: Array<{ status: number; body: unknown }>) {
+    const sent: string[] = []
+    const window = {
+      require: (name: string) => {
+        const op = name.replace(/_facebookRelayOperation$/, '')
+        if (!(op in pageIds)) throw new Error('module not loaded')
+        return pageIds[op]
+      },
+    }
+    const document = { documentElement: { innerHTML: '"token":"dtsg-token-1234"' }, cookie: 'c_user=42' }
+    const fetch = async (_url: string, init: { body: string }) => {
+      sent.push(new URLSearchParams(init.body).get('doc_id') ?? '')
+      const a = answers[sent.length - 1]
+      return { status: a.status, text: async () => JSON.stringify(a.body) + '\n' }
+    }
+    const script = __testing.buildScript(`
+      var r = await graphql('27687311557628355', 'SomeMutation', {})
+      return { ok: true, docId: r.docId, from: r.docIdFrom, failed: r.pageDocIdFailed || null }
+    `)
+    const out = await new Function('window', 'document', 'fetch', `return ${script}`)(window, document, fetch)
+    return { out, sent }
+  }
+
+  it('sends the page\'s current doc_id when the page knows the operation', async () => {
+    const { out, sent } = await run({ SomeMutation: '29159093513675194' }, [{ status: 200, body: { data: { ok: 1 } } }])
+    expect(sent).toEqual(['29159093513675194'])
+    expect(out).toMatchObject({ docId: '29159093513675194', from: 'page' })
+  })
+
+  it('falls back to the pinned id only when Facebook rejected the new one without running it', async () => {
+    const { out, sent } = await run({ SomeMutation: '29159093513675194' }, [
+      { status: 200, body: { errors: [{ message: 'missing_required_variable_value' }] } },
+      { status: 200, body: { data: { ok: 1 } } },
+    ])
+    expect(sent).toEqual(['29159093513675194', '27687311557628355'])
+    expect(out).toMatchObject({ docId: '27687311557628355', from: 'pinned', failed: '29159093513675194' })
+  })
+
+  it('does not send twice when the new id ran, even with errors alongside the data', async () => {
+    const { sent } = await run({ SomeMutation: '29159093513675194' }, [{ status: 200, body: { data: { ok: 1 }, errors: [{ message: 'partial' }] } }])
+    expect(sent).toEqual(['29159093513675194'])
+  })
+
+  it('uses the pinned id when the page has not loaded the operation', async () => {
+    const { out, sent } = await run({}, [{ status: 200, body: { data: {} } }])
+    expect(sent).toEqual(['27687311557628355'])
+    expect(out).toMatchObject({ from: 'pinned' })
+  })
+})
+
+describe('provided variables come from the page\'s compiled query', () => {
+  it('drops stale __relay_internal__pv__ flags and sends the current ones with today\'s values', async () => {
+    let sentVars: Record<string, unknown> = {}
+    let sentId = ''
+    const window = {
+      require: (name: string) => {
+        if (name === 'SomeQuery.graphql') {
+          return { params: { id: '38864706829842551', providedVariables: { __relay_internal__pv__NewFlagrelayprovider: { get: () => true } } } }
+        }
+        throw new Error('not loaded')
+      },
+    }
+    const document = { documentElement: { innerHTML: '"token":"dtsg-token-1234"' }, cookie: 'c_user=42' }
+    const fetch = async (_url: string, init: { body: string }) => {
+      const b = new URLSearchParams(init.body)
+      sentId = b.get('doc_id') ?? ''
+      sentVars = JSON.parse(b.get('variables') ?? '{}')
+      return { status: 200, text: async () => JSON.stringify({ data: {} }) + '\n' }
+    }
+    const script = __testing.buildScript(`
+      var r = await graphql('28162094913407624', 'SomeQuery', { count: 3, __relay_internal__pv__OldFlagrelayprovider: false })
+      return { from: r.docIdFrom }
+    `)
+    const out = await new Function('window', 'document', 'fetch', `return ${script}`)(window, document, fetch)
+    expect(out).toEqual({ from: 'page' })
+    expect(sentId).toBe('38864706829842551')
+    expect(sentVars).toEqual({ count: 3, __relay_internal__pv__NewFlagrelayprovider: true })
+  })
+})

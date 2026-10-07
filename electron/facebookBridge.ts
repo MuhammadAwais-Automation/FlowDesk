@@ -137,7 +137,64 @@ const PRELUDE = `
     return m ? m[1] : null
   }
 
-  async function graphql(docId, friendlyName, variables) {
+  // doc_ids rotate when Facebook ships a new client, but the operation NAME
+  // stays. The page's own module system maps name -> current doc_id
+  // (verified live 2026-10-07: 2 of our 3 pinned ids had already rotated).
+  // The compiled query (<Name>.graphql) also carries the "provided variables"
+  // (__relay_internal__pv__*) the current version declares, each with a
+  // provider whose get() returns today's value. A new version adds and drops
+  // these, so they are taken from the page instead of our captured template.
+  function currentQuery(friendlyName) {
+    if (typeof window.require !== 'function') return null
+    var id = null
+    var provided = null
+    try {
+      var q = window.require(friendlyName + '.graphql')
+      var p = q && q.params
+      if (p && typeof p.id === 'string') id = p.id
+      if (p && p.providedVariables) {
+        provided = {}
+        for (var k in p.providedVariables) {
+          var mod = p.providedVariables[k]
+          if (!mod || typeof mod.get !== 'function') { provided = null; break }
+          provided[k] = mod.get()
+        }
+      }
+    } catch (e) {}
+    if (!id) {
+      try {
+        var v = window.require(friendlyName + '_facebookRelayOperation')
+        if (typeof v === 'string') id = v
+      } catch (e) {}
+    }
+    return id && /^\\d{10,25}$/.test(id) ? { id: id, provided: provided } : null
+  }
+
+  function withProvided(variables, provided) {
+    if (!provided) return variables
+    var out = {}
+    for (var k in variables) if (k.indexOf('__relay_internal__pv__') !== 0) out[k] = variables[k]
+    for (var p in provided) out[p] = provided[p]
+    return out
+  }
+
+  // Tries the page's current doc_id (with its provided variables) first. If
+  // Facebook still rejects it without running it (errors, no data), the pinned
+  // id with our captured variables is tried, so a write never runs twice.
+  async function graphql(pinnedDocId, friendlyName, variables) {
+    var q = currentQuery(friendlyName)
+    var live = q && q.id
+    if (!live || live === pinnedDocId) return send(pinnedDocId, friendlyName, live ? withProvided(variables, q.provided) : variables, live ? 'page' : 'pinned')
+    var first = await send(live, friendlyName, withProvided(variables, q.provided), 'page')
+    var ran = first.status === 200 && first.json && first.json.data
+    if (ran || first.status === 0) return first
+    var second = await send(pinnedDocId, friendlyName, variables, 'pinned')
+    second.pageDocIdFailed = live
+    second.pageError = first.json && first.json.errors ? JSON.stringify(first.json.errors).slice(0, 300) : 'HTTP ' + first.status
+    return second
+  }
+
+  async function send(docId, friendlyName, variables, docIdFrom) {
     var token = dtsg()
     var uid = userId()
     if (!token) return { status: 0, error: 'no fb_dtsg token found on the page — not signed in to Facebook' }
@@ -170,7 +227,7 @@ const PRELUDE = `
     var json = null
     try { json = JSON.parse(firstLine) } catch (e) {}
 
-    return { status: res.status, json: json, raw: firstLine }
+    return { status: res.status, json: json, raw: firstLine, docId: docId, docIdFrom: docIdFrom }
   }
 
   function safe(value) {
@@ -262,6 +319,9 @@ export function feedScript(count: number, cursor?: string | null): string {
       posts: safe(posts),
       nextCursor: pageInfo ? pageInfo.end_cursor : null,
       hasNextPage: pageInfo ? !!pageInfo.has_next_page : null,
+      docIdFrom: res.docIdFrom,
+      pageDocIdFailed: res.pageDocIdFailed || null,
+      pageDocIdError: res.pageDocIdFailed && res.pageError ? res.pageError : null,
     }
   `)
 }

@@ -95,6 +95,8 @@ export async function fbFeed(count?: number, cursor?: string | null, account?: F
   let next: string | null = cursor ?? null
   let hasNextPage: boolean | null = null
   let accountId: unknown
+  let docIdFrom: unknown
+  let pageDocIdFailed: unknown
   for (let page = 0; page < MAX_FEED_PAGES && posts.length < n; page++) {
     const res = await call(feedScript(n - posts.length, next), account)
     if (!res.ok) {
@@ -103,13 +105,16 @@ export async function fbFeed(count?: number, cursor?: string | null, account?: F
       return { ok: true, count: posts.length, posts, nextCursor: next, hasNextPage, account: accountId, warning: `stopped early: ${res.error}` }
     }
     accountId = res.account
+    docIdFrom ??= res.docIdFrom
+    pageDocIdFailed ??= res.pageDocIdFailed ? { docId: res.pageDocIdFailed, error: res.pageDocIdError } : undefined
     const got = Array.isArray(res.posts) ? res.posts : []
     posts.push(...got)
     next = typeof res.nextCursor === 'string' && res.nextCursor ? res.nextCursor : null
     hasNextPage = typeof res.hasNextPage === 'boolean' ? res.hasNextPage : null
     if (!got.length || !next || hasNextPage === false) break
   }
-  return { ok: true, count: posts.length, posts, nextCursor: next, hasNextPage, account: accountId }
+  // docIdFrom: 'page' = the page's current doc_id answered; 'pinned' = our stored one (time to refresh it).
+  return { ok: true, count: posts.length, posts, nextCursor: next, hasNextPage, account: accountId, docIdFrom, ...(pageDocIdFailed ? { pageDocIdFailed } : {}) }
 }
 
 /**
