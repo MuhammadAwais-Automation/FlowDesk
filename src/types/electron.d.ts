@@ -317,6 +317,8 @@ export interface ElectronAPI {
 
   // App system
   getLoginItemSettings: () => Promise<{ openAtLogin: boolean }>
+  /** The `flowdesk` entry for an MCP client's config (.mcp.json, Claude Desktop). */
+  mcpServerEntry: () => Promise<{ command: string; args: string[]; env?: Record<string, string> }>
 
   // PoC: live capture of streamed AI responses (ChatGPT only, for now)
   onCaptureLive: (cb: (e: unknown, data: { id: string; tool: string; textSoFar: string }) => void) => void

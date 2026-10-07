@@ -171,8 +171,49 @@ function GeneralSection({ settings, set }: {
   )
 }
 
+/** Shows the config an MCP client (Claude Code, Claude Desktop) needs to reach this FlowDesk. */
+function McpConnectCard() {
+  const [config, setConfig] = useState('')
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    window.electronAPI.mcpServerEntry()
+      .then(entry => setConfig(JSON.stringify({ mcpServers: { flowdesk: entry } }, null, 2)))
+      .catch(() => setConfig(''))
+  }, [])
+  if (!config) return null
+  const copy = () => {
+    void navigator.clipboard.writeText(config).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <Card title="Connect Claude (MCP)">
+      <div style={{ padding: '14px 0', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <p style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.6, margin: 0 }}>
+          Paste this into Claude Code's <code>.mcp.json</code> or Claude Desktop's config. FlowDesk must be running for its tools to answer.
+        </p>
+        <pre style={{
+          margin: 0, padding: '10px 12px', borderRadius: 10, overflowX: 'auto',
+          background: 'var(--surface-2)', border: '1px solid var(--border-soft)',
+          fontSize: 11, fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-2)',
+        }}>{config}</pre>
+        <button onClick={copy} style={{
+          alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 6,
+          padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)',
+          background: 'var(--surface-2)', color: 'var(--text)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
+        }}>
+          {copied ? <><Check size={13} /> Copied</> : 'Copy config'}
+        </button>
+      </div>
+    </Card>
+  )
+}
+
 function AboutSection() {
   return (
+    <>
+    <McpConnectCard />
     <Card title="About FlowDesk">
       <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -238,6 +279,7 @@ function AboutSection() {
         </div>
       </div>
     </Card>
+    </>
   )
 }
 

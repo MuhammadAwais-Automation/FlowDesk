@@ -15,7 +15,7 @@
     "dev": "electron-vite dev",
     "dev:headless": "electron-vite dev -- --hidden",
     "dev:debug": "set ELECTRON_ENABLE_LOGGING=1&& set ELECTRON_ENABLE_STACK_DUMPING=1&& set FLOWDESK_VOICE_DEBUG=1&& set FLOWDESK_AGENT_DEBUG=1&& set DEBUG=electron-vite:*&& electron-vite dev",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node scripts/build-mcp.mjs",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
     "test": "vitest run",
@@ -35,12 +35,18 @@
     "files": [
       "out/**/*",
       "!out/**/*.map",
-      "node_modules/@modelcontextprotocol/**/*",
+      "!out/mcp/**",
       "node_modules/@huggingface/transformers/**/*",
       "node_modules/onnxruntime-common/**/*",
       "node_modules/onnxruntime-node/package.json",
       "node_modules/onnxruntime-node/dist/**/*",
       "node_modules/onnxruntime-node/bin/napi-v6/win32/x64/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "out/mcp",
+        "to": "mcp"
+      }
     ],
     "asarUnpack": [
       "node_modules/onnxruntime-node/bin/**"

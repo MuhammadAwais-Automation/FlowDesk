@@ -137,6 +137,7 @@ import { startLocalGateway, setGatewayBrainHandler, knownWriteActions, executeWo
 import { setGooglePartitionGetter, setGoogleAccountsGetter } from './flow'
 import { waitForGoogleSignIn } from './googleSignInChooser'
 import { configureChatgptImages } from './chatgptImages'
+import { mcpServerEntry } from './mcpConfig'
 import { startRadar } from './tiktok/tiktokRadar'
 import { loadNiches } from './tiktok/tiktokRadarStore'
 import { setActiveTikTokAccount, setOnAccountSwitchedListener } from './tiktok/tiktok'
@@ -661,6 +662,7 @@ ipcMain.handle('brain:runSocialRecipe', async (_e, input: unknown) => {
 
 // IPC: get current login item settings (so renderer can display actual state)
 ipcMain.handle('app:getLoginItemSettings', () => app.getLoginItemSettings())
+ipcMain.handle('app:mcpServerEntry', () => mcpServerEntry({ packaged: app.isPackaged, execPath: process.execPath, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }))
 
 ipcMain.handle('theme:getSystem', () => ({ shouldUseDarkColors: nativeTheme.shouldUseDarkColors }))
 

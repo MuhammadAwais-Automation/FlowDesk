@@ -23,7 +23,7 @@ import type { PlatformSpec, RehearsalSpec } from './spec'
 export type Status = 'ok' | 'warn' | 'fail' | 'skipped'
 
 export interface CheckResult { level: 'L1' | 'L2' | 'L3'; name: string; status: Status; note: string }
-export interface PlatformReport { platform: string; status: Status; checks: CheckResult[] }
+export interface PlatformReport { platform: string; status: Status; checks: CheckResult[]; accepted?: true }
 export interface HealthReport { ranAt: string; status: Status; platforms: PlatformReport[] }
 
 /** What one platform looked like on its last good run. */
@@ -127,7 +127,7 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
   try { return JSON.parse(await readFile(file, 'utf8')) as T } catch { return fallback }
 }
 
-export async function runHealth(specs: readonly PlatformSpec[], opts: { platforms?: string[]; rehearse?: boolean }, deps: HealthDeps): Promise<HealthReport> {
+export async function runHealth(specs: readonly PlatformSpec[], opts: { platforms?: string[]; rehearse?: boolean; accept?: string[] }, deps: HealthDeps): Promise<HealthReport> {
   const wanted = opts.platforms?.length ? specs.filter(s => opts.platforms!.includes(s.id)) : specs
   const baseFile = join(deps.dir, 'baseline.json')
   const baselines = await readJson<Record<string, Baseline>>(baseFile, {})
@@ -143,9 +143,11 @@ export async function runHealth(specs: readonly PlatformSpec[], opts: { platform
       if (opts.rehearse) for (const r of spec.rehearsals ?? []) checks.push(await rehearsalCheck(r, deps))
     }
     const status = worst(checks.map(c => c.status))
-    // Only a good run becomes the new baseline, so a drift keeps warning until someone looks at it.
-    if (status === 'ok') baselines[spec.id] = { ...next, checkedAt: now.toISOString() }
-    platforms.push({ platform: spec.id, status, checks })
+    // Only a good run becomes the new baseline, so a drift keeps warning until
+    // someone looks at it and accepts it (opts.accept). A fail is never accepted.
+    const accepted = status === 'warn' && !!opts.accept?.includes(spec.id)
+    if (status === 'ok' || accepted) baselines[spec.id] = { ...next, checkedAt: now.toISOString() }
+    platforms.push({ platform: spec.id, status, checks, ...(accepted ? { accepted: true as const } : {}) })
   }
   const report: HealthReport = { ranAt: now.toISOString(), status: worst(platforms.map(p => p.status)), platforms }
   await mkdir(deps.dir, { recursive: true })

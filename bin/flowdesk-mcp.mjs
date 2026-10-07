@@ -17,13 +17,15 @@ import { homedir } from 'node:os'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const projectRoot = resolve(__dirname, '..')
-const tiktokAppPath = join(projectRoot, 'src', 'mcp-apps', 'tiktok-dashboard.html')
-const flowAppPath = join(projectRoot, 'src', 'mcp-apps', 'flow-studio.html')
-const whatsappAppPath = join(projectRoot, 'src', 'mcp-apps', 'whatsapp-inbox.html')
-const socialAppPath = join(projectRoot, 'src', 'mcp-apps', 'social-radar.html')
-const workflowAppPath = join(projectRoot, 'src', 'mcp-apps', 'workflow-pipeline.html')
-const brainAppPath = join(projectRoot, 'src', 'mcp-apps', 'brain-atlas.html')
+// The installed app ships a bundled copy with mcp-apps/ beside it
+// (scripts/build-mcp.mjs); the repo copy reads them from src/.
+const appsDir = existsSync(join(__dirname, 'mcp-apps')) ? join(__dirname, 'mcp-apps') : join(resolve(__dirname, '..'), 'src', 'mcp-apps')
+const tiktokAppPath = join(appsDir, 'tiktok-dashboard.html')
+const flowAppPath = join(appsDir, 'flow-studio.html')
+const whatsappAppPath = join(appsDir, 'whatsapp-inbox.html')
+const socialAppPath = join(appsDir, 'social-radar.html')
+const workflowAppPath = join(appsDir, 'workflow-pipeline.html')
+const brainAppPath = join(appsDir, 'brain-atlas.html')
 
 function getTiktokAppHtml() {
   return existsSync(tiktokAppPath)
@@ -2879,6 +2881,7 @@ server.tool(
   {
     platforms: z.array(z.string()).optional().describe('Only these platform ids (chatgpt, flow, pinterest, gumroad, linkedin, facebook, reddit, tiktok, whatsapp). Omit for all.'),
     rehearse: z.boolean().optional().describe('Also run the L3 rehearsals (blocked write requests). Default false.'),
+    accept: z.array(z.string()).optional().describe('Platform ids whose warn (changed build or answer shape) the user has looked at and accepts: that run becomes the new baseline, so the same change stops warning. Never accepts a fail. Only pass ids the user named.'),
   },
   { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('health.check', args))

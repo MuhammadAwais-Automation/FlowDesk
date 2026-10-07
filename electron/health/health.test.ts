@@ -61,6 +61,26 @@ describe('health', () => {
     expect(JSON.parse(await readFile(join(dir, 'baseline.json'), 'utf8')).pin.versions).toEqual(['boq_x_20261004.06_p0'])
   })
 
+  it('makes a warned platform the new baseline only when asked to accept it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'health-'))
+    const scan = (v: string) => ({ ok: true, versions: [v], needles: [{ needle: 'A', found: true }, { needle: 'B', found: true }] })
+    await runHealth([spec], {}, deps({ 'pin.read': { ok: true }, 'dev.bundleScan': scan('build_1') }, dir))
+
+    const accepted = await runHealth([spec], { accept: ['pin'] }, deps({ 'pin.read': { ok: true }, 'dev.bundleScan': scan('build_2') }, dir))
+    expect(accepted.platforms[0]).toMatchObject({ status: 'warn', accepted: true })
+    expect(JSON.parse(await readFile(join(dir, 'baseline.json'), 'utf8')).pin.versions).toEqual(['build_2'])
+
+    const after = await runHealth([spec], {}, deps({ 'pin.read': { ok: true }, 'dev.bundleScan': scan('build_2') }, dir))
+    expect(after.status).toBe('ok')
+  })
+
+  it('never accepts a failed platform', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'health-'))
+    const r = await runHealth([spec], { accept: ['pin'] }, deps({ 'pin.read': { ok: false, error: 'boom' } }, dir))
+    expect(r.platforms[0].accepted).toBeUndefined()
+    expect(JSON.parse(await readFile(join(dir, 'baseline.json'), 'utf8')).pin).toBeUndefined()
+  })
+
   it('fails a signed-out platform and skips its other checks', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'health-'))
     const d = deps({ 'pin.read': { ok: true, signedIn: false } }, dir)

@@ -685,6 +685,7 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'health.check': async (p) => runHealth(PLATFORMS, {
     platforms: Array.isArray(p.platforms) ? p.platforms.filter((x): x is string => typeof x === 'string') : undefined,
     rehearse: p.rehearse === true,
+    accept: Array.isArray(p.accept) ? p.accept.filter((x): x is string => typeof x === 'string') : undefined,
   }, { invoke: (m, params) => workflowTool(m, params), dir: join(app.getPath('userData'), 'health') }),
   'health.registry': async () => toolRegistry(Object.keys(RPC_HANDLERS)),
   // Searches the JS the view `tab` has loaded for request identifiers (bundleScan.ts).
