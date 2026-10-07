@@ -330,6 +330,7 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
   // design — a provider page changing shape must not break the tab — but it
   // must be *audible*.
   view.webContents.on('dom-ready', () => {
+    if (view.webContents.isDestroyed()) return
     const currentUrl = view.webContents.getURL()
 
     // Discovery recorder, attached below the renderer rather than inside the
@@ -343,7 +344,7 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
     // all — see linkedinRealtimeWatch.ts for the evidence.
     if (currentUrl.includes('linkedin.com')) {
       startLinkedInRealtimeWatch(view.webContents, event => {
-        mainWindow?.webContents.send('linkedin:event', event)
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('linkedin:event', event)
       })
     }
 
@@ -620,7 +621,11 @@ export function ensureBackgroundView(tabId: string, partition: string, url: stri
   })
 
   // PoC: capture the streamed response as it arrives, live.
+  // Events can still arrive after destroyBackgroundWindow() ran (a page that
+  // was mid-load while the app closed it), and win.webContents then throws
+  // "Object has been destroyed" as an uncaught main-process error.
   win.webContents.on('dom-ready', () => {
+    if (win.isDestroyed()) return
     const currentUrl = win.webContents.getURL()
 
     // Same discovery recorder as createView(). Without it, anything the MCP
@@ -646,6 +651,7 @@ export function ensureBackgroundView(tabId: string, partition: string, url: stri
   // Same OAuth/external-link handling as createView() — a background
   // provider tab can still hit an OAuth popup or an external link.
   win.webContents.setWindowOpenHandler(({ url: openUrl }) => {
+    if (win.isDestroyed()) return { action: 'deny' }
     if (isOAuthPopup(openUrl)) {
       return {
         action: 'allow',
@@ -671,7 +677,7 @@ export function ensureBackgroundView(tabId: string, partition: string, url: stri
   })
 
   win.webContents.on('will-navigate', (event, targetUrl) => {
-    if (routeLink(targetUrl, win.webContents.getURL()) !== 'external') return
+    if (win.isDestroyed() || routeLink(targetUrl, win.webContents.getURL()) !== 'external') return
     event.preventDefault()
     void shell.openExternal(targetUrl)
   })
