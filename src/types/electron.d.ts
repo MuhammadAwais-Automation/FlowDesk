@@ -319,6 +319,10 @@ export interface ElectronAPI {
   getLoginItemSettings: () => Promise<{ openAtLogin: boolean }>
   /** The `flowdesk` entry for an MCP client's config (.mcp.json, Claude Desktop). */
   mcpServerEntry: () => Promise<{ command: string; args: string[]; env?: Record<string, string> }>
+  /** How many problem reports (electron/reports.ts) are saved on this computer. */
+  reportsCount: () => Promise<number>
+  /** Asks where to save, then zips every report plus the last health check there. */
+  reportsExport: () => Promise<{ ok: true; count: number; path: string } | { ok: false; canceled: true }>
 
   // PoC: live capture of streamed AI responses (ChatGPT only, for now)
   onCaptureLive: (cb: (e: unknown, data: { id: string; tool: string; textSoFar: string }) => void) => void

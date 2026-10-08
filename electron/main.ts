@@ -139,6 +139,7 @@ import { waitForGoogleSignIn } from './googleSignInChooser'
 import { configureChatgptImages } from './chatgptImages'
 import { mcpServerEntry } from './mcpConfig'
 import { startAutoUpdate } from './updater'
+import { exportReports, listReports } from './reports'
 import { startRadar } from './tiktok/tiktokRadar'
 import { loadNiches } from './tiktok/tiktokRadarStore'
 import { setActiveTikTokAccount, setOnAccountSwitchedListener } from './tiktok/tiktok'
@@ -663,6 +664,16 @@ ipcMain.handle('brain:runSocialRecipe', async (_e, input: unknown) => {
 
 // IPC: get current login item settings (so renderer can display actual state)
 ipcMain.handle('app:getLoginItemSettings', () => app.getLoginItemSettings())
+ipcMain.handle('reports:count', async () => (await listReports(app.getPath('userData'))).length)
+ipcMain.handle('reports:export', async () => {
+  const day = new Date().toISOString().slice(0, 10)
+  const options = { title: 'Save FlowDesk problem reports', defaultPath: join(app.getPath('downloads'), `FlowDesk-reports-${day}.zip`), filters: [{ name: 'Zip', extensions: ['zip'] }] }
+  const { canceled, filePath } = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options)
+  if (canceled || !filePath) return { ok: false, canceled: true }
+  const count = await exportReports(app.getPath('userData'), filePath)
+  shell.showItemInFolder(filePath)
+  return { ok: true, count, path: filePath }
+})
 ipcMain.handle('app:mcpServerEntry', () => mcpServerEntry({ packaged: app.isPackaged, execPath: process.execPath, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }))
 
 ipcMain.handle('theme:getSystem', () => ({ shouldUseDarkColors: nativeTheme.shouldUseDarkColors }))

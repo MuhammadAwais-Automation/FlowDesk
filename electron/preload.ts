@@ -232,6 +232,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // App system
   getLoginItemSettings: () => ipcRenderer.invoke('app:getLoginItemSettings'),
   mcpServerEntry: () => ipcRenderer.invoke('app:mcpServerEntry'),
+  reportsCount: () => ipcRenderer.invoke('reports:count'),
+  reportsExport: () => ipcRenderer.invoke('reports:export'),
 
   // PoC: live capture of streamed AI responses (ChatGPT only, for now)
   onCaptureLive: (cb: (e: unknown, data: { id: string; tool: string; textSoFar: string }) => void) =>

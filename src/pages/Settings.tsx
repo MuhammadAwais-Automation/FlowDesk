@@ -210,10 +210,42 @@ function McpConnectCard() {
   )
 }
 
+/** Problem reports filed by Claude (flowdesk_report_issue), exported as one zip to send to the maintainer. */
+function ReportsCard() {
+  const [count, setCount] = useState<number | null>(null)
+  const [status, setStatus] = useState('')
+  useEffect(() => { window.electronAPI.reportsCount().then(setCount).catch(() => setCount(null)) }, [])
+  if (count === null) return null
+  const exportAll = async () => {
+    const r = await window.electronAPI.reportsExport()
+    setStatus(r.ok ? `Saved ${r.count} report${r.count === 1 ? '' : 's'} to ${r.path}` : '')
+  }
+  return (
+    <Card title="Problem reports">
+      <div style={{ padding: '14px 0', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <p style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.6, margin: 0 }}>
+          When a tool fails, Claude saves a report here. Emails, tokens and the text of your posts are left out.
+          Export them and send the zip to whoever maintains FlowDesk.
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 12, color: 'var(--text-2)' }}>{count} report{count === 1 ? '' : 's'} saved</span>
+          <button onClick={() => { void exportAll() }} style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)',
+            background: 'var(--surface-2)', color: 'var(--text)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
+          }}>Export reports</button>
+        </div>
+        {status && <div style={{ fontSize: 11, color: 'var(--success)', wordBreak: 'break-all' }}>{status}</div>}
+      </div>
+    </Card>
+  )
+}
+
 function AboutSection() {
   return (
     <>
     <McpConnectCard />
+    <ReportsCard />
     <Card title="About FlowDesk">
       <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

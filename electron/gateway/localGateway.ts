@@ -139,6 +139,7 @@ import { flowUiGenerateImage, flowUiImageModels } from '../flowUi'
 import { rehearse } from '../rehearsal'
 import { scanBundles } from '../bundleScan'
 import { runHealth } from '../health/health'
+import { listReports, writeReport } from '../reports'
 import { PLATFORMS, toolRegistry } from '../health/spec'
 import { findAnyViewByUrl, getViewById } from '../sessions'
 import {
@@ -688,6 +689,14 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     accept: Array.isArray(p.accept) ? p.accept.filter((x): x is string => typeof x === 'string') : undefined,
   }, { invoke: (m, params) => workflowTool(m, params), dir: join(app.getPath('userData'), 'health') }),
   'health.registry': async () => toolRegistry(Object.keys(RPC_HANDLERS)),
+  // A failed tool, filed by the MCP client (reports.ts). Masked; argument values are dropped.
+  'reports.create': async (p) => {
+    if (typeof p.tool !== 'string' || typeof p.error !== 'string') throw new Error('tool and error are required')
+    const args = p.args && typeof p.args === 'object' && !Array.isArray(p.args) ? p.args as Record<string, unknown> : undefined
+    const r = await writeReport({ tool: p.tool, error: p.error, note: typeof p.note === 'string' ? p.note : undefined, args }, { dir: app.getPath('userData'), version: app.getVersion() })
+    return { ok: true, id: r.id }
+  },
+  'reports.list': async () => ({ ok: true, reports: await listReports(app.getPath('userData')) }),
   // Searches the JS the view `tab` has loaded for request identifiers (bundleScan.ts).
   'dev.bundleScan': async (p) => {
     const tab = String(p.tab || '')

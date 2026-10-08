@@ -347,7 +347,9 @@ Before using a family of tools, read its skill with flowdesk_skill_get — it sa
 - several accounts per platform: social_accounts lists them; pass account (id, label or partition) to any social tool. An unknown account is an error, never another account.
 flowdesk_skills_list shows every other skill.
 
-Rules of thumb: still images and image edits → chatgpt_generate_image / chatgpt_edit_image; video → Google Flow. Long jobs return ids — poll chatgpt_image_jobs or flow_media_status instead of starting the same job again. A result with isError did not happen; read its error before retrying. Public or outbound actions (post, comment, send, like, vote, follow, delete, profile edits) need the user's explicit yes in chat for that exact action first; so do creating, editing or publishing Gumroad products.`
+Rules of thumb: still images and image edits → chatgpt_generate_image / chatgpt_edit_image; video → Google Flow. Long jobs return ids — poll chatgpt_image_jobs or flow_media_status instead of starting the same job again. A result with isError did not happen; read its error before retrying. Public or outbound actions (post, comment, send, like, vote, follow, delete, profile edits) need the user's explicit yes in chat for that exact action first; so do creating, editing or publishing Gumroad products.
+
+When a tool keeps failing (or flowdesk_health_check shows a fail), do not work around it or touch FlowDesk's files: file it with flowdesk_report_issue and tell the user, who exports reports from FlowDesk's Settings > About.`
 
 const server = new McpServer({
   name: 'flowdesk-mcp',
@@ -2885,6 +2887,18 @@ server.tool(
   },
   { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('health.check', args))
+)
+
+server.tool(
+  'flowdesk_report_issue',
+  'File a problem report when a FlowDesk tool failed or did not do what it said (an isError result, a wrong or empty answer, a health-check fail). The report stays on this computer; the user exports reports from Settings > About and sends them to whoever maintains FlowDesk, who fixes it in a new version. Do NOT try to fix FlowDesk yourself or edit its files. Emails, tokens and long ids in error/note are masked, and only the NAMES of args are kept, never their values.',
+  {
+    tool: z.string().describe('The FlowDesk tool that failed, e.g. pinterest_create_pin.'),
+    error: z.string().describe('The error text the tool returned, as is.'),
+    note: z.string().optional().describe('What you were trying to do and what happened instead, in one or two sentences. No personal data.'),
+    args: z.record(z.unknown()).optional().describe('The arguments you called the tool with; only their names are stored.'),
+  },
+  async (args) => textResult(await callGatewayRpc('reports.create', args))
 )
 
 server.tool(
