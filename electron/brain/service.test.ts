@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { strToU8, zipSync } from 'fflate'
@@ -563,5 +563,34 @@ describe('BrainService', () => {
         expect(service.documents.vectorCoverage([scope.id])).toEqual({ documents: added + 1, vectors: 1 })
       } finally { service.close() }
     })
+  })
+
+  it('cancels jobs left waiting for a login or approval for over a week, and nothing newer', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain.sqlite'))
+    try {
+      const scope = service.database.ensureScope({ type: 'client', externalRef: 'stale', name: 'Stale' })
+      const old = service.database.enqueueJob({ recipeId: 'notebooklm.research', recipeVersion: 1, scopeId: scope.id, parameters: { q: 'old' } })
+      const fresh = service.database.enqueueJob({ recipeId: 'notebooklm.research', recipeVersion: 1, scopeId: scope.id, parameters: { q: 'fresh' } })
+      const set = service.database.handle.prepare("UPDATE jobs SET status = 'waiting_for_login', updated_at = ? WHERE id = ?")
+      set.run('2026-09-12T15:38:09.000Z', old.id)
+      set.run('2026-10-08T00:00:00.000Z', fresh.id)
+      expect(service.cancelStaleWaitingJobs(Date.parse('2026-10-09T00:00:00.000Z'))).toEqual([old.id])
+      const statuses = Object.fromEntries(service.database.listJobs().map(job => [job.id, job.status]))
+      expect(statuses).toMatchObject({ [old.id]: 'cancelled', [fresh.id]: 'waiting_for_login' })
+    } finally { service.close() }
+  })
+
+  it('routes operator ops to Brain v3 and writes its files beside the vault', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowdesk-brain-service-'))
+    roots.push(root)
+    const service = new BrainService(join(root, 'brain.sqlite'))
+    try {
+      service.handle({ id: '1', method: 'operator', payload: { op: 'brand.upsert', args: { name: 'Alpha Paws' } } })
+      expect(service.handle({ id: '2', method: 'operator', payload: { op: 'brand.list' } })).toMatchObject([{ id: 'alpha-paws' }])
+      service.operator.writeFiles()
+      expect(readFileSync(join(root, 'operator', 'index.md'), 'utf8')).toContain('Alpha Paws')
+    } finally { service.close() }
   })
 })

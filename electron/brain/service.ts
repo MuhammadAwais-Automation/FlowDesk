@@ -19,6 +19,7 @@ import { EntityStore } from './knowledge/entities'
 import { EvidenceRetriever } from './knowledge/evidence'
 import { migrateMemories } from './knowledge/memoriesMigration'
 import { VaultImporter } from './knowledge/vaultImporter'
+import { OperatorService } from './operator/ops'
 
 /**
  * Most documents a change produces at once before the automatic index refresh
@@ -26,6 +27,9 @@ import { VaultImporter } from './knowledge/vaultImporter'
  * path stays around a second at ~100ms per document.
  */
 export const AUTO_VECTOR_LIMIT = 50
+
+/** A job still waiting for a login or an approval after this long is abandoned. */
+export const STALE_WAITING_JOB_MS = 7 * 24 * 60 * 60 * 1000
 
 export class BrainService {
   readonly database: BrainDatabase
@@ -43,6 +47,9 @@ export class BrainService {
   readonly candidates: CandidateStore
   readonly entities: EntityStore
   readonly compactor: Compactor
+  /** Brain v3 (docs/brain-v3-plan.md): sessions, ledger, brands, content, jobs, inbox. */
+  readonly operator: OperatorService
+  private readonly operatorTimer: ReturnType<typeof setInterval>
   private readonly maintenanceTimer: ReturnType<typeof setInterval>
   private readonly compactionTimer: ReturnType<typeof setInterval>
   private readonly monitors: MonitorScheduler
@@ -58,6 +65,16 @@ export class BrainService {
     this.candidates = new CandidateStore(this.database.handle, this.documents)
     this.entities = new EntityStore(this.database.handle)
     this.compactor = new Compactor(this.documents)
+    // operator/ sits beside vault/, not inside it: the vault treats any .md it
+    // did not write as an import.
+    this.operator = new OperatorService(this.database.handle, join(dirname(databasePath), 'operator'), {
+      countsByType: () => Object.fromEntries((this.database.handle.prepare('SELECT type, COUNT(*) n FROM knowledge_documents WHERE valid_to IS NULL GROUP BY type').all() as Array<{ type: string; n: number }>).map(r => [r.type, Number(r.n)])),
+      // Only the work-relevant corners of the vault: the user's profile and the agency.
+      seedDocs: () => (this.database.handle.prepare(`SELECT d.path, d.title, f.body FROM knowledge_documents d JOIN knowledge_fts f ON f.document_id = d.id
+        WHERE d.valid_to IS NULL AND (d.path LIKE 'wiki/me/%' OR d.path LIKE 'wiki/business/agency/overview%' OR d.path LIKE 'wiki/me/positioning%')`).all() as Array<{ path: string; title: string; body: string }>)
+        .map(r => ({ path: String(r.path), title: String(r.title), body: String(r.body ?? '') })),
+      memories: () => this.database.listMemories().filter(m => m.status === 'accepted').map(m => ({ id: m.id, kind: m.kind, text: m.text })),
+    })
     // Part 1: memories are folded into knowledge_documents (see
     // knowledge/memoriesMigration.ts) rather than staying a second store this
     // vault keeps in sync with. Nothing new writes to `memories` any more, so
@@ -73,6 +90,7 @@ export class BrainService {
     this.database.registerRecipe({ id: 'notebooklm.artifact', version: 1, title: 'NotebookLM Artifact', steps: ['generate', 'capture_manifest'] })
     for (const recipe of socialRecipeDefinitions) this.database.registerRecipe(recipe)
     this.database.recoverExpiredLeases()
+    this.cancelStaleWaitingJobs()
     // Monitors are recipes registered above, so the scheduler starts only after
     // registration. It lives and dies with this utility process: no OS task.
     this.monitors = new MonitorScheduler(createMonitorSchedulerPort(this.database))
@@ -83,6 +101,22 @@ export class BrainService {
     // with nothing to retry across a restart, not multi-step job/monitor work.
     this.compactionTimer = setInterval(() => this.runCompaction(), 24 * 60 * 60 * 1000)
     this.compactionTimer.unref()
+    this.operatorTimer = setInterval(() => { try { this.operator.sweepIdleSessions() } catch { /* next tick */ } }, 10 * 60 * 1000)
+    this.operatorTimer.unref()
+    try { this.operator.writeFiles() } catch { /* rendered again on the next change */ }
+  }
+
+  /**
+   * Jobs parked in waiting_for_login / waiting_for_approval by the removed
+   * in-app agent never resume on their own and kept Brain reporting "active
+   * jobs" forever. Anything waiting longer than STALE_WAITING_JOB_MS is
+   * cancelled. Public so tests (and runMaintenance) can call it.
+   */
+  cancelStaleWaitingJobs(now = Date.now()): string[] {
+    const cutoff = new Date(now - STALE_WAITING_JOB_MS).toISOString()
+    const stale = this.database.listJobs().filter(job => ['waiting_for_login', 'waiting_for_approval'].includes(job.status) && job.updatedAt < cutoff)
+    for (const job of stale) this.database.cancelJob(job.id)
+    return stale.map(job => job.id)
   }
 
   /** Folds orphan captures/*.md notes into the real documents they're about,
@@ -173,6 +207,7 @@ export class BrainService {
    * scheduled caller is still the constructor's own timer.
    */
   runMaintenance() {
+    this.cancelStaleWaitingJobs()
     const brainRoot = dirname(this.vault.root)
     const artifactRoot = resolve(brainRoot, 'artifacts')
     for (const reference of this.database.purgeExpiredCaptures()) {
@@ -416,6 +451,7 @@ export class BrainService {
       case 'knowledge.migrateMemories':
         return migrateMemories(this.documents, { memories: this.database.listMemories(), dryRun: request.payload.dryRun })
       case 'knowledge.listUnresolvedLinks': return this.documents.listUnresolvedLinks(this.knowledgeScopeChain(request.payload.scopeId))
+      case 'operator': return this.operator.handle(request.payload.op, request.payload.args)
       case 'shutdown': {
         this.close()
         return { closed: true }
@@ -426,6 +462,8 @@ export class BrainService {
   close() {
     clearInterval(this.maintenanceTimer)
     clearInterval(this.compactionTimer)
+    clearInterval(this.operatorTimer)
+    this.operator.close()
     this.monitors.stop()
     this.vault.stop()
     this.database.checkpoint()

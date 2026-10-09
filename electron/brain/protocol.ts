@@ -207,6 +207,8 @@ export const brainRequestSchema = z.discriminatedUnion('method', [
   // visible before anything is written.
   z.object({ ...requestBase, method: z.literal('knowledge.migrateMemories'), payload: z.object({ dryRun: z.boolean().optional() }).strict() }),
   z.object({ ...requestBase, method: z.literal('knowledge.listUnresolvedLinks'), payload: z.object({ scopeId: id }).strict() }),
+  // Brain v3 operator ops (operator/ops.ts validates each op's own args).
+  z.object({ ...requestBase, method: z.literal('operator'), payload: z.object({ op: z.string().min(1).max(60), args: z.unknown().optional() }).strict() }),
   z.object({ ...requestBase, method: z.literal('shutdown'), payload: z.object({}).strict() }),
 ])
 
