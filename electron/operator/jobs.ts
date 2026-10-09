@@ -42,6 +42,11 @@ const fail = (r: any, what: string) => {
   if (!r || r.ok === false) throw new Error(`${what}: ${String(r?.error ?? 'no answer').slice(0, 300)}`)
   return r
 }
+/** The first list among `keys`, else the first array the answer holds (shapes verified 2026-10-09). */
+const firstList = (r: any, keys: string[]): any[] => {
+  for (const k of keys) if (Array.isArray(r?.[k])) return r[k]
+  return (Object.values(r ?? {}).find(Array.isArray) as any[] | undefined) ?? []
+}
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const compact = (o: Record<string, number | null>) => Object.fromEntries(Object.entries(o).filter((e): e is [string, number] => e[1] !== null))
 
@@ -62,10 +67,12 @@ export const RECIPES: Recipe[] = [
       fail(await ctx.invoke('tiktok.radarCollect', { id: p.niche }), 'radar collect')
       ctx.progress('building report')
       const r = fail(await ctx.invoke('tiktok.radarReport', { id: p.niche, hours: p.hours ?? 24 }), 'radar report')
-      const items = arr(r.items ?? r.videos ?? r.top ?? r.report?.items)
+      const report = r.report ?? r
+      const items = firstList(report, ['topVideos', 'videos', 'items'])
       return {
-        summary: `TikTok radar "${p.niche}": ${items.length} videos in the last ${p.hours ?? 24}h`,
+        summary: `TikTok radar "${p.niche}": ${items.length} top videos in the last ${p.hours ?? 24}h`,
         data: r, items,
+        ideas: arr(report.opportunities).slice(0, 5).map((o: any) => ({ text: `TikTok ${p.niche}: ${String(o.title ?? o.idea ?? o.text ?? o.label ?? JSON.stringify(o)).slice(0, 200)}`, source: 'tiktok.radar', score: num(o.score) })),
         agent: { title: `Pick winners from the "${p.niche}" radar`, instructions: 'Read the result with jobs.result, choose the strongest ideas for the matching brand, save them with brain_record type=idea, and propose any pattern you see with brain_learning.' },
       }
     },
@@ -77,7 +84,7 @@ export const RECIPES: Recipe[] = [
     params: z.object({ query: z.string().min(1), limit: z.number().int().min(1).max(100).optional(), account: z.string().optional() }),
     async run(ctx, p) {
       const r = fail(await ctx.invoke('tiktok.apiSearch', { query: p.query, limit: p.limit ?? 30, account: p.account }), 'tiktok search')
-      const items = arr(r.videos ?? r.items ?? r.results)
+      const items = firstList(r, ['videos', 'items'])
       return { summary: `TikTok search "${p.query}": ${items.length} results`, data: r, items }
     },
   },
@@ -88,10 +95,10 @@ export const RECIPES: Recipe[] = [
     params: z.object({ country: z.string().optional(), type: z.string().optional(), limit: z.number().int().min(1).max(100).optional(), account: z.string().optional() }),
     async run(ctx, p) {
       const r = fail(await ctx.invoke('pinterest.trends', { country: p.country, type: p.type, limit: p.limit ?? 25, account: p.account }), 'pinterest trends')
-      const items = arr(r.trends ?? r.items)
+      const items = firstList(r, ['terms', 'trends', 'items'])
       return {
         summary: `Pinterest trends: ${items.length}`, data: r, items,
-        ideas: items.slice(0, 25).map((t: any) => ({ text: `Pinterest trend: ${String(t.term ?? t.keyword ?? t.name ?? t.query ?? JSON.stringify(t)).slice(0, 200)}`, source: 'pinterest.trends', score: num(t.growth ?? t.weeklyChange ?? t.score) })),
+        ideas: items.slice(0, 25).map((t: any) => ({ text: `Pinterest trend: ${String(t.term ?? t.keyword ?? t.name ?? JSON.stringify(t)).slice(0, 200)}`, source: 'pinterest.trends', score: num(t.monthChange ?? t.weekChange ?? t.score) })),
       }
     },
   },
@@ -102,7 +109,8 @@ export const RECIPES: Recipe[] = [
     params: z.object({ niche: z.string().min(1), country: z.string().optional(), queries: z.array(z.string()).max(10).optional(), account: z.string().optional() }),
     async run(ctx, p) {
       const r = fail(await ctx.invoke('pinterest.nicheResearch', p), 'niche research')
-      return { summary: `Pinterest niche "${p.niche}" researched`, data: r, items: arr(r.queries ?? r.results ?? r.pins) }
+      const items = firstList(r, ['topPins', 'pins', 'keywords'])
+      return { summary: `Pinterest niche "${p.niche}": ${items.length} items`, data: r, items }
     },
   },
   {
@@ -112,7 +120,7 @@ export const RECIPES: Recipe[] = [
     params: z.object({ candidates: z.array(z.string().min(1)).min(1).max(30), country: z.string().optional(), account: z.string().optional(), gumroadAccount: z.string().optional() }),
     async run(ctx, p) {
       const r = fail(await ctx.invoke('pinFactory.nicheScan', p), 'niche scan')
-      const items = arr(r.niches ?? r.results ?? r.ranked)
+      const items = firstList(r, ['ranked', 'niches'])
       return {
         summary: `Niche scan: ${items.length} niches scored`, data: r, items,
         ideas: items.slice(0, 10).map((n: any) => ({ text: `Niche: ${String(n.niche ?? n.name ?? n.candidate ?? '').slice(0, 120)}`, source: 'pinFactory.nicheScan', score: num(n.score ?? n.total) })),
@@ -127,7 +135,7 @@ export const RECIPES: Recipe[] = [
     params: z.object({ query: z.string().min(1), subreddit: z.string().optional(), sort: z.enum(['relevance', 'hot', 'top', 'new', 'comments']).optional(), limit: z.number().int().min(1).max(100).optional(), account: z.string().optional() }),
     async run(ctx, p) {
       const r = fail(await ctx.invoke('reddit.apiSearch', p), 'reddit search')
-      const items = arr(r.posts ?? r.items ?? r.results)
+      const items = firstList(r, ['items', 'posts', 'results'])
       return { summary: `Reddit "${p.query}": ${items.length} posts`, data: r, items }
     },
   },

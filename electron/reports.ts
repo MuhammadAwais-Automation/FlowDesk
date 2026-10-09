@@ -18,7 +18,7 @@ export interface ReportContext { dir: string; version: string; now?: () => Date 
 
 export function redact(text: string): string {
   return String(text ?? '')
-    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***')
+    .replace(/[A-Za-z0-9._%+*-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***')
     .replace(/\b(Bearer|Basic)\s+\S+/gi, '$1 ***')
     .replace(/([?&](?:key|token|access_token|auth|sig|signature|session|code)=)[^&\s"']+/gi, '$1***')
     .replace(/(cookie|authorization|x-csrf-token|csrf)(["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi, '$1$2***')

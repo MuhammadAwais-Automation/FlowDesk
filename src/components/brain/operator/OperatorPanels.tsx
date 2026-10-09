@@ -24,7 +24,7 @@ export function useOp<T>(name: string, args: unknown, deps: unknown[] = []) {
   return { data, error, reload }
 }
 
-const maskEmail = (s: string) => s.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***')
+const maskEmail = (s: string) => s.replace(/[A-Za-z0-9._%+*-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***')
 
 export function when(iso: string | null | undefined): string {
   if (!iso) return '—'

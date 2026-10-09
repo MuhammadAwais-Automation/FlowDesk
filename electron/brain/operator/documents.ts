@@ -62,11 +62,17 @@ export interface SystemStatus {
   knowledge?: Record<string, number>
 }
 
-const hm = (iso: string) => iso.slice(0, 16).replace('T', ' ')
+/** Local wall-clock time: the user reads these files, and stored times are UTC. */
+const hm = (iso: string) => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
 const plus = (now: Date, days: number) => new Date(now.getTime() + days * 86_400_000).toISOString()
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 /** Account ids and labels can hold the sign-in email; files and briefings never show it. */
-export const maskEmail = (s: string) => s.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***')
+export const maskEmail = (s: string) => s.replace(/[A-Za-z0-9._%+*-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***')
 
 export function agentsMd(store: OperatorStore): string {
   return store.getMeta<string>('agentsMd', DEFAULT_AGENTS_MD)

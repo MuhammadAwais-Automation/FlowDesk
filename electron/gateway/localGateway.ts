@@ -992,7 +992,7 @@ const jobsOrThrow = () => {
 async function syncOperator(): Promise<void> {
   if (!brainHandler) return
   const accounts = await socialAccountsStatus()
-  await brainOp('accounts.sync', { accounts: (accounts.accounts as Array<{ platform: string; id: string; label: string }>).map(a => ({ platform: a.platform, slotId: a.id, label: a.label.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***') })) })
+  await brainOp('accounts.sync', { accounts: (accounts.accounts as Array<{ platform: string; id: string; label: string }>).map(a => ({ platform: a.platform, slotId: a.id, label: a.label.replace(/[A-Za-z0-9._%+*-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***') })) })
   // First run only (it remembers): profile and brands proposed from the vault.
   await brainOp('seed.fromKnowledge').catch(() => {})
   await ensureSkillsLoaded()
