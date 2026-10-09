@@ -65,7 +65,7 @@ items with a `feedbackId` when the user asks for "N posts".
 - Some units are not text posts (people-you-may-know, showcases): their fields are `null`. `null`
   text means "not a text post", not a failed read. Some real posts have `createdAt: null`.
 - Timing seen: 2.5–4 s warm, up to ~30 s on the first call after the app starts.
-- In the in-app agent, very long post texts are shortened (`textTruncated: true`) so the result
+- In tool results, very long post texts are shortened (`textTruncated: true`) so the result
   stays valid JSON; open the `permalink` for the full text.
 
 ## Accounts

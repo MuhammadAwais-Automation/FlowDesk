@@ -175,6 +175,7 @@ function GeneralSection({ settings, set }: {
 function McpConnectCard() {
   const [config, setConfig] = useState('')
   const [copied, setCopied] = useState(false)
+  const [kit, setKit] = useState('')
   useEffect(() => {
     window.electronAPI.mcpServerEntry()
       .then(entry => setConfig(JSON.stringify({ mcpServers: { flowdesk: entry } }, null, 2)))
@@ -205,6 +206,14 @@ function McpConnectCard() {
         }}>
           {copied ? <><Check size={13} /> Copied</> : 'Copy config'}
         </button>
+        <p style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.6, margin: 0 }}>
+          Or let FlowDesk make an operator folder: open Claude there and it can use FlowDesk tools but cannot change files or run commands.
+        </p>
+        <button onClick={() => { void window.electronAPI.operatorCreateKit().then(r => setKit(r.ok ? `Created in ${r.dir}` : '')).catch(e => setKit(String(e?.message ?? e))) }} style={{
+          alignSelf: 'flex-start', padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)',
+          background: 'var(--surface-2)', color: 'var(--text)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
+        }}>Create operator folder</button>
+        {kit && <div style={{ fontSize: 11, color: 'var(--text-2)', wordBreak: 'break-all' }}>{kit}</div>}
       </div>
     </Card>
   )

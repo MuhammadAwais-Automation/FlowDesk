@@ -42,6 +42,8 @@ inputs:
 ---
 
 ## When to use
+Session start and end, records, content life paths and learnings are in the `brain-protocol`, `content-life-path`, `background-jobs` and `weekly-review` skills; this skill covers the knowledge library and long-form memories.
+
 - Storing durable facts, user directives, creative constraints, and operational decisions into FlowDesk Brain (`brain_remember`).
 - Performing semantic and FTS5 full-text searches across indexed knowledge documents and memories (`brain_search`, `brain_search_documents`).
 - Generating an evidence-backed answer pack with cited context passages for complex planning questions (`brain_answer_pack`).

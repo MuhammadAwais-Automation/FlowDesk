@@ -78,3 +78,30 @@ The packaged build must contain `out/main/brainUtility.js` and be able to create
 `electron/brain/operationalAcceptance.test.ts` is the release gate for the operational loop: capture through a fixture connector, a durable job interrupted and resumed across a process restart, a persisted cited opportunity, a reviewer decision, a budgeted decision brief, and exactly one Agent continuation — plus cross-client isolation and the retention sweep. It runs entirely against throwaway profiles and fixture data; no live account and no real `userData` profile is touched.
 
 Operator procedures for every one of these flows are in [`brain-operations.md`](./brain-operations.md).
+
+## Brain v3: the operator memory
+
+FlowDesk runs no model. Every agent connects over MCP, and Brain v3 (docs/brain-v3-plan.md) is the memory they share.
+
+- **Store.** `electron/brain/operator/store.ts` owns `op_*` tables on the same SQLite handle. They hold:
+  - profile, brand and account facts (dated: a change closes the old row, it does not overwrite it);
+  - sessions and ledger events;
+  - content items with their life-path links, metric snapshots and learnings;
+  - tasks/calendar, contacts and ideas;
+  - the inbox, background jobs, monitors and the log.
+  `operator/ops.ts` is the single `operator` protocol method; each op validates its own args.
+- **Files.** `brain/operator/{AGENTS,CLAUDE,hot,index,log}.md` are rendered from the store a moment after any change. They follow the user's Second-Brain pattern, but FlowDesk keeps them current itself. They live beside `vault/`, not inside it, because the vault imports any markdown it did not write.
+- **Sessions and ledger.** Each MCP server process is one session.
+  - Its calls carry `X-FlowDesk-Session`, `X-FlowDesk-Client` and `X-FlowDesk-Content`.
+  - The gateway wraps its action guard (`electron/operator/capture.ts`), so every finished call is recorded: writes in full, with masked errors and argument names only; reads as counts.
+  - Rehearsals and the health check are never recorded.
+  - A session is logged when the client calls `brain_wrap`, when the MCP process exits, or after two idle hours.
+- **Briefing.** `brain_start` returns AGENTS.md, hot.md and a briefing of about 1,500 tokens, scoped to a platform, brand or account.
+- **Background jobs.** `electron/operator/jobs.ts` runs read-only recipes in main through the gateway's own tool executor, two at a time.
+  - Each result is saved to `brain/job-results/`.
+  - Its numbers, calendar items and ideas are recorded, and it lands in the inbox.
+  - Results that need thinking carry an agent packet; this replaces the removed in-app chat digest.
+  - Monitors repeat recipes; jobs left running by a closed app are marked failed at start.
+- **Proposals.** Profile facts and brands are seeded from the vault once as *proposed*; learnings are always proposed. Only the user accepts them, in Brain → Brands / Rules & Learnings. Agents cannot reach the decide ops.
+- **Operator kit.** Settings → About or Brain → Rules writes a folder with AGENTS.md, CLAUDE.md, `.mcp.json` and Claude settings that deny edits and shell, for day-to-day work outside the code.
+

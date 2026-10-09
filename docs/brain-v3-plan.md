@@ -1,7 +1,10 @@
 # Brain v3 — FlowDesk's memory, run entirely through MCP
 
-Status: plan, 2026-10-09. Nothing here is built yet. Build phase by phase; each
-phase ends with its "Done when" checks passing.
+Status: built 2026-10-09 (P0-P8). Code: `electron/brain/operator/` (store, ops,
+documents), `electron/operator/` (ledger capture, background jobs, operator kit),
+gateway `brain.*` / `jobs.*` RPCs, MCP tools in `bin/flowdesk-mcp.mjs`, UI in
+`src/pages/BrainHub.tsx`, skills `brain-protocol`, `content-life-path`,
+`background-jobs`, `weekly-review`.
 
 ## 0. Principles
 

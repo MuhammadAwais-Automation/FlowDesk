@@ -67,7 +67,7 @@ in a hidden window per account; there is no API key. Write tools were NOT exerci
 | WRITE: change profile text | `linkedin_update_profile` | Only the fields given change; blank name/headline/location are ignored. Approval first. |
 | WRITE: replace photo / cover | `linkedin_upload_photo` / `linkedin_upload_cover` | Local image path. Approval first. |
 
-## In-app agent tools (also mirrored to MCP while FlowDesk runs)
+## More LinkedIn tools (served by the gateway, available over MCP while FlowDesk runs)
 Read: `linkedin_my_posts` (own posts), `linkedin_notifications`, `linkedin_find_people` (people
 you already have a conversation with → `conversationUrn`), `linkedin_network_status`,
 `linkedin_invite_budget`, `linkedin_creator_analytics` (scraped, approximate), and
