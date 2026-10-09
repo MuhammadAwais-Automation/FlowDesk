@@ -321,6 +321,13 @@ export interface ElectronAPI {
   mcpServerEntry: () => Promise<{ command: string; args: string[]; env?: Record<string, string> }>
   /** How many problem reports (electron/reports.ts) are saved on this computer. */
   reportsCount: () => Promise<number>
+  /** Brain v3 operator op (electron/brain/operator/ops.ts); see src/types/operator.ts for result shapes. */
+  brainOperator: <T = unknown>(op: string, args?: unknown) => Promise<T>
+  /** Background jobs: recipes | start {recipe, params} | result {id, page, pageSize} | cancel {id}. */
+  brainJobs: <T = unknown>(action: 'recipes' | 'start' | 'result' | 'cancel', args?: unknown) => Promise<T>
+  brainOpenOperatorFolder: () => Promise<string>
+  /** Asks for a folder, then writes the operator kit (AGENTS.md, .mcp.json, locked-down Claude settings). */
+  operatorCreateKit: () => Promise<{ ok: true; dir: string; written: string[] } | { ok: false; canceled: true }>
   /** Asks where to save, then zips every report plus the last health check there. */
   reportsExport: () => Promise<{ ok: true; count: number; path: string } | { ok: false; canceled: true }>
 

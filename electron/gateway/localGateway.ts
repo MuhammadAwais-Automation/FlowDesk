@@ -140,6 +140,8 @@ import { rehearse } from '../rehearsal'
 import { scanBundles } from '../bundleScan'
 import { runHealth } from '../health/health'
 import { listReports, writeReport } from '../reports'
+import { callContext, contextFromHeaders, withLedger } from '../operator/capture'
+import { BackgroundJobs } from '../operator/jobs'
 import { PLATFORMS, toolRegistry } from '../health/spec'
 import { findAnyViewByUrl, getViewById } from '../sessions'
 import {
@@ -683,17 +685,29 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     return { ok: true, ...r }
   },
   // One-click tool health (health/health.ts): reads + bundle ids, and rehearsals when asked. Never posts.
-  'health.check': async (p) => runHealth(PLATFORMS, {
-    platforms: Array.isArray(p.platforms) ? p.platforms.filter((x): x is string => typeof x === 'string') : undefined,
-    rehearse: p.rehearse === true,
-    accept: Array.isArray(p.accept) ? p.accept.filter((x): x is string => typeof x === 'string') : undefined,
-  }, { invoke: (m, params) => workflowTool(m, params), dir: join(app.getPath('userData'), 'health') }),
+  'health.check': async (p) => {
+    const report = await runHealth(PLATFORMS, {
+      platforms: Array.isArray(p.platforms) ? p.platforms.filter((x): x is string => typeof x === 'string') : undefined,
+      rehearse: p.rehearse === true,
+      accept: Array.isArray(p.accept) ? p.accept.filter((x): x is string => typeof x === 'string') : undefined,
+    }, { invoke: (m, params) => workflowTool(m, params), dir: join(app.getPath('userData'), 'health') })
+    // A partial run (some platforms) is not the whole picture; only full runs update hot.md.
+    if (!Array.isArray(p.platforms) || !p.platforms.length) {
+      const status = healthStatus(report)
+      const body = [status.failing.length ? `failing: ${status.failing.join(', ')}` : '', status.warnings.length ? `warnings: ${status.warnings.join(', ')}` : ''].filter(Boolean).join('; ')
+      void brainOp('status.set', { health: status }).catch(() => {})
+      void brainOp('log.append', { type: 'health', title: `health check: ${report.status}`, body }).catch(() => {})
+    }
+    return report
+  },
   'health.registry': async () => toolRegistry(Object.keys(RPC_HANDLERS)),
   // A failed tool, filed by the MCP client (reports.ts). Masked; argument values are dropped.
   'reports.create': async (p) => {
     if (typeof p.tool !== 'string' || typeof p.error !== 'string') throw new Error('tool and error are required')
     const args = p.args && typeof p.args === 'object' && !Array.isArray(p.args) ? p.args as Record<string, unknown> : undefined
     const r = await writeReport({ tool: p.tool, error: p.error, note: typeof p.note === 'string' ? p.note : undefined, args }, { dir: app.getPath('userData'), version: app.getVersion() })
+    void brainOp('log.append', { type: 'report', title: `problem report: ${p.tool}` }).catch(() => {})
+    void listReports(app.getPath('userData')).then(all => brainOp('status.set', { openReports: all.length })).catch(() => {})
     return { ok: true, id: r.id }
   },
   'reports.list': async () => ({ ok: true, reports: await listReports(app.getPath('userData')) }),
@@ -784,6 +798,52 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'brain.answerPack': async (p) => brainHandler ? brainHandler('knowledge.answerPack', { question: String(p.question || p.query || p.text || ''), scopeId: p.scopeId, tokenBudget: p.tokenBudget }) : { ok: false, error: 'Brain unavailable' },
   'brain.readDocument': async (p) => brainHandler ? brainHandler('knowledge.read', { path: String(p.path || ''), scopeId: p.scopeId }) : { ok: false, error: 'Brain unavailable' },
   'brain.searchDocuments': async (p) => brainHandler ? brainHandler('knowledge.search', { query: String(p.query || p.text || ''), scopeId: p.scopeId, limit: p.limit }) : { ok: false, error: 'Brain unavailable' },
+  // Brain v3 (docs/brain-v3-plan.md): session start/wrap, briefing, and the agent-safe operator ops.
+  'brain.start': async (p) => brainOp('session.start', {
+    sessionId: sessionOf(p), client: clientOf(),
+    platform: typeof p.platform === 'string' ? p.platform : undefined,
+    brandId: typeof p.brandId === 'string' ? p.brandId : undefined,
+    account: typeof p.account === 'string' ? p.account : undefined,
+  }),
+  'brain.wrap': async (p) => brainOp('session.wrap', {
+    sessionId: sessionOf(p), client: clientOf(), summary: String(p.summary ?? ''),
+    decisions: Array.isArray(p.decisions) ? p.decisions.map(String) : undefined,
+    next: typeof p.next === 'string' ? p.next : undefined, focus: typeof p.focus === 'string' ? p.focus : undefined,
+  }),
+  'brain.sessionEnd': async (p) => brainOp('session.end', { sessionId: sessionOf(p), reason: 'exit' }),
+  'brain.briefed': async (p) => brainOp('session.briefed', { sessionId: sessionOf(p) }),
+  'brain.briefing': async (p) => brainOp('briefing', {
+    platform: typeof p.platform === 'string' ? p.platform : undefined,
+    brandId: typeof p.brandId === 'string' ? p.brandId : undefined,
+    account: typeof p.account === 'string' ? p.account : undefined,
+  }),
+  'brain.op': async (p) => {
+    const op = String(p.op || '')
+    if (!AGENT_OPS.has(op)) throw new Error(`brain op "${op}" is not available to agents; allowed: ${[...AGENT_OPS].join(', ')}`)
+    const args = p.args && typeof p.args === 'object' && !Array.isArray(p.args) ? { ...(p.args as Record<string, unknown>) } : {}
+    if (op === 'inbox.take') args.sessionId = sessionOf(p)
+    return brainOp(op, args)
+  },
+  // Retires a wrong memory (soft delete, kept in history).
+  'brain.forget': async (p) => brainHandler ? brainHandler('forget', { id: String(p.id || p.memoryId || '') }) : { ok: false, error: 'Brain unavailable' },
+  // Background jobs (operator/jobs.ts): start now, read later.
+  'jobs.recipes': async () => jobsOrThrow().listRecipes(),
+  'jobs.start': async (p) => jobsOrThrow().start(String(p.recipe || ''), p.params ?? {}, { sessionId: callContext.getStore()?.sessionId ?? null }),
+  'jobs.status': async (p) => brainOp('job.get', { id: String(p.id || '') }),
+  'jobs.list': async (p) => brainOp('job.list', { status: typeof p.status === 'string' ? p.status : undefined, limit: typeof p.limit === 'number' ? p.limit : undefined }),
+  'jobs.result': async (p) => jobsOrThrow().result(String(p.id || ''), typeof p.page === 'number' ? p.page : 1, typeof p.pageSize === 'number' ? p.pageSize : 20),
+  'jobs.cancel': async (p) => jobsOrThrow().cancel(String(p.id || '')),
+  'jobs.monitor': async (p) => {
+    const action = String(p.action || 'list')
+    if (action === 'list') return brainOp('monitor.list')
+    if (action === 'create') {
+      const recipe = String(p.recipe || '')
+      if (!jobsOrThrow().listRecipes().some(r => r.id === recipe)) throw new Error(`unknown job recipe "${recipe}"`)
+      return brainOp('monitor.create', { recipe, params: p.params ?? {}, everyMinutes: Number(p.everyMinutes) })
+    }
+    if (['pause', 'resume', 'delete'].includes(action)) return brainOp('monitor.status', { id: String(p.id || ''), status: action === 'pause' ? 'paused' : action === 'resume' ? 'active' : 'deleted' })
+    throw new Error(`unknown monitor action "${action}" (list, create, pause, resume, delete)`)
+  },
   'brain.neighbors': async (p) => brainHandler ? brainHandler('knowledge.neighbors', { path: String(p.path || ''), scopeId: p.scopeId, depth: p.depth }) : { ok: false, error: 'Brain unavailable' },
   'brain.listCandidates': async (p) => brainHandler ? brainHandler('listCandidates', { scopeId: p.scopeId }) : { ok: false, error: 'Brain unavailable' },
   'brain.decideCandidate': async (p) => brainHandler ? brainHandler('decideCandidate', p) : { ok: false, error: 'Brain unavailable' },
@@ -894,6 +954,63 @@ export function setGatewayBrainHandler(handler: (method: string, payload: unknow
   brainHandler = handler
 }
 
+/** One Brain v3 operator op (brain/operator/ops.ts). */
+function brainOp(op: string, args: Record<string, unknown> = {}): Promise<any> {
+  if (!brainHandler) return Promise.reject(new Error('Brain unavailable'))
+  return brainHandler('operator', { op, args })
+}
+
+/**
+ * Ops a connected agent may call through brain.op. Left out on purpose:
+ * deciding learnings and proposed facts and editing AGENTS.md (the user does
+ * those in FlowDesk), and FlowDesk's own bookkeeping (ledger, status, sync).
+ */
+const AGENT_OPS = new Set([
+  'activity', 'briefing', 'files.get', 'overview', 'sessions.list', 'log.list',
+  'profile.get', 'profile.set', 'brand.upsert', 'brand.list', 'brand.get', 'account.update', 'account.list', 'history', 'facts.proposed',
+  'content.create', 'content.get', 'content.update', 'content.list', 'content.link',
+  'metric.record', 'metric.latest', 'learning.propose', 'learning.list',
+  'task.upsert', 'task.list', 'contact.upsert', 'contact.list', 'idea.add', 'idea.list', 'idea.status',
+  'inbox.list', 'inbox.take', 'inbox.done', 'job.get', 'job.list', 'monitor.list',
+])
+
+const sessionOf = (p: Record<string, unknown>) => {
+  const ctx = callContext.getStore()
+  return ctx?.sessionId ?? (typeof p.sessionId === 'string' && p.sessionId ? p.sessionId : 'cli')
+}
+const clientOf = () => callContext.getStore()?.client ?? 'cli'
+
+let backgroundJobs: BackgroundJobs | null = null
+/** The app UI starts and reads background jobs through the same runner as MCP. */
+export function backgroundJobsApi(): BackgroundJobs | null { return backgroundJobs }
+const jobsOrThrow = () => {
+  if (!backgroundJobs) throw new Error('background jobs are starting')
+  return backgroundJobs
+}
+
+/** Keeps Brain's account list, skills list, health and report counts current. */
+async function syncOperator(): Promise<void> {
+  if (!brainHandler) return
+  const accounts = await socialAccountsStatus()
+  await brainOp('accounts.sync', { accounts: (accounts.accounts as Array<{ platform: string; id: string; label: string }>).map(a => ({ platform: a.platform, slotId: a.id, label: a.label.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***') })) })
+  // First run only (it remembers): profile and brands proposed from the vault.
+  await brainOp('seed.fromKnowledge').catch(() => {})
+  await ensureSkillsLoaded()
+  await brainOp('status.set', {
+    skills: listSkills().map(s => ({ id: String(s.id), name: String(s.name ?? s.id), description: typeof s.description === 'string' ? s.description.slice(0, 200) : undefined })),
+    openReports: (await listReports(app.getPath('userData'))).length,
+  })
+}
+
+function healthStatus(report: { ranAt: string; status: string; platforms: Array<{ platform: string; status: string }> }) {
+  return {
+    ranAt: report.ranAt,
+    status: report.status,
+    failing: report.platforms.filter(p => p.status === 'fail').map(p => p.platform),
+    warnings: report.platforms.filter(p => p.status === 'warn').map(p => p.platform),
+  }
+}
+
 /** Every write-like action reachable through the gateway, canonical and de-duplicated. */
 export async function knownWriteActions(): Promise<string[]> {
   const registry = await loadAgentToolRegistry()
@@ -918,7 +1035,27 @@ export function tokenMatches(header: string | undefined, token: string): boolean
 
 export function startLocalGateway(userDataPath?: string, preferredPort = 47888, options: GatewayOptions = {}): Promise<GatewayServer> {
   const policyDir = userDataPath || join(process.env.FLOWDESK_HOME || homedir(), '.flowdesk')
-  guard = createActionGuard({ ...policyPaths(policyDir), requestApproval: options.requestApproval })
+  guard = withLedger(createActionGuard({ ...policyPaths(policyDir), requestApproval: options.requestApproval }), row => {
+    void brainOp('ledger.record', row as unknown as Record<string, unknown>).catch(() => {})
+  })
+  if (userDataPath && !backgroundJobs) {
+    const jobs = new BackgroundJobs({ brain: brainOp, invoke: (m, params) => workflowTool(m, params), resultsDir: join(userDataPath, 'brain', 'job-results') })
+    backgroundJobs = jobs
+    // Brain starts in its own process; keep trying until it answers, then once a minute
+    // start due monitors and every 10 minutes refresh accounts, skills and report counts.
+    let ready = false
+    let minutes = 0
+    const tick = () => {
+      if (!brainHandler) return
+      void (async () => {
+        if (!ready) { await jobs.recover(); await syncOperator(); ready = true }
+        await jobs.tick()
+        if (++minutes % 10 === 0) await syncOperator()
+      })().catch(() => {})
+    }
+    setTimeout(tick, 15_000).unref?.()
+    setInterval(tick, 60_000).unref?.()
+  }
   return new Promise((resolve, reject) => {
     const token = randomBytes(24).toString('hex')
     void ensureSkillsLoaded(userDataPath)
@@ -1028,7 +1165,7 @@ export function startLocalGateway(userDataPath?: string, preferredPort = 47888, 
               return
             }
 
-            const result = await guard(method, params as Record<string, unknown>, () => handler(params))
+            const result = await callContext.run(contextFromHeaders(req.headers, method), () => guard(method, params as Record<string, unknown>, () => handler(params)))
             res.writeHead(200, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ ok: true, result }))
           } catch (err) {

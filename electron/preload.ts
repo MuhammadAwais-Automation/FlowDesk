@@ -233,6 +233,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLoginItemSettings: () => ipcRenderer.invoke('app:getLoginItemSettings'),
   mcpServerEntry: () => ipcRenderer.invoke('app:mcpServerEntry'),
   reportsCount: () => ipcRenderer.invoke('reports:count'),
+  brainOperator: (op: string, args?: unknown) => ipcRenderer.invoke('brain:operator', op, args),
+  brainJobs: (action: string, args?: unknown) => ipcRenderer.invoke('brain:jobs', action, args),
+  brainOpenOperatorFolder: () => ipcRenderer.invoke('brain:openOperatorFolder'),
+  operatorCreateKit: () => ipcRenderer.invoke('operator:createKit'),
   reportsExport: () => ipcRenderer.invoke('reports:export'),
 
   // PoC: live capture of streamed AI responses (ChatGPT only, for now)

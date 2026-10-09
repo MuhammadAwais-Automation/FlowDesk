@@ -133,13 +133,14 @@ import { configureNotebookJobRuntime } from './notebooklmJobRuntime'
 import { recordProviderUsage, type ProviderLimits } from './providerUsage'
 import { socialRecipeRequestSchema } from './brain/socialRecipes'
 import { executeBrainCapability } from './brain/capabilityProtocol'
-import { startLocalGateway, setGatewayBrainHandler, knownWriteActions, executeWorkflow, resumeWorkflow, type GatewayServer } from './gateway/localGateway'
+import { startLocalGateway, setGatewayBrainHandler, knownWriteActions, executeWorkflow, resumeWorkflow, backgroundJobsApi, type GatewayServer } from './gateway/localGateway'
 import { setGooglePartitionGetter, setGoogleAccountsGetter } from './flow'
 import { waitForGoogleSignIn } from './googleSignInChooser'
 import { configureChatgptImages } from './chatgptImages'
 import { mcpServerEntry } from './mcpConfig'
 import { startAutoUpdate } from './updater'
 import { exportReports, listReports } from './reports'
+import { kitFiles, writeKit } from './operator/kit'
 import { startRadar } from './tiktok/tiktokRadar'
 import { loadNiches } from './tiktok/tiktokRadarStore'
 import { setActiveTikTokAccount, setOnAccountSwitchedListener } from './tiktok/tiktok'
@@ -664,6 +665,33 @@ ipcMain.handle('brain:runSocialRecipe', async (_e, input: unknown) => {
 
 // IPC: get current login item settings (so renderer can display actual state)
 ipcMain.handle('app:getLoginItemSettings', () => app.getLoginItemSettings())
+// Brain v3 (docs/brain-v3-plan.md): the UI is the user, so every operator op is open to it.
+ipcMain.handle('brain:operator', (_e, op: unknown, args: unknown) => {
+  if (typeof op !== 'string') throw new Error('operator op must be a string')
+  return brainRequest('operator', { op, args: args ?? {} })
+})
+ipcMain.handle('brain:jobs', async (_e, action: unknown, args: unknown) => {
+  const jobs = backgroundJobsApi()
+  if (!jobs) throw new Error('background jobs are starting')
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
+  if (action === 'recipes') return jobs.listRecipes()
+  if (action === 'start') return jobs.start(String(a.recipe ?? ''), a.params ?? {})
+  if (action === 'result') return jobs.result(String(a.id ?? ''), typeof a.page === 'number' ? a.page : 1, typeof a.pageSize === 'number' ? a.pageSize : 20)
+  if (action === 'cancel') return jobs.cancel(String(a.id ?? ''))
+  throw new Error(`unknown jobs action ${String(action)}`)
+})
+ipcMain.handle('brain:openOperatorFolder', () => shell.openPath(join(app.getPath('userData'), 'brain', 'operator')))
+ipcMain.handle('operator:createKit', async () => {
+  const options = { title: 'Choose an empty folder for the operator kit', properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'> }
+  const { canceled, filePaths } = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+  if (canceled || !filePaths[0]) return { ok: false, canceled: true }
+  const agents = await brainRequest('operator', { op: 'files.get', args: { name: 'AGENTS' } }) as { text: string }
+  const claude = await brainRequest('operator', { op: 'files.get', args: { name: 'CLAUDE' } }) as { text: string }
+  const entry = mcpServerEntry({ packaged: app.isPackaged, execPath: process.execPath, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })
+  const written = writeKit(filePaths[0], kitFiles({ agentsMd: agents.text, claudeMd: claude.text, mcpEntry: entry }))
+  void shell.openPath(filePaths[0])
+  return { ok: true, dir: filePaths[0], written }
+})
 ipcMain.handle('reports:count', async () => (await listReports(app.getPath('userData'))).length)
 ipcMain.handle('reports:export', async () => {
   const day = new Date().toISOString().slice(0, 10)
@@ -2230,6 +2258,8 @@ app.whenReady().then(async () => {
   }))
   brainClient.start()
   setGatewayBrainHandler(async (method, payload: any) => {
+    // Brain v3 ops are global, and the ledger calls this on every tool call.
+    if (method === 'operator' || method === 'forget') return brainRequest(method, payload ?? {})
     let scopeId = payload?.scopeId
     if (!scopeId && brainClient) {
       try {

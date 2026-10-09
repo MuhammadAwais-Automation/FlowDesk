@@ -14,6 +14,15 @@ import { readFileSync, existsSync, statSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { randomUUID } from 'node:crypto'
+
+// Brain v3 sessions (docs/brain-v3-plan.md §2): this process is one session.
+// Every gateway call carries its id, the client's name and, when the tool was
+// given one, the content item it belongs to, so FlowDesk records what this
+// agent did even if it never calls brain_wrap.
+const SESSION_ID = randomUUID()
+const callStore = new AsyncLocalStorage()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -114,6 +123,9 @@ async function callGatewayRpc(method, params = {}) {
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${cfg.token}`,
+      'X-FlowDesk-Session': SESSION_ID,
+      'X-FlowDesk-Client': clientName(),
+      ...(callStore.getStore()?.contentId ? { 'X-FlowDesk-Content': callStore.getStore().contentId } : {}),
     },
     body: JSON.stringify({ method, params }),
     signal: AbortSignal.timeout(rpcTimeoutMs(method)),
@@ -349,12 +361,63 @@ flowdesk_skills_list shows every other skill.
 
 Rules of thumb: still images and image edits → chatgpt_generate_image / chatgpt_edit_image; video → Google Flow. Long jobs return ids — poll chatgpt_image_jobs or flow_media_status instead of starting the same job again. A result with isError did not happen; read its error before retrying. Public or outbound actions (post, comment, send, like, vote, follow, delete, profile edits) need the user's explicit yes in chat for that exact action first; so do creating, editing or publishing Gumroad products.
 
-When a tool keeps failing (or flowdesk_health_check shows a fail), do not work around it or touch FlowDesk's files: file it with flowdesk_report_issue and tell the user, who exports reports from FlowDesk's Settings > About.`
+When a tool keeps failing (or flowdesk_health_check shows a fail), do not work around it or touch FlowDesk's files: file it with flowdesk_report_issue and tell the user, who exports reports from FlowDesk's Settings > About.
+
+Brain (the user's memory in FlowDesk): call brain_start FIRST in every session — it returns the user's rules (AGENTS.md), hot.md (what is happening now, the last agent's handoff) and a briefing for the platform you will work on (brands, which account is for what, the last 7 days, the calendar, inbox). End with brain_wrap (summary, decisions, next step). Everything you do through FlowDesk tools is logged automatically. Pass contentId (from brain_content) to generation, upload and posting tools so a piece of content keeps its life path. Long research or numbers go to jobs (they run in the background); pick results up from inbox.`
 
 const server = new McpServer({
   name: 'flowdesk-mcp',
   version: '1.0.0',
 }, { instructions: SERVER_INSTRUCTIONS })
+
+function clientName() {
+  try { return String(server.server.getClientVersion()?.name || 'mcp-client').slice(0, 80) } catch { return 'mcp-client' }
+}
+
+// Tools whose work becomes a piece of content: they accept contentId and the
+// gateway links what they make or post into that item's life path.
+const CONTENT_TOOL = /^(chatgpt_(generate|edit)_image|flow_(generate|extend|upload)|pinterest_(create_pin|save_pin|edit_pin)|tiktok_(upload_video|api_upload_video|submit_post|edit_video_caption)|gumroad_(create_product|edit_product|publish_product|upload_(cover|file|thumbnail))|linkedin_send|reddit_create_(post|comment)|facebook_(comment|share))/
+const CONTENT_ID = z.string().optional().describe('Brain content item this work belongs to (from brain_content create); links it into that item\'s life path.')
+const NO_HINT = new Set(['brain_start', 'brain_wrap', 'brain_briefing', 'flowdesk_skill_get', 'flowdesk_skills_list'])
+let briefedHere = false
+const isZodShape = o => !!o && typeof o === 'object' && !Array.isArray(o) && Object.values(o).every(v => v && typeof v === 'object' && ('_def' in v || '_zod' in v))
+
+function wrapToolHandler(name, handler) {
+  return async (args, extra) => {
+    const { contentId, ...rest } = args ?? {}
+    const result = await callStore.run({ contentId: typeof contentId === 'string' && contentId ? contentId : undefined }, () => handler(CONTENT_TOOL.test(name) ? rest : args, extra))
+    if (!briefedHere && !NO_HINT.has(name) && result && Array.isArray(result.content)) {
+      briefedHere = true
+      result.content = [...result.content, { type: 'text', text: '[FlowDesk Brain] This session has not loaded its context yet: call brain_start (rules, hot cache, briefing) before the next step.' }]
+    }
+    return result
+  }
+}
+
+const originalTool = server.tool.bind(server)
+server.tool = (name, ...rest) => {
+  const handler = rest.pop()
+  const shapeAt = rest.findIndex(a => a && typeof a === 'object')
+  if (shapeAt < 0 || !isZodShape(rest[shapeAt])) return originalTool(name, ...rest, handler)
+  if (CONTENT_TOOL.test(name)) rest[shapeAt] = { ...rest[shapeAt], contentId: CONTENT_ID }
+  return originalTool(name, ...rest, wrapToolHandler(name, handler))
+}
+const originalRegisterTool = server.registerTool.bind(server)
+server.registerTool = (name, config, handler) => {
+  if (!config || !isZodShape(config.inputSchema)) return originalRegisterTool(name, config, handler)
+  const inputSchema = CONTENT_TOOL.test(name) ? { ...config.inputSchema, contentId: CONTENT_ID } : config.inputSchema
+  return originalRegisterTool(name, { ...config, inputSchema }, wrapToolHandler(name, handler))
+}
+
+// The session ends when the client goes away; FlowDesk logs it even without brain_wrap.
+let sessionEnded = false
+async function endSession() {
+  if (sessionEnded) return
+  sessionEnded = true
+  try { await Promise.race([callGatewayRpc('brain.sessionEnd', {}), new Promise(r => setTimeout(r, 3000))]) } catch { /* FlowDesk may be closed */ }
+}
+process.stdin.on('end', () => { void endSession() })
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { void endSession().finally(() => process.exit(0)) })
 
 // ── MCP APP UI RESOURCES ─────────────────────────────────────────────────────
 
@@ -2787,6 +2850,183 @@ server.registerTool(
   },
   async (args) => formatBrainVisual(await callGatewayRpc('brain.search', args))
 )
+
+// ── BRAIN V3: SESSIONS, BRIEFING, RECORDS, CONTENT, JOBS, INBOX ─────────────
+
+server.tool(
+  'brain_start',
+  'Call FIRST in every session. Returns the user\'s rules (AGENTS.md), hot.md (what is happening now + the last agent\'s handoff) and a briefing: brands, which account is for what, the last 7 days of activity, the next 7 days of calendar, inbox items and failing tools. Scope it to the platform/brand you are about to work on.',
+  {
+    platform: z.string().optional().describe('Platform you will work on: chatgpt, flow, tiktok, pinterest, gumroad, linkedin, reddit, whatsapp, facebook.'),
+    brandId: z.string().optional().describe('Brand id from the briefing, to scope it to one brand.'),
+    account: z.string().optional().describe('One account (slot id or label).'),
+  },
+  async (args) => {
+    briefedHere = true
+    const r = await callGatewayRpc('brain.start', args)
+    return { content: [{ type: 'text', text: `${r.agents}\n\n---\n\n${r.hot}\n\n---\n\n${r.briefing}` }] }
+  }
+)
+
+server.tool(
+  'brain_wrap',
+  'Call at the END of a session: what you did, the decisions made, and exactly what to do next time. It becomes the Handoff in hot.md and a log.md entry the next agent reads in brain_start.',
+  {
+    summary: z.string().min(1).describe('What happened this session, 2-5 sentences.'),
+    decisions: z.array(z.string()).optional().describe('Decisions the user made.'),
+    next: z.string().optional().describe('Exactly what to do first next session.'),
+    focus: z.string().optional().describe('The current focus in a few words.'),
+  },
+  async (args) => textResult(await callGatewayRpc('brain.wrap', args))
+)
+
+server.tool(
+  'brain_briefing',
+  'The briefing alone (no rules or hot cache), scoped to a platform, brand or account. Use it when switching platforms mid-session.',
+  {
+    platform: z.string().optional(),
+    brandId: z.string().optional(),
+    account: z.string().optional(),
+  },
+  async (args) => { const r = await callGatewayRpc('brain.briefing', args); return { content: [{ type: 'text', text: r.text }] } }
+)
+
+server.tool(
+  'brain_activity',
+  'What FlowDesk did (from the automatic ledger): every write action with its account, outcome, target and error, filtered by platform, account, brand, content item, session or time. Use it to answer "what did we do on TikTok Account 2 this week".',
+  {
+    platform: z.string().optional(),
+    account: z.string().optional().describe('Account slot id or label as the tools were called with.'),
+    brandId: z.string().optional(),
+    contentId: z.string().optional(),
+    since: z.string().optional().describe('ISO date/time, e.g. 2026-10-01.'),
+    until: z.string().optional(),
+    limit: z.number().int().min(1).max(500).optional(),
+  },
+  { readOnlyHint: true },
+  async (args) => textResult(await callGatewayRpc('brain.op', { op: 'activity', args }))
+)
+
+const RECORD_OPS = {
+  profile: { get: 'profile.get', set: 'profile.set' },
+  brand: { list: 'brand.list', get: 'brand.get', set: 'brand.upsert' },
+  account: { list: 'account.list', set: 'account.update' },
+  task: { list: 'task.list', set: 'task.upsert' },
+  contact: { list: 'contact.list', set: 'contact.upsert' },
+  idea: { list: 'idea.list', set: 'idea.add', status: 'idea.status' },
+}
+
+server.tool(
+  'brain_record',
+  'Read or save the user\'s structured memory. type=profile (facts about the user: set {field, value}); brand (set {name, fields:{niche, audience, voice, offer, goal, links, visualRules}}); account (set {platform, account, fields:{brand, purpose, dailyLimit, rules, warmupStage}}); task (calendar/to-do: set {title, dueAt, platform, account, state: open|waiting|done, waitingOn}); contact (set {platform, name, stage, nextStep}); idea (set {text, source, score, brandId}). action=history {subject:"profile"|"brand:<id>"|"account:<platform>:<slot>", field} shows how a value changed. Save what the user TELLS you as status "accepted" (default); save what you only infer with status "proposed" so the user confirms it in FlowDesk.',
+  {
+    type: z.enum(['profile', 'brand', 'account', 'task', 'contact', 'idea']),
+    action: z.enum(['get', 'list', 'set', 'status', 'history']),
+    data: z.record(z.string(), z.unknown()).optional().describe('Arguments for the action, as described above (filters for list).'),
+  },
+  async ({ type, action, data }) => {
+    if (action === 'history') return textResult(await callGatewayRpc('brain.op', { op: 'history', args: data ?? {} }))
+    const op = RECORD_OPS[type]?.[action]
+    if (!op) return textResult({ ok: false, error: `brain_record: ${type} has no action "${action}" (has: ${Object.keys(RECORD_OPS[type]).join(', ')})` })
+    return textResult(await callGatewayRpc('brain.op', { op, args: data ?? {} }))
+  }
+)
+
+server.tool(
+  'brain_content',
+  'A piece of content\'s life path: idea → prompt → image/video → approvals → where it was posted → numbers. create {kind: pin|video|product|post, title, brandId, stage, ideaSource, data:{prompt, files}} returns an id; pass that id as contentId to generation, upload and posting tools and FlowDesk links them automatically. get {id} shows the whole path; list {brandId, stage}; update {id, stage, title, data}; link {contentId, type: prompt|asset|placement|note|approval|edit, platform, account, externalId, url, detail} for steps done outside FlowDesk.',
+  {
+    action: z.enum(['create', 'get', 'list', 'update', 'link']),
+    data: z.record(z.string(), z.unknown()).optional(),
+  },
+  async ({ action, data }) => textResult(await callGatewayRpc('brain.op', { op: `content.${action}`, args: data ?? {} }))
+)
+
+server.tool(
+  'brain_learning',
+  'Learnings: what works for a brand or platform, with evidence. propose {statement, scope (brand id or platform), evidence:[content ids, numbers], confidence 0-1} — the user accepts it in FlowDesk before it counts. list {status: proposed|accepted, scope}. Accepted learnings appear in every briefing.',
+  {
+    action: z.enum(['propose', 'list']),
+    data: z.record(z.string(), z.unknown()).optional(),
+  },
+  async ({ action, data }) => textResult(await callGatewayRpc('brain.op', { op: action === 'propose' ? 'learning.propose' : 'learning.list', args: data ?? {} }))
+)
+
+server.tool(
+  'jobs',
+  'Background jobs ("run in background"): long research or numbers that FlowDesk collects while you do other work. recipes → what can run; start {recipe, params} → job id at once; status {id}; result {id, page, pageSize} (paged); list {status}; cancel {id}. Finished jobs land in the inbox; ones that need thinking come with instructions.',
+  {
+    action: z.enum(['recipes', 'start', 'status', 'result', 'list', 'cancel']),
+    recipe: z.string().optional().describe('For start: e.g. tiktok.radar, pinterest.trends, pinfactory.nicheScan, reddit.search, metrics.tiktok, metrics.pinterest, metrics.gumroad, whatsapp.digest, brief.daily, brief.weekly.'),
+    params: z.record(z.string(), z.unknown()).optional(),
+    id: z.string().optional(),
+    page: z.number().int().min(1).optional(),
+    pageSize: z.number().int().min(1).max(100).optional(),
+    status: z.string().optional(),
+  },
+  async ({ action, ...a }) => {
+    const method = { recipes: 'jobs.recipes', start: 'jobs.start', status: 'jobs.status', result: 'jobs.result', list: 'jobs.list', cancel: 'jobs.cancel' }[action]
+    return textResult(await callGatewayRpc(method, a))
+  }
+)
+
+server.tool(
+  'jobs_monitor',
+  'Repeat a background job on a schedule (e.g. metrics.pinterest every 24h). list; create {recipe, params, everyMinutes ≥ 15}; pause/resume/delete {id}. Only create one when the user asked for it.',
+  {
+    action: z.enum(['list', 'create', 'pause', 'resume', 'delete']),
+    recipe: z.string().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
+    everyMinutes: z.number().int().min(15).optional(),
+    id: z.string().optional(),
+  },
+  async (args) => textResult(await callGatewayRpc('jobs.monitor', args))
+)
+
+server.tool(
+  'inbox',
+  'Results waiting for an agent: finished background jobs, failed jobs, and work packets that need thinking (weekly review, chat digests, picking radar winners). list {status: new|open, needsAgent}; take {id} (claims it for this session; read the job with jobs result); done {id, note} when finished.',
+  {
+    action: z.enum(['list', 'take', 'done']),
+    id: z.string().optional(),
+    status: z.enum(['new', 'taken', 'done', 'open']).optional(),
+    needsAgent: z.boolean().optional(),
+    note: z.string().optional(),
+  },
+  async ({ action, ...a }) => textResult(await callGatewayRpc('brain.op', { op: `inbox.${action}`, args: a }))
+)
+
+server.tool(
+  'brain_forget',
+  'Retire a memory that is wrong (it stays in history but is no longer used). Only after the user agrees it is wrong.',
+  { id: z.string().min(1).describe('Memory id from brain_list_memories.') },
+  async (args) => textResult(await callGatewayRpc('brain.forget', args))
+)
+
+server.prompt(
+  'flowdesk-start',
+  'Start a FlowDesk work session: load the rules, hot cache and briefing.',
+  { platform: z.string().optional().describe('Platform you will work on.') },
+  ({ platform }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Call the FlowDesk tool brain_start${platform ? ` with platform "${platform}"` : ''}, read the rules, hot cache and briefing, then tell me in Roman Urdu where we left off and what is waiting for me.` } }] })
+)
+
+server.prompt(
+  'flowdesk-wrap',
+  'End a FlowDesk work session: write the handoff.',
+  () => ({ messages: [{ role: 'user', content: { type: 'text', text: 'Call the FlowDesk tool brain_wrap with a short summary of this session, the decisions I made, and exactly what to do first next time.' } }] })
+)
+
+for (const name of ['hot', 'AGENTS', 'index', 'log']) {
+  server.resource(
+    `flowdesk-${name.toLowerCase()}`,
+    `flowdesk://brain/${name}.md`,
+    { mimeType: 'text/markdown', description: `FlowDesk Brain ${name}.md` },
+    async (uri) => {
+      const r = await callGatewayRpc('brain.op', { op: 'files.get', args: { name } })
+      return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: r.text }] }
+    }
+  )
+}
 
 server.tool(
   'brain_remember',
