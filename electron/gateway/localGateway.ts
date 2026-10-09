@@ -711,6 +711,19 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     return { ok: true, id: r.id }
   },
   'reports.list': async () => ({ ok: true, reports: await listReports(app.getPath('userData')) }),
+  // Dev only: a PNG of FlowDesk's own window (after optional UI script), for checking
+  // the app's screens without touching the user's desktop. Never in the installed app.
+  'dev.capture': async (p) => {
+    if (app.isPackaged) throw new Error('dev.capture is only available in development')
+    const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && /^(http:\/\/localhost:\d+|file:)/.test(w.webContents.getURL()) && !w.webContents.getURL().includes('hud'))
+    if (!win) throw new Error('FlowDesk window not found')
+    if (typeof p.script === 'string' && p.script) await win.webContents.executeJavaScript(p.script)
+    await new Promise(r => setTimeout(r, typeof p.waitMs === 'number' ? Math.min(p.waitMs, 15_000) : 1500))
+    const image = await win.webContents.capturePage(undefined, { stayHidden: true })
+    const file = join(app.getPath('temp'), `flowdesk-capture-${Date.now()}.png`)
+    await writeFile(file, image.toPNG())
+    return { ok: true, file, size: image.getSize() }
+  },
   // Searches the JS the view `tab` has loaded for request identifiers (bundleScan.ts).
   'dev.bundleScan': async (p) => {
     const tab = String(p.tab || '')

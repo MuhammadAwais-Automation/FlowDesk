@@ -110,7 +110,9 @@ const SEED_BRANDS: Array<{ id: string; name: string; niche: string; match: RegEx
 ]
 const PROFILE_FROM: Record<string, string> = {
   'wiki/me/profile.md': 'about', 'wiki/me/positioning.md': 'positioning', 'wiki/me/skills.md': 'skills',
-  'wiki/me/tools.md': 'tools', 'wiki/me/infrastructure.md': 'infrastructure',
+  'wiki/me/tools.md': 'tools',
+  // wiki/me/infrastructure.md is left out on purpose: server names and addresses
+  // do not belong in a briefing every connected agent reads.
 }
 
 export class OperatorService {

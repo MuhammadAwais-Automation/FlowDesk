@@ -290,7 +290,8 @@ export function BrandsPanel() {
         {!byPlatform.length ? <Empty>Accounts FlowDesk chalne ke kuch der baad yahan aa jayenge.</Empty> : byPlatform.map(([platform, list]) => (
           <div key={platform} className="mb-3">
             <div className="mb-1 text-[11px] font-semibold capitalize" style={{ color: 'var(--text-2)' }}>{platform}</div>
-            <table className="w-full text-[12px]">
+            <table className="w-full table-fixed text-[12px]">
+              <colgroup><col className="w-[34%]" /><col className="w-[24%]" /><col className="w-[18%]" /><col /></colgroup>
               <tbody>
                 {list.map(a => {
                   const key = `${a.platform}:${a.slotId}`
