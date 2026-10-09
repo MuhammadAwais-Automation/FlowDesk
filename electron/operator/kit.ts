@@ -11,7 +11,8 @@ import type { McpServerEntry } from '../mcpConfig'
 
 export const KIT_README = `# FlowDesk operator folder
 
-Is folder mein Claude kholo aur kaam karwao (pins, posts, research). Yahan Claude:
+Is folder mein Claude kholo aur kaam karwao (pins, posts, research). Pehli baar Claude
+"trust this folder?" aur "flowdesk MCP server?" poochega, dono ko Yes karo. Yahan Claude:
 - sirf FlowDesk ke tools chala sakta hai (FlowDesk app chalu honi chahiye);
 - koi file badal nahi sakta, terminal command nahi chala sakta;
 - har session \`brain_start\` se shuru aur \`brain_wrap\` par khatam karta hai.
@@ -34,7 +35,7 @@ export function kitFiles(input: { agentsMd: string; claudeMd: string; mcpEntry: 
       enabledMcpjsonServers: ['flowdesk'],
       permissions: {
         allow: ['mcp__flowdesk'],
-        deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell'],
+        deny: ['Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell'],
       },
     }, null, 2)}\n`,
   }
