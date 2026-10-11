@@ -228,7 +228,7 @@ export class OperatorStore {
     return (this.db.prepare('SELECT * FROM op_sessions ORDER BY started_at DESC LIMIT ?').all(limit) as Row[]).map(mapSession)
   }
 
-  recordEvent(input: { sessionId?: string | null; client?: string; platform: string; account?: string | null; tool: string; kind: OpEvent['kind']; outcome: OpEvent['outcome']; targetId?: string | null; targetUrl?: string | null; contentId?: string | null; error?: string | null; summary?: string | null }): OpEvent | null {
+  recordEvent(input: { sessionId?: string | null; client?: string; platform: string; account?: string | null; tool: string; kind: OpEvent['kind']; outcome: OpEvent['outcome']; targetId?: string | null; targetUrl?: string | null; contentId?: string | null; error?: string | null; summary?: string | null; assets?: string[] }): OpEvent | null {
     const at = this.now()
     if (input.sessionId) {
       this.touchSession(input.sessionId, input.client ?? 'unknown')
@@ -248,6 +248,11 @@ export class OperatorStore {
       input.outcome, input.targetId ?? null, input.targetUrl ?? null, input.contentId ?? null, input.error ?? null, input.summary ?? null)
     if (input.kind === 'write' && input.outcome === 'ok' && input.account) {
       this.db.prepare('UPDATE op_accounts SET last_action_at = ? WHERE platform = ? AND (slot_id = ? OR label = ?)').run(at, input.platform, input.account, input.account)
+    }
+    // A generation tool's files are the item's assets: the idea is now made.
+    if (input.contentId && input.kind === 'write' && input.outcome === 'ok' && input.assets?.length) {
+      for (const url of input.assets) this.linkContent({ contentId: input.contentId, type: 'asset', platform: input.platform, url, detail: input.tool })
+      this.db.prepare("UPDATE op_content SET stage = 'made' WHERE id = ? AND stage = 'idea'").run(input.contentId)
     }
     if (input.contentId && input.kind === 'write' && input.outcome === 'ok' && (input.targetId || input.targetUrl)) {
       this.linkContent({ contentId: input.contentId, type: 'placement', platform: input.platform, account: input.account ?? null, externalId: input.targetId ?? null, url: input.targetUrl ?? null, detail: input.tool })

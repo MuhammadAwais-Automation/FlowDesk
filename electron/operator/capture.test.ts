@@ -10,13 +10,19 @@ describe('ledger capture', () => {
   })
 
   it('describes a write with its target and content, keeping argument names only', () => {
-    const row = describeCall(ctx, 'pinterest.createPin', { account: 'Account 1', title: 'Secret title', boardId: 'b' }, { result: { ok: true, pin: { id: '987', url: 'https://www.pinterest.com/pin/987/' } } })
+    // The live result shape: the pin carries its board id next to its own id.
+    const row = describeCall(ctx, 'pinterest.createPin', { account: 'Account 1', title: 'Secret title', boardId: 'b' }, { result: { ok: true, account: '1', pin: { id: '987', url: 'https://www.pinterest.com/pin/987/', boardId: 'b' } } })
     expect(row).toEqual({
       sessionId: 's1', client: 'claude-code', platform: 'pinterest', account: 'Account 1', tool: 'pinterest.createPin',
       kind: 'write', outcome: 'ok', targetId: '987', targetUrl: 'https://www.pinterest.com/pin/987/', contentId: 'c-1', error: null,
-      summary: 'account, title, boardId',
+      summary: 'account, title, boardId', assets: [],
     })
     expect(JSON.stringify(row)).not.toContain('Secret title')
+  })
+
+  it('collects generated images as assets, not as a placement', () => {
+    const row = describeCall(ctx, 'chatgpt.generateImage', { prompt: 'p' }, { result: { ok: true, images: [{ url: 'flowdesk-image://a.png', path: 'C:\\x\\a.png' }, { path: 'C:\\x\\b.png' }] } })
+    expect(row).toMatchObject({ kind: 'write', targetUrl: null, assets: ['flowdesk-image://a.png', 'C:\\x\\b.png'] })
   })
 
   it('treats { ok: false } and thrown errors as failures and masks them', () => {

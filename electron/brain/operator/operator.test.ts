@@ -82,14 +82,16 @@ describe('operator brain', () => {
 
   it('threads a content item from creation to placement to numbers', () => {
     const { op } = make()
-    const c = op('content.create', { kind: 'pin', title: 'Mandala coloring page', brandId: 'coloring', stage: 'made' })
+    const c = op('content.create', { kind: 'pin', title: 'Mandala coloring page', brandId: 'coloring', stage: 'idea' })
     op('content.link', { contentId: c.id, type: 'prompt', detail: 'mandala, thick lines' })
+    op('ledger.record', { sessionId: 's', platform: 'chatgpt', tool: 'chatgpt.generateImage', kind: 'write', outcome: 'ok', contentId: c.id, assets: ['flowdesk-image://m.png'] })
+    expect(op('content.get', { id: c.id }).content.stage).toBe('made')
     op('ledger.record', { sessionId: 's', platform: 'pinterest', account: 'Account 1', tool: 'pinterest.createPin', kind: 'write', outcome: 'ok', targetId: '987', targetUrl: 'https://pinterest.com/pin/987', contentId: c.id })
     expect(op('content.get', { id: c.id }).content.stage).toBe('live')
     op('metric.record', { platform: 'pinterest', externalId: '987', metrics: { saves: 12, impressions: 400 } })
     const got = op('content.get', { id: c.id })
     expect(got.content.stage).toBe('measured')
-    expect(got.links.map((l: any) => l.type)).toEqual(['prompt', 'placement'])
+    expect(got.links.map((l: any) => [l.type, l.url])).toEqual([['prompt', null], ['asset', 'flowdesk-image://m.png'], ['placement', 'https://pinterest.com/pin/987']])
     expect(got.metrics[0].metrics).toEqual({ saves: 12, impressions: 400 })
   })
 

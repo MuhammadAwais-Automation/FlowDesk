@@ -25,7 +25,7 @@ const schemas = {
   'session.wrap': z.object({ sessionId: s.min(1), client: s.optional(), summary: s.min(1).max(4000), decisions: z.array(s.max(500)).max(30).optional(), next: s.max(1000).optional(), focus: s.max(500).optional() }),
   'session.end': z.object({ sessionId: s.min(1), reason: z.enum(['exit', 'idle']).default('exit') }),
   'sessions.list': z.object({ limit: z.number().int().min(1).max(200).optional() }),
-  'ledger.record': z.object({ sessionId: opt(s), client: s.optional(), platform: s.min(1), account: opt(s), tool: s.min(1), kind: z.enum(['write', 'read', 'system']), outcome: z.enum(['ok', 'error']), targetId: opt(s.max(300)), targetUrl: opt(s.max(1000)), contentId: opt(s), error: opt(s.max(2000)), summary: opt(s.max(500)) }),
+  'ledger.record': z.object({ sessionId: opt(s), client: s.optional(), platform: s.min(1), account: opt(s), tool: s.min(1), kind: z.enum(['write', 'read', 'system']), outcome: z.enum(['ok', 'error']), targetId: opt(s.max(300)), targetUrl: opt(s.max(1000)), contentId: opt(s), error: opt(s.max(2000)), summary: opt(s.max(500)), assets: z.array(s.max(1000)).max(20).optional() }),
   activity: z.object({ platform: s.optional(), account: s.optional(), brandId: s.optional(), since: isoish.optional(), until: isoish.optional(), sessionId: s.optional(), contentId: s.optional(), limit: z.number().int().min(1).max(2000).optional() }),
   briefing: z.object({ platform: s.optional(), brandId: s.optional(), account: s.optional() }),
   'files.get': z.object({ name: z.enum(['AGENTS', 'CLAUDE', 'hot', 'index', 'log']) }),

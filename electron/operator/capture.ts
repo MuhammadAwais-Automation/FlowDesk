@@ -36,7 +36,8 @@ export function contextFromHeaders(headers: Record<string, string | string[] | u
   }
 }
 
-const ID_KEYS = ['pinId', 'postId', 'videoId', 'productId', 'commentId', 'messageId', 'boardId', 'mediaId', 'itemId', 'projectId', 'aweme_id', 'id']
+// boardId comes after id: a created pin returns { id, boardId } and the pin is the target.
+const ID_KEYS = ['pinId', 'postId', 'videoId', 'productId', 'commentId', 'messageId', 'mediaId', 'itemId', 'projectId', 'aweme_id', 'id', 'boardId']
 const URL_KEYS = ['url', 'permalink', 'postUrl', 'pinUrl', 'videoUrl', 'productUrl', 'shareUrl', 'link']
 
 function pick(obj: unknown, keys: string[], ok: (v: unknown) => boolean): string | null {
@@ -58,6 +59,18 @@ function pick(obj: unknown, keys: string[], ok: (v: unknown) => boolean): string
 const isId = (v: unknown) => (typeof v === 'string' && v.length > 0 && v.length < 200) || (typeof v === 'number' && Number.isFinite(v))
 const isUrl = (v: unknown) => typeof v === 'string' && /^https?:\/\//.test(v)
 
+/** Files a generation tool made (ChatGPT images, Flow media): the content item's assets. */
+function assetsOf(result: unknown): string[] {
+  if (!result || typeof result !== 'object') return []
+  const r = result as Record<string, unknown>
+  const list = [r.images, r.media].find(Array.isArray) as unknown[] | undefined
+  return (list ?? []).flatMap(x => {
+    const o = x && typeof x === 'object' ? x as Record<string, unknown> : {}
+    const v = typeof o.url === 'string' && o.url ? o.url : typeof o.path === 'string' ? o.path : ''
+    return v ? [v.slice(0, 1000)] : []
+  }).slice(0, 20)
+}
+
 /** A result that says it failed without throwing (`{ ok: false }`, MCP `isError`). */
 export function resultFailed(result: unknown): string | null {
   if (!result || typeof result !== 'object') return null
@@ -72,7 +85,7 @@ export function resultFailed(result: unknown): string | null {
 export interface LedgerArgs {
   sessionId: string | null; client?: string; platform: string; account: string | null; tool: string
   kind: 'write' | 'read'; outcome: 'ok' | 'error'; targetId: string | null; targetUrl: string | null
-  contentId: string | null; error: string | null; summary: string | null
+  contentId: string | null; error: string | null; summary: string | null; assets: string[]
 }
 
 /** The ledger row for one finished call, or null when it is not recorded. */
@@ -98,6 +111,7 @@ export function describeCall(ctx: CallContext | undefined, method: string, param
     error: failed ? redact(failed).slice(0, 500) : null,
     // Argument names only: values are post text, chat names, file paths.
     summary: Object.keys(args).filter(k => k !== 'contentId').slice(0, 20).join(', ') || null,
+    assets: write && !failed ? assetsOf(outcome.result) : [],
   }
 }
 
