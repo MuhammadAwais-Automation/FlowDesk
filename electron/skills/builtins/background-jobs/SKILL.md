@@ -38,7 +38,7 @@ Start it, keep working on something else, and read the result when it lands in t
 3. Finished → `inbox { action: "list" }` shows it. Items with `needsAgent` carry instructions.
 4. `inbox { action: "take", id }`, then `jobs { action: "result", id: <jobId>, page }` (paged).
 5. Do the thinking the packet asks for and write results back (`brain_record` ideas, contacts,
-   tasks; `brain_learning` proposals). Then `inbox { action: "done", id, note }`.
+   tasks; `brain_learning` records). Then `inbox { action: "done", id, note }`.
 
 ## Schedules
 `jobs_monitor { action: "create", recipe, params, everyMinutes }` repeats a recipe (minimum 15

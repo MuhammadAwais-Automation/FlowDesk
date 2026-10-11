@@ -7,25 +7,22 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 vi.mock('@/pages/Brain', () => ({ default: () => <div>atlas library</div> }))
 
 const calls: Array<[string, unknown]> = []
-let brands = [{ id: 'alpha-paws', name: 'Alpha Paws', status: 'proposed', fields: {}, createdAt: '2026-10-09T00:00:00.000Z' }]
+const brands = [{ id: 'alpha-paws', name: 'Alpha Paws', status: 'active', fields: { niche: 'cat videos' }, createdAt: '2026-10-09T00:00:00.000Z' }]
 
 const answers: Record<string, () => unknown> = {
-  overview: () => ({ brands: 1, accounts: 1, content: 0, inboxNew: 1, jobsActive: 0, learningsProposed: 0, factsProposed: 2, tasksWaiting: 0 }),
+  overview: () => ({ brands: 1, accounts: 1, content: 0, inboxNew: 1, jobsActive: 0, learnings: 2, tasksWaiting: 0 }),
   'files.get': () => ({ text: '# Hot Cache\n\n## Now\n- nothing scheduled' }),
   'inbox.list': () => [{ id: 'in-1', at: '2026-10-09T10:00:00.000Z', kind: 'job_result', title: 'Weekly review', body: '12 actions', refId: 'job-1', needsAgent: true, status: 'new', takenBy: null, packet: null, updatedAt: '' }],
   'task.list': () => [],
   'brand.list': () => brands,
-  'account.list': () => [{ platform: 'tiktok', slotId: 'social-tiktok', label: 'Account 1', lastActionAt: null, fields: {} }],
-  'brand.decide': () => { brands = brands.map(b => ({ ...b, status: 'active' })); return brands[0] },
+  'account.list': () => [{ platform: 'tiktok', slotId: 'social-tiktok', label: 'Account 1', lastActionAt: null, fields: { brand: 'alpha-paws', purpose: 'main' } }],
   'learning.list': () => [],
-  'profile.get': () => ({ fields: {}, proposed: [] }),
-  'facts.proposed': () => [],
+  'profile.get': () => ({ fields: {} }),
   'agents.set': () => ({ ok: true }),
 }
 
 beforeEach(() => {
   calls.length = 0
-  brands = [{ id: 'alpha-paws', name: 'Alpha Paws', status: 'proposed', fields: {}, createdAt: '2026-10-09T00:00:00.000Z' }]
   ;(window as unknown as { electronAPI: unknown }).electronAPI = {
     brainOperator: vi.fn(async (op: string, args: unknown) => { calls.push([op, args]); return answers[op]?.() ?? [] }),
     brainJobs: vi.fn(async () => []),
@@ -40,23 +37,24 @@ let BrainHub: ComponentType
 beforeAll(async () => { BrainHub = (await import('./BrainHub')).default }, 60_000)
 
 describe('Brain hub', () => {
-  it('opens on Home with the hot cache, inbox and what waits for the user', async () => {
+  it('opens on Home with the hot cache and inbox, with nothing for the user to approve', async () => {
     render(<BrainHub />)
     expect(await screen.findByText('Weekly review')).toBeTruthy()
     expect(screen.getByText('Claude ka kaam')).toBeTruthy()
     expect(await screen.findByText('Hot Cache')).toBeTruthy()
-    expect(screen.getByText('Aap ki haan ka intezar').previousSibling?.textContent).toBe('2')
-    fireEvent.click(screen.getByLabelText('Ho gaya'))
-    await waitFor(() => expect(calls).toContainEqual(['inbox.done', { id: 'in-1' }]))
+    expect(screen.getByText('Seekh (learnings)').previousSibling?.textContent).toBe('2')
+    expect(screen.queryByLabelText('Ho gaya')).toBeNull()
   })
 
-  it('lets the user accept a proposed brand', async () => {
+  it('shows brands and account tags the agents saved, without edit controls', async () => {
     render(<BrainHub />)
     fireEvent.click(screen.getByRole('tab', { name: /Brands/ }))
-    expect(await screen.findByText('aap ki haan chahiye')).toBeTruthy()
-    fireEvent.click(screen.getByText('Haan'))
-    await waitFor(() => expect(calls).toContainEqual(['brand.decide', { id: 'alpha-paws', decision: 'accept' }]))
-    await waitFor(() => expect(screen.queryByText('aap ki haan chahiye')).toBeNull())
+    expect(await screen.findByText('cat videos')).toBeTruthy()
+    expect(await screen.findByText('main')).toBeTruthy()
+    expect(screen.queryByText('Haan')).toBeNull()
+    expect(screen.queryByText('Edit')).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(calls.map(c => c[0])).not.toContain('brand.upsert')
   })
 
   it('saves AGENTS.md from the Rules tab and keeps the Library tab', async () => {

@@ -2908,7 +2908,7 @@ server.tool(
 )
 
 const RECORD_OPS = {
-  profile: { get: 'profile.get', set: 'profile.set' },
+  profile: { get: 'profile.get', set: 'profile.set', clear: 'profile.clear' },
   brand: { list: 'brand.list', get: 'brand.get', set: 'brand.upsert' },
   account: { list: 'account.list', set: 'account.update' },
   task: { list: 'task.list', set: 'task.upsert' },
@@ -2918,10 +2918,10 @@ const RECORD_OPS = {
 
 server.tool(
   'brain_record',
-  'Read or save the user\'s structured memory. type=profile (facts about the user: set {field, value}); brand (set {name, fields:{niche, audience, voice, offer, goal, links, visualRules}}); account (set {platform, account, fields:{brand, purpose, dailyLimit, rules, warmupStage}}); task (calendar/to-do: set {title, dueAt, platform, account, state: open|waiting|done, waitingOn}); contact (set {platform, name, stage, nextStep}); idea (set {text, source, score, brandId}). action=history {subject:"profile"|"brand:<id>"|"account:<platform>:<slot>", field} shows how a value changed. Save what the user TELLS you as status "accepted" (default); save what you only infer with status "proposed" so the user confirms it in FlowDesk.',
+  'Read or save the user\'s structured memory. type=profile (facts about the user: set {field, value}); brand (set {name, fields:{niche, audience, voice, offer, goal, links, visualRules}}); account (set {platform, account, fields:{brand, purpose, dailyLimit, rules, warmupStage}}); task (calendar/to-do: set {title, dueAt, platform, account, state: open|waiting|done, waitingOn}); contact (set {platform, name, stage, nextStep}); idea (set {text, source, score, brandId}). action=history {subject:"profile"|"brand:<id>"|"account:<platform>:<slot>", field} shows how a value changed; profile action=clear {field} ends a wrong value. You keep this memory: whatever you save is current at once (nobody approves it in FlowDesk), so save what you learn as soon as you know it, and correct a wrong value by saving the right one. Archive a brand with set {name, status:"archived"}.',
   {
     type: z.enum(['profile', 'brand', 'account', 'task', 'contact', 'idea']),
-    action: z.enum(['get', 'list', 'set', 'status', 'history']),
+    action: z.enum(['get', 'list', 'set', 'status', 'history', 'clear']),
     data: z.record(z.string(), z.unknown()).optional().describe('Arguments for the action, as described above (filters for list).'),
   },
   async ({ type, action, data }) => {
@@ -2944,12 +2944,12 @@ server.tool(
 
 server.tool(
   'brain_learning',
-  'Learnings: what works for a brand or platform, with evidence. propose {statement, scope (brand id or platform), evidence:[content ids, numbers], confidence 0-1} — the user accepts it in FlowDesk before it counts. list {status: proposed|accepted, scope}. Accepted learnings appear in every briefing.',
+  'Learnings: what works for a brand or platform, with evidence. record {statement, scope (brand id or platform), evidence:[content ids, numbers], confidence 0-1} saves one; it counts at once and appears in every briefing. update {id, statement?, confidence?, status: active|retired} rewrites one or retires it when newer numbers say it stopped being true. list {status: active|retired, scope}. You keep these; nobody approves them in FlowDesk.',
   {
-    action: z.enum(['propose', 'list']),
+    action: z.enum(['record', 'update', 'list']),
     data: z.record(z.string(), z.unknown()).optional(),
   },
-  async ({ action, data }) => textResult(await callGatewayRpc('brain.op', { op: action === 'propose' ? 'learning.propose' : 'learning.list', args: data ?? {} }))
+  async ({ action, data }) => textResult(await callGatewayRpc('brain.op', { op: `learning.${action}`, args: data ?? {} }))
 )
 
 server.tool(

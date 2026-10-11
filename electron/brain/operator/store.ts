@@ -12,9 +12,11 @@ import type { DatabaseSync } from 'node:sqlite'
 
 type Row = Record<string, unknown>
 
-export type FactStatus = 'accepted' | 'proposed' | 'rejected'
+// Brain has no review queue: what an agent saves is current at once, and the
+// agent corrects it by saving again (older values stay in the history).
+export type FactStatus = 'accepted' | 'rejected'
 export interface Fact { id: string; subject: string; field: string; value: unknown; status: FactStatus; source: string; validFrom: string; validTo: string | null; recordedAt: string }
-export interface Brand { id: string; name: string; status: 'active' | 'proposed' | 'archived'; fields: Record<string, unknown>; createdAt: string }
+export interface Brand { id: string; name: string; status: 'active' | 'archived'; fields: Record<string, unknown>; createdAt: string }
 export interface Account { platform: string; slotId: string; label: string; lastActionAt: string | null; fields: Record<string, unknown> }
 export interface Session { id: string; client: string; startedAt: string; lastSeenAt: string; endedAt: string | null; endReason: string | null; reads: Record<string, number>; writes: number; errors: number; handoff: Handoff | null }
 export interface Handoff { summary: string; decisions?: string[]; next?: string; focus?: string }
@@ -23,7 +25,7 @@ export interface ContentItem { id: string; brandId: string | null; kind: string;
 export type ContentStage = 'idea' | 'made' | 'approved' | 'scheduled' | 'live' | 'measured' | 'dropped'
 export interface ContentLink { id: string; contentId: string; at: string; type: string; platform: string | null; account: string | null; externalId: string | null; url: string | null; detail: string | null }
 export interface Metric { id: string; at: string; platform: string; account: string | null; externalId: string; contentId: string | null; metrics: Record<string, number> }
-export interface Learning { id: string; statement: string; scope: string | null; evidence: unknown[]; confidence: number; status: 'proposed' | 'accepted' | 'rejected' | 'retired'; createdAt: string; decidedAt: string | null }
+export interface Learning { id: string; statement: string; scope: string | null; evidence: unknown[]; confidence: number; status: 'active' | 'retired'; createdAt: string; decidedAt: string | null }
 export interface Task { id: string; title: string; brandId: string | null; platform: string | null; account: string | null; dueAt: string | null; state: 'open' | 'waiting' | 'done' | 'cancelled'; waitingOn: string | null; source: string; externalId: string | null; contentId: string | null; notes: string | null; createdAt: string; updatedAt: string }
 export interface Contact { id: string; platform: string; name: string; stage: string; lastContactAt: string | null; nextStep: string | null; notes: string | null; updatedAt: string }
 export interface Idea { id: string; text: string; source: string | null; score: number | null; brandId: string | null; status: 'new' | 'used' | 'dropped'; createdAt: string }
@@ -72,6 +74,20 @@ export const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^
 export class OperatorStore {
   constructor(private readonly db: DatabaseSync, private readonly clock: () => Date = () => new Date()) {
     db.exec(SCHEMA)
+    this.dropReviewQueue()
+  }
+
+  /** Data from the old propose → accept flow becomes current; rejected learnings are retired. */
+  private dropReviewQueue(): void {
+    this.db.exec("UPDATE op_brands SET status = 'active' WHERE status = 'proposed'")
+    this.db.exec("UPDATE op_learnings SET status = 'active' WHERE status IN ('proposed', 'accepted')")
+    this.db.exec("UPDATE op_learnings SET status = 'retired' WHERE status = 'rejected'")
+    const pending = this.db.prepare("SELECT * FROM op_facts WHERE status = 'proposed' ORDER BY recorded_at").all() as Row[]
+    for (const row of pending) {
+      const fact = mapFact(row)
+      this.db.prepare('DELETE FROM op_facts WHERE id = ?').run(fact.id)
+      this.setFact({ subject: fact.subject, field: fact.field, value: fact.value, source: fact.source })
+    }
   }
 
   now(): string { return this.clock().toISOString() }
@@ -88,25 +104,26 @@ export class OperatorStore {
 
   // ── dated facts ─────────────────────────────────────────────────────────
   /**
-   * Sets subject.field. An accepted value closes the current accepted row; a
-   * proposed value waits for a decision and changes nothing until accepted.
-   * Setting the same value again is a no-op.
+   * Sets subject.field: the new value closes the current row, which stays in
+   * the history. Setting the same value again is a no-op.
    */
-  setFact(input: { subject: string; field: string; value: unknown; status?: FactStatus; source?: string }): Fact {
+  setFact(input: { subject: string; field: string; value: unknown; source?: string }): Fact {
     const at = this.now()
-    const status = input.status ?? 'accepted'
     const current = this.currentFact(input.subject, input.field)
-    if (status === 'accepted' && current && json(current.value) === json(input.value)) return current
-    if (status === 'proposed') {
-      const pending = this.db.prepare("SELECT * FROM op_facts WHERE subject = ? AND field = ? AND status = 'proposed' AND value_json = ?")
-        .get(input.subject, input.field, json(input.value)) as Row | undefined
-      if (pending) return mapFact(pending)
-    }
-    if (status === 'accepted' && current) this.db.prepare('UPDATE op_facts SET valid_to = ? WHERE id = ?').run(at, current.id)
+    if (current && json(current.value) === json(input.value)) return current
+    if (current) this.db.prepare('UPDATE op_facts SET valid_to = ? WHERE id = ?').run(at, current.id)
     const id = randomUUID()
-    this.db.prepare('INSERT INTO op_facts(id, subject, field, value_json, status, source, valid_from, valid_to, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)')
-      .run(id, input.subject, input.field, json(input.value), status, input.source ?? 'agent', at, at)
+    this.db.prepare("INSERT INTO op_facts(id, subject, field, value_json, status, source, valid_from, valid_to, recorded_at) VALUES (?, ?, ?, ?, 'accepted', ?, ?, NULL, ?)")
+      .run(id, input.subject, input.field, json(input.value), input.source ?? 'agent', at, at)
     return this.getFact(id)!
+  }
+
+  /** Ends subject.field without a new value (the agent found it wrong or stale). */
+  clearFact(subject: string, field: string): boolean {
+    const current = this.currentFact(subject, field)
+    if (!current) return false
+    this.db.prepare('UPDATE op_facts SET valid_to = ? WHERE id = ?').run(this.now(), current.id)
+    return true
   }
 
   getFact(id: string): Fact | null {
@@ -133,23 +150,8 @@ export class OperatorStore {
     return rows.map(mapFact)
   }
 
-  proposedFacts(): Fact[] {
-    return (this.db.prepare("SELECT * FROM op_facts WHERE status = 'proposed' ORDER BY recorded_at").all() as Row[]).map(mapFact)
-  }
-
-  decideFact(id: string, decision: 'accept' | 'reject', editedValue?: unknown): Fact | null {
-    const fact = this.getFact(id)
-    if (!fact || fact.status !== 'proposed') return null
-    if (decision === 'reject') {
-      this.db.prepare("UPDATE op_facts SET status = 'rejected', valid_to = ? WHERE id = ?").run(this.now(), id)
-      return this.getFact(id)
-    }
-    this.db.prepare('DELETE FROM op_facts WHERE id = ?').run(id)
-    return this.setFact({ subject: fact.subject, field: fact.field, value: editedValue === undefined ? fact.value : editedValue, status: 'accepted', source: `${fact.source} (accepted)` })
-  }
-
   // ── brands ──────────────────────────────────────────────────────────────
-  upsertBrand(input: { id?: string; name: string; status?: Brand['status']; fields?: Record<string, unknown>; factStatus?: FactStatus; source?: string }): Brand {
+  upsertBrand(input: { id?: string; name: string; status?: Brand['status']; fields?: Record<string, unknown>; source?: string }): Brand {
     const id = input.id ? slug(input.id) : slug(input.name)
     const existing = this.db.prepare('SELECT * FROM op_brands WHERE id = ?').get(id) as Row | undefined
     if (!existing) {
@@ -158,7 +160,7 @@ export class OperatorStore {
       this.db.prepare('UPDATE op_brands SET name = ?, status = COALESCE(?, status) WHERE id = ?').run(input.name, input.status ?? null, id)
     }
     for (const [field, value] of Object.entries(input.fields ?? {})) {
-      this.setFact({ subject: `brand:${id}`, field, value, status: input.factStatus, source: input.source })
+      this.setFact({ subject: `brand:${id}`, field, value, source: input.source })
     }
     return this.getBrand(id)!
   }
@@ -396,9 +398,9 @@ export class OperatorStore {
   }
 
   // ── learnings ───────────────────────────────────────────────────────────
-  proposeLearning(input: { statement: string; scope?: string | null; evidence?: unknown[]; confidence?: number }): Learning {
+  recordLearning(input: { statement: string; scope?: string | null; evidence?: unknown[]; confidence?: number }): Learning {
     const id = randomUUID()
-    this.db.prepare("INSERT INTO op_learnings(id, statement, scope, evidence_json, confidence, status, created_at) VALUES (?, ?, ?, ?, ?, 'proposed', ?)")
+    this.db.prepare("INSERT INTO op_learnings(id, statement, scope, evidence_json, confidence, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?)")
       .run(id, input.statement, input.scope ?? null, json(input.evidence ?? []), Math.max(0, Math.min(1, input.confidence ?? 0.5)), this.now())
     return this.getLearning(id)!
   }
@@ -416,9 +418,10 @@ export class OperatorStore {
     return (this.db.prepare(`SELECT * FROM op_learnings ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY confidence DESC, created_at DESC`).all(...args) as Row[]).map(mapLearning)
   }
 
-  decideLearning(id: string, decision: 'accept' | 'reject' | 'retire', editedStatement?: string): Learning | null {
-    const status = decision === 'accept' ? 'accepted' : decision === 'reject' ? 'rejected' : 'retired'
-    const result = this.db.prepare('UPDATE op_learnings SET status = ?, statement = COALESCE(?, statement), decided_at = ? WHERE id = ?').run(status, editedStatement ?? null, this.now(), id)
+  /** The agent rewrites a learning, re-scores it, or retires one that stopped being true. */
+  updateLearning(id: string, input: { statement?: string; confidence?: number; status?: Learning['status'] }): Learning | null {
+    const result = this.db.prepare('UPDATE op_learnings SET statement = COALESCE(?, statement), confidence = COALESCE(?, confidence), status = COALESCE(?, status), decided_at = ? WHERE id = ?')
+      .run(input.statement ?? null, input.confidence === undefined ? null : Math.max(0, Math.min(1, input.confidence)), input.status ?? null, this.now(), id)
     return Number(result.changes) ? this.getLearning(id) : null
   }
 

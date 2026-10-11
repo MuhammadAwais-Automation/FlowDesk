@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Check, ChevronDown, ChevronRight, FolderOpen, Pause, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, FolderOpen, Pause, Play, RefreshCw, Trash2, X } from 'lucide-react'
 import { RetroMarkdown } from '@/components/chat/RetroMarkdown'
 import {
-  CONTENT_STAGES, type ContentStage, type OpAccount, type OpBrand, type OpContent, type OpContentDetail, type OpEvent, type OpFact,
+  CONTENT_STAGES, type OpAccount, type OpBrand, type OpContent, type OpContentDetail, type OpEvent,
   type OpInboxItem, type OpJob, type OpJobResult, type OpLearning, type OpLogEntry, type OpMonitor, type OpOverview, type OpRecipe, type OpTask,
 } from '@/types/operator'
 
@@ -87,11 +87,11 @@ function fieldText(v: unknown): string {
 
 function Fields({ fields, labelWidth = 80 }: { fields: Record<string, unknown>; labelWidth?: number }) {
   return (
-    <dl className="grid gap-x-2 gap-y-1 text-[11px]" style={{ gridTemplateColumns: `${labelWidth}px 1fr` }}>
+    <dl className="grid gap-x-2 gap-y-1 text-[11px]" style={{ gridTemplateColumns: `${labelWidth}px minmax(0, 1fr)` }}>
       {Object.entries(fields).map(([k, v]) => (
         <Fragment key={k}>
           <dt style={{ color: 'var(--text-3)' }}>{k}</dt>
-          <dd className="whitespace-pre-wrap" style={{ color: 'var(--text-2)' }}>{fieldText(v)}</dd>
+          <dd className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]" style={{ color: 'var(--text-2)' }}>{fieldText(v)}</dd>
         </Fragment>
       ))}
     </dl>
@@ -108,12 +108,11 @@ export function HomePanel({ onGo }: { onGo: (tab: string) => void }) {
   const tasks = useOp<OpTask[]>('task.list', week)
   const reload = () => { overview.reload(); hot.reload(); inbox.reload(); tasks.reload() }
   const o = overview.data
-  const waiting = o ? o.factsProposed + o.learningsProposed + o.tasksWaiting : 0
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Inbox mein naya" value={o?.inboxNew} tone="info" onClick={() => onGo('jobs')} />
-        <Stat label="Aap ki haan ka intezar" value={waiting} tone={waiting ? 'warn' : 'plain'} onClick={() => onGo('rules')} />
+        <Stat label="Seekh (learnings)" value={o?.learnings} tone="plain" onClick={() => onGo('rules')} />
         <Stat label="Background jobs" value={o?.jobsActive} tone="plain" onClick={() => onGo('jobs')} />
         <Stat label="Content items" value={o?.content} tone="plain" onClick={() => onGo('content')} />
       </div>
@@ -138,7 +137,6 @@ export function HomePanel({ onGo }: { onGo: (tab: string) => void }) {
                         <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-2)' }}>{item.body}</p>
                         <p className="mt-0.5 text-[10px]" style={{ color: 'var(--text-3)' }}>{when(item.at)}</p>
                       </div>
-                      <Btn onClick={() => { void op('inbox.done', { id: item.id }).then(reload) }} title="Ho gaya"><Check size={12} /></Btn>
                     </div>
                   </li>
                 ))}
@@ -214,20 +212,14 @@ export function LogPanel() {
 
 // ── Brands & accounts ───────────────────────────────────────────────────────
 
-const BRAND_FIELDS = ['niche', 'audience', 'voice', 'offer', 'goal', 'visualRules', 'links', 'rules']
-const PURPOSES = ['main', 'test', 'warm-up', 'backup', 'other']
+// Read-only: agents keep brands and accounts through MCP (brain_record).
+const BRAND_ORDER = ['niche', 'audience', 'voice', 'offer', 'goal', 'visualRules', 'links', 'rules', 'about']
 
 export function BrandsPanel() {
   const brands = useOp<OpBrand[]>('brand.list', {})
   const accounts = useOp<OpAccount[]>('account.list', {})
-  const [editing, setEditing] = useState<string | null>(null)
-  const [draft, setDraft] = useState<Record<string, string>>({})
-  const [newName, setNewName] = useState('')
   const [openAccount, setOpenAccount] = useState<string | null>(null)
-  const [error, setError] = useState('')
-  const reload = () => { brands.reload(); accounts.reload() }
-  const run = (p: Promise<unknown>) => { p.then(() => { setError(''); reload() }).catch(e => setError(e instanceof Error ? e.message : String(e))) }
-  const active = (brands.data ?? []).filter(b => b.status === 'active')
+  const names = useMemo(() => new Map((brands.data ?? []).map(b => [b.id, b.name])), [brands.data])
   const byPlatform = useMemo(() => {
     const m = new Map<string, OpAccount[]>()
     for (const a of accounts.data ?? []) m.set(a.platform, [...(m.get(a.platform) ?? []), a])
@@ -236,50 +228,20 @@ export function BrandsPanel() {
 
   return (
     <div className="flex flex-col gap-4">
-      {error && <p className="text-[12px]" style={{ color: 'var(--danger)' }}>{error}</p>}
-      <Card title="Brands" action={
-        <div className="flex items-center gap-1.5">
-          <Input placeholder="Naya brand" value={newName} onChange={e => setNewName(e.target.value)} />
-          <Btn tone="primary" disabled={!newName.trim()} onClick={() => { run(op('brand.upsert', { name: newName.trim() })); setNewName('') }}><Plus size={12} /> Add</Btn>
-        </div>
-      }>
-        {!brands.data?.length ? <Empty>Abhi koi brand nahi.</Empty> : (
+      <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>
+        Ye sab Claude (MCP) khud save aur update karta hai: kaunsa account kis brand ka hai, kis par kya chalta hai. Yahan sirf dekhna hai.
+      </p>
+      <Card title="Brands" action={<Btn onClick={() => { brands.reload(); accounts.reload() }} title="Refresh"><RefreshCw size={12} /></Btn>}>
+        {!brands.data?.length ? <Empty>Abhi koi brand nahi. Claude kaam karte hue khud banayega.</Empty> : (
           <div className="grid gap-3 md:grid-cols-2">
             {brands.data.map(b => (
-              <div key={b.id} className="rounded-lg border p-3" style={{ borderColor: b.status === 'proposed' ? 'var(--accent-border)' : 'var(--border-soft)', background: 'var(--surface-2)' }}>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[14px] font-semibold" style={{ color: 'var(--text)' }}>{b.name}</span>
-                    {b.status === 'proposed' && <Chip tone="warn">aap ki haan chahiye</Chip>}
-                  </div>
-                  <div className="flex gap-1">
-                    {b.status === 'proposed' ? (<>
-                      <Btn tone="primary" onClick={() => run(op('brand.decide', { id: b.id, decision: 'accept' }))}><Check size={12} /> Haan</Btn>
-                      <Btn tone="danger" title={`Reject ${b.name}`} onClick={() => run(op('brand.decide', { id: b.id, decision: 'reject' }))}><X size={12} /></Btn>
-                    </>) : (
-                      <Btn onClick={() => { setEditing(editing === b.id ? null : b.id); setDraft(Object.fromEntries(BRAND_FIELDS.map(f => [f, fieldText(b.fields[f])]))) }}>{editing === b.id ? 'Band' : 'Edit'}</Btn>
-                    )}
-                  </div>
+              <div key={b.id} className="rounded-lg border p-3" style={{ borderColor: 'var(--border-soft)', background: 'var(--surface-2)' }}>
+                <span className="text-[14px] font-semibold" style={{ color: 'var(--text)' }}>{b.name}</span>
+                <div className="mt-2">
+                  {Object.keys(b.fields).length
+                    ? <Fields fields={Object.fromEntries(Object.entries(b.fields).sort(([x], [y]) => (BRAND_ORDER.indexOf(x) + 1 || 99) - (BRAND_ORDER.indexOf(y) + 1 || 99)))} />
+                    : <Empty>Abhi koi detail nahi.</Empty>}
                 </div>
-                {editing === b.id ? (
-                  <div className="mt-2 flex flex-col gap-1.5">
-                    {BRAND_FIELDS.map(f => (
-                      <label key={f} className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-3)' }}>
-                        <span className="w-20 shrink-0">{f}</span>
-                        <Input className="flex-1" value={draft[f] ?? ''} onChange={e => setDraft({ ...draft, [f]: e.target.value })} />
-                      </label>
-                    ))}
-                    <div><Btn tone="primary" onClick={() => {
-                      const fields = Object.fromEntries(Object.entries(draft).filter(([k, v]) => v.trim() && v !== fieldText(b.fields[k])))
-                      run(op('brand.upsert', { id: b.id, name: b.name, fields }))
-                      setEditing(null)
-                    }}>Save</Btn></div>
-                  </div>
-                ) : (
-                  <div className="mt-2">
-                    {Object.keys(b.fields).length ? <Fields fields={b.fields} /> : <Empty>{b.status === 'proposed' ? 'Haan karne par is ki details dikhengi.' : 'Koi detail nahi — Edit se bharein.'}</Empty>}
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -295,11 +257,8 @@ export function BrandsPanel() {
               <tbody>
                 {list.map(a => {
                   const key = `${a.platform}:${a.slotId}`
-                  return (
-                    <AccountRow key={key} account={a} brands={active} open={openAccount === key}
-                      onToggle={() => setOpenAccount(openAccount === key ? null : key)}
-                      onSave={fields => run(op('account.update', { platform: a.platform, account: a.slotId, fields }))} />
-                  )
+                  return <AccountRow key={key} account={a} brandName={typeof a.fields.brand === 'string' ? names.get(a.fields.brand) ?? a.fields.brand : ''}
+                    open={openAccount === key} onToggle={() => setOpenAccount(openAccount === key ? null : key)} />
                 })}
               </tbody>
             </table>
@@ -310,9 +269,9 @@ export function BrandsPanel() {
   )
 }
 
-function AccountRow({ account: a, brands, open, onToggle, onSave }: { account: OpAccount; brands: OpBrand[]; open: boolean; onToggle: () => void; onSave: (f: Record<string, unknown>) => void }) {
-  const brand = typeof a.fields.brand === 'string' ? a.fields.brand : ''
+function AccountRow({ account: a, brandName, open, onToggle }: { account: OpAccount; brandName: string; open: boolean; onToggle: () => void }) {
   const purpose = typeof a.fields.purpose === 'string' ? a.fields.purpose : ''
+  const muted = { color: 'var(--text-3)' }
   return (
     <>
       <tr className="border-t" style={{ borderColor: 'var(--border-soft)' }}>
@@ -321,19 +280,9 @@ function AccountRow({ account: a, brands, open, onToggle, onSave }: { account: O
             {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{maskEmail(a.label)}
           </button>
         </td>
-        <td className="py-1.5 pr-2">
-          <select value={brand} onChange={e => onSave({ brand: e.target.value })} className="rounded-md border px-1.5 py-0.5 text-[11px]" style={inputStyle} aria-label={`Brand for ${a.platform} ${maskEmail(a.label)}`}>
-            <option value="" disabled>brand chuno</option>
-            {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-        </td>
-        <td className="py-1.5 pr-2">
-          <select value={purpose} onChange={e => onSave({ purpose: e.target.value })} className="rounded-md border px-1.5 py-0.5 text-[11px]" style={inputStyle} aria-label={`Purpose of ${a.platform} ${maskEmail(a.label)}`}>
-            <option value="" disabled>kaam</option>
-            {PURPOSES.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </td>
-        <td className="py-1.5 text-right text-[11px]" style={{ color: 'var(--text-3)' }}>{a.lastActionAt ? `aakhri kaam ${when(a.lastActionAt)}` : 'abhi koi kaam nahi'}</td>
+        <td className="py-1.5 pr-2" style={brandName ? { color: 'var(--text)' } : muted}>{brandName || 'brand abhi nahi'}</td>
+        <td className="py-1.5 pr-2" style={purpose ? { color: 'var(--text-2)' } : muted}>{purpose || '—'}</td>
+        <td className="py-1.5 text-right text-[11px]" style={muted}>{a.lastActionAt ? `aakhri kaam ${when(a.lastActionAt)}` : 'abhi koi kaam nahi'}</td>
       </tr>
       {open && <tr><td colSpan={4} className="pb-2"><AccountActivity account={a} /></td></tr>}
     </>
@@ -366,27 +315,11 @@ export function EventList({ events, empty }: { events: OpEvent[]; empty: string 
 
 export function ContentPanel() {
   const content = useOp<OpContent[]>('content.list', { limit: 500 })
-  const brands = useOp<OpBrand[]>('brand.list', {})
   const [selected, setSelected] = useState<string | null>(null)
-  const [title, setTitle] = useState('')
-  const [kind, setKind] = useState('pin')
-  const [brandId, setBrandId] = useState('')
   const columns = CONTENT_STAGES.map(stage => ({ stage, items: (content.data ?? []).filter(c => c.stage === stage) }))
   return (
     <div className="flex flex-col gap-4">
-      <Card title="Content ka safar — idea se numbers tak" action={
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Input placeholder="Title" value={title} onChange={e => setTitle(e.target.value)} />
-          <select value={kind} onChange={e => setKind(e.target.value)} className="rounded-md border px-1.5 py-1 text-[11px]" style={inputStyle} aria-label="Kind">
-            {['pin', 'video', 'product', 'post'].map(k => <option key={k}>{k}</option>)}
-          </select>
-          <select value={brandId} onChange={e => setBrandId(e.target.value)} className="rounded-md border px-1.5 py-1 text-[11px]" style={inputStyle} aria-label="Brand">
-            <option value="">brand</option>
-            {(brands.data ?? []).filter(b => b.status === 'active').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-          <Btn tone="primary" disabled={!title.trim()} onClick={() => { void op('content.create', { title: title.trim(), kind, brandId: brandId || null }).then(() => { setTitle(''); content.reload() }) }}><Plus size={12} /> Add</Btn>
-        </div>
-      }>
+      <Card title="Content ka safar — idea se numbers tak" action={<Btn onClick={content.reload} title="Refresh"><RefreshCw size={12} /></Btn>}>
         <div className="grid gap-2 overflow-x-auto" style={{ gridTemplateColumns: `repeat(${CONTENT_STAGES.length}, minmax(150px, 1fr))` }}>
           {columns.map(col => (
             <div key={col.stage} className="rounded-lg p-2" style={{ background: 'var(--surface-2)' }}>
@@ -406,22 +339,21 @@ export function ContentPanel() {
           ))}
         </div>
       </Card>
-      {selected && <ContentDetail id={selected} onChanged={content.reload} onClose={() => setSelected(null)} />}
+      {selected && <ContentDetail id={selected} onClose={() => setSelected(null)} />}
     </div>
   )
 }
 
-function ContentDetail({ id, onChanged, onClose }: { id: string; onChanged: () => void; onClose: () => void }) {
+function ContentDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const detail = useOp<OpContentDetail | null>('content.get', { id })
   const d = detail.data
   if (!d) return null
-  const move = (stage: ContentStage) => { void op('content.update', { id, stage }).then(() => { detail.reload(); onChanged() }) }
   return (
     <Card title={`Safar: ${d.content.title}`} action={<Btn onClick={onClose} title="Band karo"><X size={12} /></Btn>}>
       <div className="mb-3 flex flex-wrap gap-1">
         {[...CONTENT_STAGES, 'dropped' as const].map(s => (
-          <button key={s} type="button" onClick={() => move(s)} className="rounded-full border px-2 py-0.5 text-[11px]"
-            style={{ borderColor: s === d.content.stage ? 'var(--accent)' : 'var(--border)', color: s === d.content.stage ? 'var(--accent)' : 'var(--text-2)' }}>{s}</button>
+          <span key={s} className="rounded-full border px-2 py-0.5 text-[11px]"
+            style={{ borderColor: s === d.content.stage ? 'var(--accent)' : 'var(--border)', color: s === d.content.stage ? 'var(--accent)' : 'var(--text-3)' }}>{s}</span>
         ))}
       </div>
       <ol className="flex flex-col gap-1.5">
@@ -546,44 +478,25 @@ export function JobsPanel() {
 
 export function RulesPanel() {
   const agents = useOp<{ text: string }>('files.get', { name: 'AGENTS' })
-  const proposed = useOp<OpLearning[]>('learning.list', { status: 'proposed' })
-  const accepted = useOp<OpLearning[]>('learning.list', { status: 'accepted' })
-  const profile = useOp<{ fields: Record<string, unknown>; proposed: OpFact[] }>('profile.get', {})
-  const facts = useOp<OpFact[]>('facts.proposed', {})
+  const learnings = useOp<OpLearning[]>('learning.list', { status: 'active' })
+  const profile = useOp<{ fields: Record<string, unknown> }>('profile.get', {})
   const [text, setText] = useState('')
   const [saved, setSaved] = useState('')
   const [kit, setKit] = useState('')
   useEffect(() => { if (agents.data) setText(agents.data.text) }, [agents.data])
-  const reload = () => { proposed.reload(); accepted.reload(); profile.reload(); facts.reload() }
-  const accountFacts = (facts.data ?? []).filter(f => f.subject.startsWith('account:'))
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <div className="flex flex-col gap-4">
-        <Card title="Seekh — aap ki haan ka intezar">
-          {!proposed.data?.length ? <Empty>Koi nayi seekh nahi. Claude haftawar review mein propose karta hai.</Empty> : proposed.data.map(l => (
-            <div key={l.id} className="mb-2 rounded-lg border p-2.5" style={{ borderColor: 'var(--accent-border)' }}>
+        <Card title="Seekh — jo kaam karta hai (Claude khud likhta aur hatata hai)" action={<Btn onClick={learnings.reload} title="Refresh"><RefreshCw size={12} /></Btn>}>
+          {!learnings.data?.length ? <Empty>Abhi koi seekh nahi. Claude numbers dekh kar khud likhta hai.</Empty> : learnings.data.map(l => (
+            <div key={l.id} className="mb-2 rounded-lg border p-2.5" style={{ borderColor: 'var(--border-soft)' }}>
               <p className="text-[12px]" style={{ color: 'var(--text)' }}>{l.statement}</p>
-              <div className="mt-1.5 flex items-center justify-between">
-                <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>{l.scope ?? 'sab'} · yaqeen {Math.round(l.confidence * 100)}%</span>
-                <span className="flex gap-1">
-                  <Btn tone="primary" onClick={() => { void op('learning.decide', { id: l.id, decision: 'accept' }).then(reload) }}><Check size={12} /> Haan</Btn>
-                  <Btn tone="danger" title="Reject" onClick={() => { void op('learning.decide', { id: l.id, decision: 'reject' }).then(reload) }}><X size={12} /></Btn>
-                </span>
-              </div>
-            </div>
-          ))}
-        </Card>
-        <Card title="Pakki seekh (har briefing mein jaati hai)">
-          {!accepted.data?.length ? <Empty>Abhi koi nahi.</Empty> : accepted.data.map(l => (
-            <div key={l.id} className="mb-1.5 flex items-start justify-between gap-2 text-[12px]">
-              <span style={{ color: 'var(--text)' }}>{l.statement} <span style={{ color: 'var(--text-3)' }}>{l.scope ? `[${l.scope}]` : ''}</span></span>
-              <Btn onClick={() => { void op('learning.decide', { id: l.id, decision: 'retire' }).then(reload) }} title="Ab sahi nahi">Hatao</Btn>
+              <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>{l.scope ?? 'sab'} · yaqeen {Math.round(l.confidence * 100)}% · {when(l.createdAt)}</span>
             </div>
           ))}
         </Card>
         <Card title="Aap ke baare mein (profile)">
-          {[...(profile.data?.proposed ?? []), ...accountFacts].map(f => <FactRow key={f.id} fact={f} onDone={reload} />)}
-          {Object.keys(profile.data?.fields ?? {}).length ? <Fields fields={profile.data!.fields} labelWidth={100} /> : !(profile.data?.proposed ?? []).length && <Empty>Abhi khaali.</Empty>}
+          {Object.keys(profile.data?.fields ?? {}).length ? <Fields fields={profile.data!.fields} labelWidth={100} /> : <Empty>Abhi khaali.</Empty>}
         </Card>
       </div>
       <div className="flex flex-col gap-4">
@@ -607,19 +520,6 @@ export function RulesPanel() {
           </div>
           {kit && <p className="mt-1.5 text-[11px]" style={{ color: 'var(--text-2)' }}>{kit}</p>}
         </Card>
-      </div>
-    </div>
-  )
-}
-
-function FactRow({ fact, onDone }: { fact: OpFact; onDone: () => void }) {
-  return (
-    <div className="mb-2 rounded-lg border p-2" style={{ borderColor: 'var(--accent-border)' }}>
-      <div className="text-[11px]" style={{ color: 'var(--text-3)' }}>{fact.subject} · {fact.field} <Chip tone="warn">proposed</Chip></div>
-      <p className="mt-0.5 text-[12px]" style={{ color: 'var(--text)' }}>{fieldText(fact.value)}</p>
-      <div className="mt-1 flex gap-1">
-        <Btn tone="primary" onClick={() => { void op('fact.decide', { id: fact.id, decision: 'accept' }).then(onDone) }}><Check size={12} /> Haan</Btn>
-        <Btn tone="danger" title="Reject" onClick={() => { void op('fact.decide', { id: fact.id, decision: 'reject' }).then(onDone) }}><X size={12} /></Btn>
       </div>
     </div>
   )

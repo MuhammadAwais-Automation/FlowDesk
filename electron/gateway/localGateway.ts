@@ -974,15 +974,15 @@ function brainOp(op: string, args: Record<string, unknown> = {}): Promise<any> {
 }
 
 /**
- * Ops a connected agent may call through brain.op. Left out on purpose:
- * deciding learnings and proposed facts and editing AGENTS.md (the user does
- * those in FlowDesk), and FlowDesk's own bookkeeping (ledger, status, sync).
+ * Ops a connected agent may call through brain.op: agents keep the Brain, and
+ * what they save is current at once. Left out on purpose: editing AGENTS.md
+ * (the user's rules) and FlowDesk's own bookkeeping (ledger, status, sync).
  */
 const AGENT_OPS = new Set([
   'activity', 'briefing', 'files.get', 'overview', 'sessions.list', 'log.list',
-  'profile.get', 'profile.set', 'brand.upsert', 'brand.list', 'brand.get', 'account.update', 'account.list', 'history', 'facts.proposed',
+  'profile.get', 'profile.set', 'profile.clear', 'brand.upsert', 'brand.list', 'brand.get', 'account.update', 'account.list', 'history',
   'content.create', 'content.get', 'content.update', 'content.list', 'content.link',
-  'metric.record', 'metric.latest', 'learning.propose', 'learning.list',
+  'metric.record', 'metric.latest', 'learning.record', 'learning.update', 'learning.list',
   'task.upsert', 'task.list', 'contact.upsert', 'contact.list', 'idea.add', 'idea.list', 'idea.status',
   'inbox.list', 'inbox.take', 'inbox.done', 'job.get', 'job.list', 'monitor.list',
 ])
@@ -1006,7 +1006,7 @@ async function syncOperator(): Promise<void> {
   if (!brainHandler) return
   const accounts = await socialAccountsStatus()
   await brainOp('accounts.sync', { accounts: (accounts.accounts as Array<{ platform: string; id: string; label: string }>).map(a => ({ platform: a.platform, slotId: a.id, label: a.label.replace(/[A-Za-z0-9._%+*-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***') })) })
-  // First run only (it remembers): profile and brands proposed from the vault.
+  // First run only (it remembers): profile and brands saved from the vault.
   await brainOp('seed.fromKnowledge').catch(() => {})
   await ensureSkillsLoaded()
   await brainOp('status.set', {

@@ -7,6 +7,14 @@
  */
 import type { Account, Brand, InboxItem, Job, LogEntry, OperatorStore, OpEvent, Session, Task } from './store'
 
+/** Brain is kept by agents: nothing waits for approval inside FlowDesk. */
+export const BRAIN_KEEPING = `- You keep the Brain. Save what you learn as soon as you know it: which brand
+  and job each account has (\`brain_record\` type=account), brand details,
+  what was uploaded where and what is still to upload (\`brain_content\`), and
+  what works (\`brain_learning\`). It is current at once; nobody approves it
+  inside FlowDesk. When something you find is wrong or stale, correct it
+  yourself: save the new value, or retire the learning.`
+
 export const DEFAULT_AGENTS_MD = `# AGENTS.md — FlowDesk operator rules
 
 Every agent connected to FlowDesk over MCP follows these rules. The user edits
@@ -38,9 +46,12 @@ Roman Urdu / Hinglish unless they ask otherwise; keep it simple and direct.
   and tell the user.
 - Long collection work (radar, trends, niche scans, metric pulls) goes to
   \`jobs\` and runs in the background; pick results up from \`inbox\`.
-- Learnings you notice go to \`brain_learning\` as proposals; the user accepts
-  them. Never write a learning as accepted yourself.
+${BRAIN_KEEPING}
 `
+
+/** The old AGENTS.md line from the propose → accept days, swapped out of saved copies. */
+export const OLD_LEARNING_RULE = `- Learnings you notice go to \`brain_learning\` as proposals; the user accepts
+  them. Never write a learning as accepted yourself.`
 
 export const CLAUDE_MD = `# FlowDesk operator
 
@@ -160,7 +171,7 @@ export function indexMd(store: OperatorStore, status: SystemStatus): string {
   const accounts = store.listAccounts()
   const content = store.listContent({ limit: 500 })
   const byStage = content.reduce<Record<string, number>>((acc, c) => { acc[c.stage] = (acc[c.stage] ?? 0) + 1; return acc }, {})
-  const learnings = store.listLearnings({ status: 'accepted' })
+  const learnings = store.listLearnings({ status: 'active' })
   const monitors = store.listMonitors()
   const lines = [
     '# Index',
@@ -181,7 +192,7 @@ export function indexMd(store: OperatorStore, status: SystemStatus): string {
     `- ${content.length} items: ${Object.entries(byStage).map(([s, n]) => `${s} ${n}`).join(', ') || 'none'}`,
     ...content.slice(0, 15).map(c => `- ${c.id} · ${c.kind} · ${clip(c.title, 70)} — ${c.stage}${c.brandId ? ` (${c.brandId})` : ''}`),
     '',
-    '## Learnings (accepted)',
+    '## Learnings',
     ...(learnings.length ? learnings.slice(0, 20).map(l => `- ${clip(l.statement, 160)}${l.scope ? ` [${l.scope}]` : ''}`) : ['- none yet']),
     '',
     '## Background monitors',
@@ -244,7 +255,7 @@ export function briefing(store: OperatorStore, status: SystemStatus, input: Brie
   const waiting = store.listTasks({ state: 'waiting' })
   const inbox = store.listInbox({ status: 'new', limit: 8 })
   const jobs = store.listJobs({ status: 'active' })
-  const learnings = store.listLearnings({ status: 'accepted', scope: input.brandId ?? input.platform }).slice(0, 6)
+  const learnings = store.listLearnings({ status: 'active', scope: input.brandId ?? input.platform }).slice(0, 6)
   const profile = store.fields('profile')
   const handoff = store.lastHandoff()
   const skill = input.platform ? PLATFORM_SKILL[input.platform] : undefined
@@ -261,7 +272,7 @@ export function briefing(store: OperatorStore, status: SystemStatus, input: Brie
   sections.push(`## Next 7 days\n${calendar.length ? calendar.slice(0, 10).map(taskLine).join('\n') : '- nothing scheduled'}`)
   if (waiting.length) sections.push(`## Waiting on the user\n${waiting.slice(0, 8).map(taskLine).join('\n')}`)
   sections.push(`## Inbox and background work\n${[...inbox.map(inboxLine), ...jobs.map(jobLine)].join('\n') || '- nothing new'}`)
-  if (learnings.length) sections.push(`## What has worked (accepted learnings)\n${learnings.map(l => `- ${clip(l.statement, 180)}`).join('\n')}`)
+  if (learnings.length) sections.push(`## What has worked (learnings)\n${learnings.map(l => `- ${clip(l.statement, 180)}`).join('\n')}`)
   const health = status.health
   sections.push(`## Tools\n${health ? `- health ${hm(health.ranAt)}: ${health.status}${health.failing.length ? `; failing: ${health.failing.join(', ')}` : ''}` : '- no health check yet'}\n- open problem reports: ${status.openReports ?? 0}${skill ? `\n- read skill \`${skill}\` (flowdesk_skill_get) before using ${input.platform} tools` : ''}`)
   if (handoff) sections.push(`## Last handoff (${handoff.session.client}, ${hm(handoff.session.lastSeenAt)})\n${clip(handoff.handoff.summary, 400)}${handoff.handoff.next ? `\n**Next:** ${clip(handoff.handoff.next, 300)}` : ''}`)

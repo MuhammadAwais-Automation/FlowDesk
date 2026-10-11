@@ -32,12 +32,27 @@ describe('operator brain', () => {
     expect(history.map((f: any) => [f.value, f.validTo !== null])).toEqual([['10k followers', true], ['50k followers', false]])
   })
 
-  it('holds proposed facts until the user accepts them', () => {
+  it('makes what an agent saves current at once, and lets the agent clear a wrong value', () => {
     const { op } = make()
-    const p = op('profile.set', { field: 'name', value: 'Awais', status: 'proposed', source: 'second-brain' })
-    expect(op('profile.get').fields.name).toBeUndefined()
-    op('fact.decide', { id: p.id, decision: 'accept' })
+    op('profile.set', { field: 'name', value: 'Awais', source: 'agent' })
     expect(op('profile.get').fields.name).toBe('Awais')
+    op('profile.clear', { field: 'name' })
+    expect(op('profile.get').fields.name).toBeUndefined()
+    expect(op('history', { subject: 'profile', field: 'name' })).toHaveLength(1)
+  })
+
+  it('turns data left from the old propose flow into current data on open', () => {
+    const db = new DatabaseSync(':memory:')
+    db.exec("CREATE TABLE op_brands (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL)")
+    db.exec("CREATE TABLE op_learnings (id TEXT PRIMARY KEY, statement TEXT NOT NULL, scope TEXT, evidence_json TEXT NOT NULL DEFAULT '[]', confidence REAL NOT NULL DEFAULT 0.5, status TEXT NOT NULL, created_at TEXT NOT NULL, decided_at TEXT)")
+    db.exec("CREATE TABLE op_facts (id TEXT PRIMARY KEY, subject TEXT NOT NULL, field TEXT NOT NULL, value_json TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, valid_from TEXT NOT NULL, valid_to TEXT, recorded_at TEXT NOT NULL)")
+    db.exec("INSERT INTO op_brands VALUES ('codveon', 'Codveon', 'proposed', '2026-10-01')")
+    db.exec("INSERT INTO op_learnings VALUES ('l1', 'a proposed one', NULL, '[]', 0.6, 'proposed', '2026-10-01', NULL), ('l2', 'a rejected one', NULL, '[]', 0.5, 'rejected', '2026-10-01', '2026-10-02')")
+    db.exec(`INSERT INTO op_facts VALUES ('f1', 'brand:codveon', 'niche', '"agency"', 'proposed', 'seed', '2026-10-01', NULL, '2026-10-01')`)
+    const svc = new OperatorService(db, null)
+    const op = (name: string, args: unknown = {}) => svc.handle(name, args) as any
+    expect(op('brand.get', { id: 'codveon' })).toMatchObject({ status: 'active', fields: { niche: 'agency' } })
+    expect(op('learning.list').map((l: any) => [l.id, l.status])).toEqual([['l1', 'active'], ['l2', 'retired']])
   })
 
   it('tags accounts with a brand and refuses an unknown brand or account', () => {
@@ -102,9 +117,9 @@ describe('operator brain', () => {
     op('brand.upsert', { name: 'Codveon', fields: { niche: 'agency' } })
     op('account.update', { platform: 'tiktok', account: 'Account 1', fields: { brand: 'alpha-paws', purpose: 'main' } })
     op('ledger.record', { platform: 'tiktok', account: 'Account 1', tool: 'tiktok.uploadVideo', kind: 'write', outcome: 'ok', targetId: '1' })
-    op('learning.propose', { statement: 'Cat videos with a hook in the first second get 3x views', scope: 'alpha-paws' })
-    const l = op('learning.list', { status: 'proposed' })[0]
-    op('learning.decide', { id: l.id, decision: 'accept' })
+    op('learning.record', { statement: 'Cat videos with a hook in the first second get 3x views', scope: 'alpha-paws' })
+    const old = op('learning.record', { statement: 'Long intros keep viewers watching', scope: 'alpha-paws' })
+    op('learning.update', { id: old.id, status: 'retired' })
     const text = op('briefing', { platform: 'tiktok' }).text as string
     expect(text).toContain('Alpha Paws')
     expect(text).not.toContain('Codveon')
@@ -115,6 +130,7 @@ describe('operator brain', () => {
     expect(text.length).toBeLessThan(7000)
     const scoped = op('briefing', { platform: 'tiktok', brandId: 'alpha-paws' }).text as string
     expect(scoped).toContain('3x views')
+    expect(scoped).not.toContain('Long intros')
   })
 
   it('starts a session with rules, hot cache and briefing, and remembers it was briefed', () => {
@@ -151,7 +167,7 @@ describe('operator brain', () => {
     expect(op('log.list', { type: 'job' })[0].title).toBe('tiktok.radar completed')
   })
 
-  it('proposes the profile and brands from the vault once, for the user to accept or reject', () => {
+  it('saves the profile and brands from the vault once, as current data', () => {
     const svc = new OperatorService(new DatabaseSync(':memory:'), null, {
       countsByType: () => ({}),
       seedDocs: () => [
@@ -163,13 +179,9 @@ describe('operator brain', () => {
     const op = (name: string, args: unknown = {}) => svc.handle(name, args) as any
     expect(op('seed.fromKnowledge')).toEqual({ ok: true, profile: 2, brands: 4 })
     expect(op('seed.fromKnowledge')).toMatchObject({ skipped: true })
-    expect(op('profile.get').proposed.find((f: any) => f.field === 'positioning').value).toBe('Awais is an AI Engineer building FlowDesk.')
-    const brands = op('brand.list')
-    expect(brands.map((b: any) => [b.id, b.status])).toContainEqual(['alpha-paws', 'proposed'])
-    expect(brands.find((b: any) => b.id === 'alpha-paws').fields).toEqual({})
-    op('brand.decide', { id: 'alpha-paws', decision: 'accept' })
+    expect(op('profile.get').fields.positioning).toBe('Awais is an AI Engineer building FlowDesk.')
     expect(op('brand.get', { id: 'alpha-paws' })).toMatchObject({ status: 'active', fields: { niche: 'TikTok cat videos (Alpha Paws channel)', rules: 'Alpha Paws hero character is a black cat.' } })
-    op('brand.decide', { id: 'codveon', decision: 'reject' })
+    op('brand.upsert', { id: 'codveon', name: 'Codveon', status: 'archived' })
     expect(op('brand.list').map((b: any) => b.id)).not.toContain('codveon')
   })
 
@@ -177,5 +189,6 @@ describe('operator brain', () => {
     const { op } = make()
     expect(() => op('nope')).toThrow(/unknown operator op/)
     expect(() => op('ledger.record', { platform: 'x' })).toThrow()
+    for (const gone of ['brand.decide', 'fact.decide', 'facts.proposed', 'learning.decide', 'learning.propose']) expect(() => op(gone, {})).toThrow(/unknown operator op/)
   })
 })

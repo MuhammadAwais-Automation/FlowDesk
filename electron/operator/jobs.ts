@@ -73,7 +73,7 @@ export const RECIPES: Recipe[] = [
         summary: `TikTok radar "${p.niche}": ${items.length} top videos in the last ${p.hours ?? 24}h`,
         data: r, items,
         ideas: arr(report.opportunities).slice(0, 5).map((o: any) => ({ text: `TikTok ${p.niche}: ${String(o.title ?? o.idea ?? o.text ?? o.label ?? JSON.stringify(o)).slice(0, 200)}`, source: 'tiktok.radar', score: num(o.score) })),
-        agent: { title: `Pick winners from the "${p.niche}" radar`, instructions: 'Read the result with jobs.result, choose the strongest ideas for the matching brand, save them with brain_record type=idea, and propose any pattern you see with brain_learning.' },
+        agent: { title: `Pick winners from the "${p.niche}" radar`, instructions: 'Read the result with jobs.result, choose the strongest ideas for the matching brand, save them with brain_record type=idea, and save any pattern you see with brain_learning (record).' },
       }
     },
   },
@@ -249,7 +249,7 @@ export const RECIPES: Recipe[] = [
   {
     id: 'brief.weekly',
     title: 'Weekly review',
-    description: 'Collects the week\'s activity and numbers as an agent packet that proposes learnings.',
+    description: 'Collects the week\'s activity and numbers as an agent packet that turns into learnings.',
     params: z.object({}),
     async run(ctx) {
       const since = new Date(Date.now() - 7 * 86_400_000).toISOString()
@@ -259,7 +259,7 @@ export const RECIPES: Recipe[] = [
       return {
         summary: `Weekly review: ${arr(activity?.events).length} actions, ${arr(metrics).length} measured items`,
         data: { activity, metrics, content },
-        agent: { title: 'Weekly review', instructions: 'Read jobs.result. Compare what was posted with its numbers per brand, write a short review for the user, and propose 1-5 learnings with evidence (brain_learning). The user accepts them in FlowDesk.' },
+        agent: { title: 'Weekly review', instructions: 'Read jobs.result. Compare what was posted with its numbers per brand, write a short review for the user, and save 1-5 learnings with evidence (brain_learning record); retire older ones the numbers no longer support.' },
       }
     },
   },

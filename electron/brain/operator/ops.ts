@@ -6,8 +6,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { CLAUDE_MD, DEFAULT_AGENTS_MD, agentsMd, briefing, hotMd, indexMd, logMd, sessionLogBody, type SystemStatus } from './documents'
-import { OperatorStore, type FactStatus } from './store'
+import { BRAIN_KEEPING, CLAUDE_MD, DEFAULT_AGENTS_MD, OLD_LEARNING_RULE, agentsMd, briefing, hotMd, indexMd, logMd, sessionLogBody, type SystemStatus } from './documents'
+import { OperatorStore } from './store'
 
 const IDLE_SESSION_MS = 2 * 60 * 60_000
 const LOG_FILE_ENTRIES = 500
@@ -32,15 +32,14 @@ const schemas = {
   'agents.set': z.object({ text: s.min(20).max(50_000) }),
   'agents.reset': z.object({}),
   'profile.get': z.object({}),
-  'profile.set': z.object({ field: s.min(1).max(80), value: z.unknown(), status: z.enum(['accepted', 'proposed']).optional(), source: s.optional() }),
-  'brand.upsert': z.object({ id: s.optional(), name: s.min(1).max(120), status: z.enum(['active', 'proposed', 'archived']).optional(), fields: z.record(z.string(), z.unknown()).optional(), factStatus: z.enum(['accepted', 'proposed']).optional(), source: s.optional() }),
+  'profile.set': z.object({ field: s.min(1).max(80), value: z.unknown(), source: s.optional() }),
+  'profile.clear': z.object({ field: s.min(1).max(80) }),
+  'brand.upsert': z.object({ id: s.optional(), name: s.min(1).max(120), status: z.enum(['active', 'archived']).optional(), fields: z.record(z.string(), z.unknown()).optional(), source: s.optional() }),
   'brand.list': z.object({ includeArchived: z.boolean().optional() }),
   'brand.get': z.object({ id: s.min(1) }),
-  'account.update': z.object({ platform: s.min(1), account: s.min(1), fields: z.record(z.string(), z.unknown()), status: z.enum(['accepted', 'proposed']).optional(), source: s.optional() }),
+  'account.update': z.object({ platform: s.min(1), account: s.min(1), fields: z.record(z.string(), z.unknown()), source: s.optional() }),
   'account.list': z.object({ platform: s.optional(), brandId: s.optional() }),
   history: z.object({ subject: s.min(1), field: s.optional() }),
-  'facts.proposed': z.object({}),
-  'fact.decide': z.object({ id: s.min(1), decision: z.enum(['accept', 'reject']), value: z.unknown().optional() }),
   'content.create': z.object({ id: s.optional(), brandId: opt(s), kind: s.min(1).max(40), title: s.min(1).max(300), stage: stage.optional(), ideaSource: opt(s), data: z.record(z.string(), z.unknown()).optional() }),
   'content.get': z.object({ id: s.min(1) }),
   'content.update': z.object({ id: s.min(1), title: s.optional(), stage: stage.optional(), brandId: opt(s), data: z.record(z.string(), z.unknown()).optional() }),
@@ -48,9 +47,9 @@ const schemas = {
   'content.link': z.object({ contentId: s.min(1), type: z.enum(['prompt', 'asset', 'placement', 'note', 'approval', 'edit']), platform: opt(s), account: opt(s), externalId: opt(s), url: opt(s), detail: opt(s.max(2000)) }),
   'metric.record': z.object({ platform: s.min(1), account: opt(s), externalId: s.min(1), metrics: z.record(z.string(), z.number()), contentId: opt(s) }),
   'metric.latest': z.object({ platform: s.optional(), contentId: s.optional(), limit: z.number().int().min(1).max(2000).optional() }),
-  'learning.propose': z.object({ statement: s.min(5).max(1000), scope: opt(s), evidence: z.array(z.unknown()).max(50).optional(), confidence: z.number().min(0).max(1).optional() }),
-  'learning.list': z.object({ status: z.enum(['proposed', 'accepted', 'rejected', 'retired']).optional(), scope: s.optional() }),
-  'learning.decide': z.object({ id: s.min(1), decision: z.enum(['accept', 'reject', 'retire']), statement: s.optional() }),
+  'learning.record': z.object({ statement: s.min(5).max(1000), scope: opt(s), evidence: z.array(z.unknown()).max(50).optional(), confidence: z.number().min(0).max(1).optional() }),
+  'learning.list': z.object({ status: z.enum(['active', 'retired']).optional(), scope: s.optional() }),
+  'learning.update': z.object({ id: s.min(1), statement: s.min(5).max(1000).optional(), confidence: z.number().min(0).max(1).optional(), status: z.enum(['active', 'retired']).optional() }),
   'task.upsert': z.object({ id: s.optional(), title: s.min(1).max(300), brandId: opt(s), platform: opt(s), account: opt(s), dueAt: opt(isoish), state: z.enum(['open', 'waiting', 'done', 'cancelled']).optional(), waitingOn: opt(s), source: s.optional(), externalId: opt(s), contentId: opt(s), notes: opt(s.max(2000)) }),
   'task.list': z.object({ from: isoish.optional(), to: isoish.optional(), state: z.enum(['open', 'waiting', 'done', 'cancelled', 'active']).optional(), brandId: s.optional(), limit: z.number().int().min(1).max(2000).optional() }),
   'contact.upsert': z.object({ id: s.optional(), platform: s.min(1), name: s.min(1).max(200), stage: s.optional(), lastContactAt: opt(isoish), nextStep: opt(s.max(500)), notes: opt(s.max(2000)) }),
@@ -73,13 +72,12 @@ const schemas = {
   'log.append': z.object({ type: s.min(1).max(40), title: s.min(1).max(300), body: s.max(20_000).optional() }),
   'log.list': z.object({ limit: z.number().int().min(1).max(5000).optional(), type: s.optional(), since: isoish.optional() }),
   overview: z.object({}),
-  'brand.decide': z.object({ id: s.min(1), decision: z.enum(['accept', 'reject']) }),
   'seed.fromKnowledge': z.object({ force: z.boolean().optional() }),
 } as const
 
 export type OperatorOp = keyof typeof schemas
 export const OPERATOR_OPS = Object.keys(schemas) as OperatorOp[]
-const READ_ONLY = new Set<OperatorOp>(['session.briefed', 'sessions.list', 'activity', 'briefing', 'files.get', 'profile.get', 'brand.list', 'brand.get', 'account.list', 'history', 'facts.proposed', 'content.get', 'content.list', 'metric.latest', 'learning.list', 'task.list', 'contact.list', 'idea.list', 'inbox.list', 'job.get', 'job.list', 'monitor.list', 'log.list', 'overview'])
+const READ_ONLY = new Set<OperatorOp>(['session.briefed', 'sessions.list', 'activity', 'briefing', 'files.get', 'profile.get', 'brand.list', 'brand.get', 'account.list', 'history', 'content.get', 'content.list', 'metric.latest', 'learning.list', 'task.list', 'contact.list', 'idea.list', 'inbox.list', 'job.get', 'job.list', 'monitor.list', 'log.list', 'overview'])
 
 export interface KnowledgePort {
   /** Count of active knowledge documents per type, for index.md. */
@@ -99,8 +97,8 @@ export function firstParagraph(body: string, max = 320): string {
 }
 
 /**
- * Brands to propose on first run (plan §3.1). Proposed, not active: the user
- * accepts, edits or rejects each one in Brain → Brands.
+ * Brands saved on first run (plan §3.1). Agents keep them up to date from
+ * then on; nobody approves them inside FlowDesk.
  */
 const SEED_BRANDS: Array<{ id: string; name: string; niche: string; match: RegExp }> = [
   { id: 'alpha-paws', name: 'Alpha Paws', niche: 'TikTok cat videos (Alpha Paws channel)', match: /alpha paws/i },
@@ -121,7 +119,9 @@ export class OperatorService {
 
   constructor(db: ConstructorParameters<typeof OperatorStore>[0], readonly dir: string | null, private readonly knowledge?: KnowledgePort, clock?: () => Date) {
     this.store = new OperatorStore(db, clock)
-    if (!this.store.getMeta<string | null>('agentsMd', null)) this.store.setMeta('agentsMd', DEFAULT_AGENTS_MD)
+    const saved = this.store.getMeta<string | null>('agentsMd', null)
+    if (!saved) this.store.setMeta('agentsMd', DEFAULT_AGENTS_MD)
+    else if (saved.includes(OLD_LEARNING_RULE)) this.store.setMeta('agentsMd', saved.replace(OLD_LEARNING_RULE, BRAIN_KEEPING))
   }
 
   private status(): SystemStatus {
@@ -195,8 +195,9 @@ export class OperatorService {
       case 'files.get': return { name: a.name, text: this.render(a.name) }
       case 'agents.set': st.setMeta('agentsMd', a.text); st.appendLog({ type: 'rules', title: 'AGENTS.md edited' }); return { ok: true }
       case 'agents.reset': st.setMeta('agentsMd', DEFAULT_AGENTS_MD); return { ok: true }
-      case 'profile.get': return { fields: st.fields('profile'), proposed: st.proposedFacts().filter(f => f.subject === 'profile') }
-      case 'profile.set': return st.setFact({ subject: 'profile', field: a.field, value: a.value, status: a.status as FactStatus | undefined, source: a.source })
+      case 'profile.get': return { fields: st.fields('profile') }
+      case 'profile.set': return st.setFact({ subject: 'profile', field: a.field, value: a.value, source: a.source })
+      case 'profile.clear': return { ok: st.clearFact('profile', a.field) }
       case 'brand.upsert': return st.upsertBrand(a as Parameters<OperatorStore['upsertBrand']>[0])
       case 'brand.list': return st.listBrands(a.includeArchived)
       case 'brand.get': return st.getBrand(a.id)
@@ -205,14 +206,12 @@ export class OperatorService {
         if (!account) throw new Error(`unknown ${a.platform} account "${a.account}"; known: ${st.listAccounts({ platform: a.platform }).map(x => `${x.label} (${x.slotId})`).join(', ') || 'none'}`)
         if (typeof a.fields.brand === 'string' && !st.getBrand(a.fields.brand)) throw new Error(`unknown brand "${a.fields.brand}"; create it first with brand.upsert`)
         for (const [field, value] of Object.entries(a.fields)) {
-          st.setFact({ subject: st.accountSubject(account.platform, account.slotId), field, value, status: a.status as FactStatus | undefined, source: a.source })
+          st.setFact({ subject: st.accountSubject(account.platform, account.slotId), field, value, source: a.source })
         }
         return st.resolveAccount(account.platform, account.slotId)
       }
       case 'account.list': return st.listAccounts(a)
       case 'history': return st.history(a.subject, a.field)
-      case 'facts.proposed': return st.proposedFacts()
-      case 'fact.decide': return st.decideFact(a.id, a.decision, a.value)
       case 'content.create': return st.createContent(a as Parameters<OperatorStore['createContent']>[0])
       case 'content.get': {
         const content = st.getContent(a.id)
@@ -224,11 +223,16 @@ export class OperatorService {
       case 'content.link': return st.linkContent(a as Parameters<OperatorStore['linkContent']>[0])
       case 'metric.record': return st.recordMetric(a as Parameters<OperatorStore['recordMetric']>[0])
       case 'metric.latest': return st.latestMetrics(a)
-      case 'learning.propose': return st.proposeLearning(a as Parameters<OperatorStore['proposeLearning']>[0])
+      case 'learning.record': {
+        const l = st.recordLearning(a as Parameters<OperatorStore['recordLearning']>[0])
+        st.appendLog({ type: 'learning', title: l.statement.slice(0, 120) })
+        return l
+      }
       case 'learning.list': return st.listLearnings(a)
-      case 'learning.decide': {
-        const l = st.decideLearning(a.id, a.decision, a.statement)
-        if (l) st.appendLog({ type: 'learning', title: `${l.status}: ${l.statement.slice(0, 120)}` })
+      case 'learning.update': {
+        const l = st.updateLearning(a.id, a)
+        if (!l) throw new Error(`no learning ${a.id}`)
+        if (a.status === 'retired') st.appendLog({ type: 'learning', title: `retired: ${l.statement.slice(0, 120)}` })
         return l
       }
       case 'task.upsert': return st.upsertTask(a as Parameters<OperatorStore['upsertTask']>[0])
@@ -266,13 +270,6 @@ export class OperatorService {
       case 'monitor.takeDue': return st.takeDueMonitors()
       case 'log.append': return st.appendLog(a as Parameters<OperatorStore['appendLog']>[0])
       case 'log.list': return st.listLog(a)
-      case 'brand.decide': {
-        const brand = st.getBrand(a.id)
-        if (!brand) throw new Error(`no brand ${a.id}`)
-        st.upsertBrand({ id: brand.id, name: brand.name, status: a.decision === 'accept' ? 'active' : 'archived' })
-        for (const f of st.proposedFacts().filter(f => f.subject === `brand:${brand.id}`)) st.decideFact(f.id, a.decision)
-        return st.getBrand(brand.id)
-      }
       case 'seed.fromKnowledge': return this.seed(a.force === true)
       case 'overview': return {
         brands: st.listBrands().length,
@@ -280,14 +277,13 @@ export class OperatorService {
         content: st.listContent({ limit: 1000 }).length,
         inboxNew: st.listInbox({ status: 'new', limit: 500 }).length,
         jobsActive: st.listJobs({ status: 'active' }).length,
-        learningsProposed: st.listLearnings({ status: 'proposed' }).length,
-        factsProposed: st.proposedFacts().length,
+        learnings: st.listLearnings({ status: 'active' }).length,
         tasksWaiting: st.listTasks({ state: 'waiting' }).length,
       }
     }
   }
 
-  /** Proposes the profile and brands from the vault and legacy memories, once. */
+  /** Saves the profile and brands from the vault and legacy memories, once. */
   private seed(force: boolean) {
     const st = this.store
     if (!force && st.getMeta<boolean>('seeded', false)) return { ok: true, skipped: true }
@@ -297,22 +293,22 @@ export class OperatorService {
     for (const d of docs) {
       const field = PROFILE_FROM[d.path]
       const value = field ? firstParagraph(d.body) : ''
-      if (field && value) { st.setFact({ subject: 'profile', field, value, status: 'proposed', source: `second-brain:${d.path}` }); profile++ }
+      if (field && value) { st.setFact({ subject: 'profile', field, value, source: `second-brain:${d.path}` }); profile++ }
     }
-    st.setFact({ subject: 'profile', field: 'language', value: 'Roman Urdu / Hinglish, simple words', status: 'proposed', source: 'second-brain:AGENTS.md' })
+    st.setFact({ subject: 'profile', field: 'language', value: 'Roman Urdu / Hinglish, simple words', source: 'second-brain:AGENTS.md' })
     let brands = 0
     for (const b of SEED_BRANDS) {
       if (st.getBrand(b.id)) continue
       const doc = docs.find(d => b.match.test(d.title) || b.match.test(d.path))
       const rules = memories.filter(m => b.match.test(m.text)).map(m => m.text).join('\n').slice(0, 1500)
       st.upsertBrand({
-        id: b.id, name: b.name, status: 'proposed', factStatus: 'proposed', source: 'seed',
+        id: b.id, name: b.name, source: 'seed',
         fields: { niche: b.niche, ...(doc ? { about: firstParagraph(doc.body) } : {}), ...(rules ? { rules } : {}) },
       })
       brands++
     }
     st.setMeta('seeded', true)
-    st.appendLog({ type: 'seed', title: `proposed ${profile + 1} profile facts and ${brands} brands for review` })
+    st.appendLog({ type: 'seed', title: `saved ${profile + 1} profile facts and ${brands} brands from the Second-Brain` })
     return { ok: true, profile: profile + 1, brands }
   }
 

@@ -102,6 +102,6 @@ FlowDesk runs no model. Every agent connects over MCP, and Brain v3 (docs/brain-
   - Its numbers, calendar items and ideas are recorded, and it lands in the inbox.
   - Results that need thinking carry an agent packet; this replaces the removed in-app chat digest.
   - Monitors repeat recipes; jobs left running by a closed app are marked failed at start.
-- **Proposals.** Profile facts and brands are seeded from the vault once as *proposed*; learnings are always proposed. Only the user accepts them, in Brain → Brands / Rules & Learnings. Agents cannot reach the decide ops.
+- **Agent-kept, no review queue (2026-10-11, the user's call).** Agents keep Brain v3 through MCP: brands, which account belongs to which brand and job, profile facts, content and learnings are current the moment an agent saves them. Nothing waits for approval in FlowDesk, and the Brain screens only show what agents saved (the AGENTS.md editor stays: it is the user's rules). An agent corrects a wrong value by saving the right one (the old value stays in the history), `profile.clear` ends one, and `learning.update {status:'retired'}` retires a learning. Data left from the earlier propose → accept flow became current on first open.
 - **Operator kit.** Settings → About or Brain → Rules writes a folder with AGENTS.md, CLAUDE.md, `.mcp.json` and Claude settings that deny edits and shell, for day-to-day work outside the code.
 

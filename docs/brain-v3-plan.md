@@ -6,6 +6,11 @@ gateway `brain.*` / `jobs.*` RPCs, MCP tools in `bin/flowdesk-mcp.mjs`, UI in
 `src/pages/BrainHub.tsx`, skills `brain-protocol`, `content-life-path`,
 `background-jobs`, `weekly-review`.
 
+Changed 2026-10-11 (the user's call): no review queue. Agents keep Brain through
+MCP and what they save is current at once; the Brain screens are read-only
+(see docs/brain-architecture.md, "Agent-kept"). Where this plan says propose /
+accept, read "the agent saves / retires".
+
 ## 0. Principles
 
 1. **FlowDesk has no AI inside.** It is the backend: tools, accounts, storage,
@@ -92,7 +97,7 @@ episodes → facts with validity dates):
 | **Content item** | id, brand, kind (pin / video / product / post), idea source, prompts, generator + job id, files, approvals, stage (idea → made → approved → scheduled → live → measured) |
 | **Placement** | content id, platform, account, external id, url, scheduled at, published at |
 | **Metric snapshot** | placement or account, at, views / likes / saves / clicks / comments / followers / sales |
-| **Learning** | statement, evidence (content + metrics), scope (brand / platform), confidence, status (proposed / accepted / retired) |
+| **Learning** | statement, evidence (content + metrics), scope (brand / platform), confidence, status (active / retired) |
 | **Task / calendar item** | title, brand, platform, due, state, waiting on (user approval / login / quota) |
 | **Contact** | platform, display name (local only), stage (lead / talking / client), last contact, next step |
 | **Idea** | text, source (radar / trends / Reddit / manual), score, brand, status |
@@ -157,7 +162,7 @@ something else.
 | **Brands & Accounts** | One card per brand → its accounts → per-account timeline and numbers |
 | **Content** | Board by stage (idea → made → approved → scheduled → live → measured); a card opens its life path (prompt → image → where posted → numbers) |
 | **Jobs** | Running and finished background jobs with progress; results open in a reader |
-| **Learnings & Rules** | Review queue (accept / edit / reject), accepted learnings, an `AGENTS.md` editor |
+| **Learnings & Rules** | Learnings the agents saved (read-only), profile, an `AGENTS.md` editor |
 | **Library** | Existing document reader + Atlas map, search-everything (Ctrl+K) |
 
 Readable first: clean typography, Markdown rendering, Roman Urdu-friendly

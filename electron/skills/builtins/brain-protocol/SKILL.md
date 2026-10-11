@@ -1,7 +1,7 @@
 ---
 name: brain-protocol
 title: "FlowDesk Brain protocol: start, record, wrap"
-description: "How every agent session uses FlowDesk Brain: brain_start first, save what the user tells you as records, propose learnings, and brain_wrap at the end. Read this before any multi-step work for the user."
+description: "How every agent session uses FlowDesk Brain: brain_start first, keep the Brain up to date yourself (accounts, brands, content, learnings), and brain_wrap at the end. Read this before any multi-step work for the user."
 version: 1.0.0
 domain: brain
 tools:
@@ -32,11 +32,18 @@ what the user decided, why, and what comes next.
 ## While working
 - Pass the right `account` to every social tool. The briefing says which account belongs to
   which brand; never guess an account for a brand.
-- Something the user TELLS you about themselves, a brand or an account →
-  `brain_record { type, action: "set", data }` (accepted). Something you only infer →
-  the same with `data.status: "proposed"`; the user confirms it in FlowDesk.
-- A pattern backed by numbers ("pins with X get 3x saves") → `brain_learning { action: "propose" }`
-  with evidence. Never treat your own proposal as accepted.
+- You keep the Brain; nobody approves anything inside FlowDesk. As soon as you know it, save:
+  - which brand and job each account has → `brain_record { type: "account", action: "set",
+    data: { platform, account, fields: { brand, purpose } } }` (check the account first, e.g.
+    its profile, instead of guessing);
+  - brand details and facts about the user → `brain_record { type: "brand" | "profile" }`;
+  - what was uploaded where, and what is still to upload → `brain_content` (stage idea/made/
+    scheduled/live);
+  - a pattern backed by numbers ("pins with X get 3x saves") → `brain_learning { action: "record" }`
+    with evidence.
+  Saved values are current at once. When something turns out wrong or stale, correct it
+  yourself: save the right value (the old one stays in the history), or retire the learning
+  with `brain_learning { action: "update", data: { id, status: "retired" } }`.
 - A calendar item or a thing that waits on the user → `brain_record { type: "task" }`
   (`state: "waiting"`, `waitingOn: "user approval"`).
 - To answer "what did we do on …" use `brain_activity`, not memory.
