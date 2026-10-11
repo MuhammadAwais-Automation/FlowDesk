@@ -194,7 +194,7 @@ The user opens Claude there for day-to-day work.
 | P3 | Ledger | Event hook in the gateway, backfill, `brain_activity` | "What did we do on TikTok Account 2 this week" answered from data |
 | P4 | Background jobs + Inbox | `jobs_*` tools, recipes for radar / trends / niche / Reddit / metrics, monitors, Inbox, agent packets | A radar job started in one session is picked up from the Inbox in the next |
 | P5 | Content life path + numbers | Content ids threaded through ChatGPT / Flow / upload / post tools, placements, metric snapshots | One pin shows prompt → image → board → saves |
-| P6 | Learnings, calendar, briefs | Learning review, calendar mirror of scheduled posts, morning and weekly brief packets | The weekly brief packet produces proposed learnings the user accepts |
+| P6 | Learnings, calendar, briefs | Learning review, calendar mirror of scheduled posts, morning and weekly brief packets | The weekly brief packet turns into learnings an agent saves, which then appear in every briefing |
 | P7 | Brain UI | Pages in §6 | The user can answer "what happened yesterday" without asking an agent |
 | P8 | Skills + operator kit | Skill audit and new skills; operator folder button; docs | A fresh Claude in the operator folder does a pin task end to end using only `brain_start` + skills |
 
