@@ -20,7 +20,7 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { crc32 } from 'node:zlib'
-import { getTikTokView, unknownTikTokAccount, type TikTokResult } from './tiktok'
+import { getTikTokView, SCHEDULE_UNSUPPORTED, unknownTikTokAccount, type TikTokResult } from './tiktok'
 
 export interface VodToken {
   access_key_id: string
@@ -152,6 +152,9 @@ export async function tkApiUploadVideo(opts: {
   // Checked before anything is uploaded, so a bad time costs nothing.
   const schedule = checkSchedule(opts.scheduleAt, privacy)
   if (schedule.error) return { ok: false, error: schedule.error, steps }
+  // schedule_time was never captured from Studio; TikTok answers it with
+  // status 5 "Invalid parameters" after the upload (report 2026-10-12).
+  if (schedule.atSeconds) return { ok: false, error: SCHEDULE_UNSUPPORTED, steps }
   try {
     const file = await readFile(opts.filePath)
     const view = await getTikTokView(opts.account)

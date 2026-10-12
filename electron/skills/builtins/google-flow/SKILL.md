@@ -131,7 +131,8 @@ gentle ripples").
 |---|---|---|
 | `"…" is a model family, not a generation key` | Wrong `modelKey` | Use `verifiedModelKeys` |
 | `Google Flow answered but carried no … result` with `[5]` | Flow rejected the request (bad key or ids) | Check `modelKey`, `projectId`, `mediaId` belong together |
-| `media … was not found on this account` | Wrong id or another account's media | Pass `account`, or find it with `flow_list_project_media` |
+| `media … was not found on this account` | Wrong id or another account's media; right after an `UNUSUAL_ACTIVITY` error it means Flow silently dropped the job (credits refunded) | Pass `account`, or find it with `flow_list_project_media`; if dropped, see the next row |
+| `ErrorInfo PUBLIC_ERROR_UNUSUAL_ACTIVITY` | Google's abuse check flagged the account (seen after ~5 videos in a row) | Stop generating on that account for several hours; do not switch accounts to keep a batch going (they get flagged too). Tell the user. |
 | `unknown Google account "…"` | `account` matched no signed-in account exactly (no partial matches) | Use an email or `partition` from `flow_accounts` |
 | `is not a valid Google Flow id` | An id with characters other than letters, digits, `-`, `_` | Copy the id from a listing |
 | `could not mint a reCAPTCHA token` | Flow page not ready / signed out | Retry; check `flow_accounts` shows `signedIn: true` |

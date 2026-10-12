@@ -1037,7 +1037,7 @@ server.tool(
     filePath: z.string().min(1).describe('Absolute path to a local .mp4 file.'),
     caption: z.string().optional().describe('Post caption.'),
     privacy: z.enum(['private', 'friends', 'public']).optional().describe('Defaults to private. Scheduling needs friends or public.'),
-    scheduleAt: z.string().optional().describe('Publish later: ISO date-time 15 minutes to 10 days ahead, e.g. "2026-09-30T18:00:00+05:00". Not allowed with private.'),
+    scheduleAt: z.string().optional().describe('NOT SUPPORTED YET: TikTok rejects the schedule request, so any scheduleAt is refused before upload. Post at the planned time instead.'),
     account: TIKTOK_ACCOUNT,
   },
   { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -1067,7 +1067,7 @@ server.tool(
 
 server.tool(
   'tiktok_edit_video_caption',
-  'Edit the caption of one of your own TikTok videos. Returns ok only when the page confirms the save.',
+  'Edit the caption of one of your own TikTok videos. Returns ok only when the post list shows the new caption; a video still processing can refuse edits.',
   {
     videoId: z.string().min(1).describe('Numeric TikTok video id.'),
     caption: z.string().min(1).describe('New caption text.'),
@@ -1733,11 +1733,11 @@ server.tool(
 
 server.tool(
   'tiktok_upload_video',
-  'Put a local video into the TikTok Studio upload form with its caption (Studio UI). Does not post: tiktok_submit_post publishes it. Prefer tiktok_api_upload_video, which posts over the API and confirms with an item id. Needs the go-ahead of the user.',
+  'Put a local video into the TikTok Studio upload form with its caption (Studio UI). Does not post: tiktok_submit_post publishes it. ok only when Studio shows the caption (status CAPTION_NOT_SET otherwise: do not submit). Prefer tiktok_api_upload_video, which posts over the API and confirms with an item id. Needs the go-ahead of the user.',
   {
     videoFilePath: z.string().min(1).describe('Absolute local path to the MP4 video file to upload.'),
     caption: z.string().min(1).describe('Full video caption including description and hashtags (e.g. "#alphapaws #gymcat").'),
-    scheduleTime: z.string().optional().describe('Future ISO date/time string (e.g. "2026-09-24T18:00:00") to schedule the video on TikTok Studio instead of posting immediately.'),
+    scheduleTime: z.string().optional().describe('NOT SUPPORTED: the Studio form never received it and the video went public at once, so any scheduleTime is refused.'),
     allowComment: z.boolean().optional().describe('Whether to allow comments on the video (defaults to true).'),
     allowDuet: z.boolean().optional().describe('Whether to allow Duet and Stitch reuse (defaults to true).'),
     account: TIKTOK_ACCOUNT,

@@ -101,7 +101,9 @@ user to click Allow in the FlowDesk app and fail with "needs approval" otherwise
 
 ## Limits
 - Feed/search/outlier (page versions) return at most 50 items; API search pages with `offset`.
-- `scheduleAt` for uploads: 15 minutes to 10 days ahead, and not with `privacy: "private"`.
+- Scheduling does not work yet: `scheduleAt` / `scheduleTime` are refused before anything uploads. Post at the planned time instead (or upload private and let the user publish).
+- `tiktok_upload_video` sets the caption after the upload finishes and reads it back; `CAPTION_NOT_SET` means do not call `tiktok_submit_post`, which also refuses a mismatched caption.
+- `tiktok_edit_video_caption` is ok only when the post list shows the new caption; a fresh video still processing can refuse edits, so retry later.
 - `tiktok_delete_all_videos` limit 1-200 (default 100), 2.5 s between deletes.
 - Warmup scroll: 10-600 s. It is account-warming browsing; keep it short and infrequent.
 

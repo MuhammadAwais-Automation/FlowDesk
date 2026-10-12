@@ -269,6 +269,26 @@ export async function tkEval(script: string, account?: string | number): Promise
   return callScript(script, 15000, account)
 }
 
+export const SCHEDULE_UNSUPPORTED = 'scheduling TikTok posts is not supported yet: TikTok rejected the schedule request, and the Studio form posted at once. Nothing was uploaded. Upload as private now and let the user publish, or post at the planned time.'
+
+/** Caption each account's Studio form should carry, from tiktok_upload_video. */
+const pendingCaptions = new Map<string, string>()
+
+const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+/** Studio may append its own hashtags or spacing; the given caption must lead. */
+export function captionMatches(shown: string, want: string): boolean {
+  const w = squash(want)
+  return !w || squash(shown).startsWith(w)
+}
+
+async function readStudioCaption(wc: Electron.WebContents): Promise<string> {
+  return String(await wc.executeJavaScript(`(() => {
+    const editor = document.querySelector('.notranslate.public-DraftEditor-content[contenteditable="true"], [contenteditable="true"]')
+    return editor ? editor.innerText : ''
+  })()`) ?? '')
+}
+
 export async function tkUploadVideo(options: {
   videoFilePath: string
   caption: string
@@ -281,6 +301,10 @@ export async function tkUploadVideo(options: {
   if (!filePath) return { ok: false, error: 'refusing to upload without a video file path' }
   const resolved = resolveTikTokPartition(options.account)
   if (!resolved) return unknownTikTokAccount(options.account) as TikTokResult
+  // The Studio form never got the time: a "scheduled" upload went public at once (report 2026-10-12).
+  if (options.scheduleTime !== undefined && options.scheduleTime !== null && options.scheduleTime !== '') {
+    return { ok: false, error: SCHEDULE_UNSUPPORTED }
+  }
 
   let bytes: Buffer
   try {
@@ -351,7 +375,28 @@ export async function tkUploadVideo(options: {
     await new Promise(r => setTimeout(r, 500))
   }
 
-  // 3. Set caption safely via CDP Input.insertText (works in background without OS focus)
+  // 3. Wait for the upload first: Studio fills the caption with the file name
+  // when the upload finishes, overwriting anything typed before (report 2026-10-12).
+  const pollStart = Date.now()
+  let postReady = false
+  while (Date.now() - pollStart < 90000) {
+    const uploadStatus = await view.webContents.executeJavaScript(`(() => {
+      const postBtn = document.querySelector('button[data-e2e="post_video_button"]')
+      const body = document.body ? document.body.innerText : ''
+      const isUploaded = body.includes('Uploaded（') || body.includes('Uploaded(') || body.includes('100%')
+      const isReady = Boolean(postBtn && !postBtn.disabled && postBtn.getAttribute('aria-disabled') !== 'true')
+      return { isUploaded, isReady }
+    })()`)
+
+    if (uploadStatus.isReady || uploadStatus.isUploaded) {
+      postReady = true
+      break
+    }
+    await new Promise(r => setTimeout(r, 1500))
+  }
+  if (postReady) await new Promise(r => setTimeout(r, 1500))
+
+  // 4. Set caption safely via CDP Input.insertText (works in background without OS focus)
   if (editorReady && options.caption) {
     let typedViaCdp = false
     try {
@@ -389,23 +434,17 @@ export async function tkUploadVideo(options: {
     }
   }
 
-  // 4. Poll until video completes uploading to ByteDance servers
-  const pollStart = Date.now()
-  let postReady = false
-  while (Date.now() - pollStart < 90000) {
-    const uploadStatus = await view.webContents.executeJavaScript(`(() => {
-      const postBtn = document.querySelector('button[data-e2e="post_video_button"]')
-      const body = document.body ? document.body.innerText : ''
-      const isUploaded = body.includes('Uploaded（') || body.includes('Uploaded(') || body.includes('100%')
-      const isReady = Boolean(postBtn && !postBtn.disabled && postBtn.getAttribute('aria-disabled') !== 'true')
-      return { isUploaded, isReady }
-    })()`)
-
-    if (uploadStatus.isReady || uploadStatus.isUploaded) {
-      postReady = true
-      break
+  // 5. Read the caption back; tiktok_submit_post refuses while it differs.
+  const caption = String(options.caption ?? '').trim()
+  pendingCaptions.set(resolved.tabId, caption)
+  const shown = await readStudioCaption(view.webContents)
+  if (caption && !captionMatches(shown, caption)) {
+    return {
+      ok: false,
+      account: resolved.tabId,
+      error: 'video is in the Studio form but the caption did not stick (Studio shows: ' + JSON.stringify(shown.slice(0, 80)) + '). Do not call tiktok_submit_post; run tiktok_upload_video again.',
+      status: 'CAPTION_NOT_SET',
     }
-    await new Promise(r => setTimeout(r, 1500))
   }
 
   return {
@@ -424,6 +463,15 @@ export async function tkSubmitPost(account?: string | number): Promise<TikTokRes
   const resolved = resolveTikTokPartition(account)
   if (!resolved) return unknownTikTokAccount(account) as TikTokResult
   const view = await getTikTokView(account)
+
+  // Never post a video whose caption Studio replaced (e.g. with the file name).
+  const want = pendingCaptions.get(resolved.tabId)
+  if (want) {
+    const shown = await readStudioCaption(view.webContents)
+    if (!captionMatches(shown, want)) {
+      return { ok: false, account: resolved.tabId, error: 'not posted: the Studio caption is ' + JSON.stringify(shown.slice(0, 80)) + ', not the caption given to tiktok_upload_video. Run tiktok_upload_video again.' }
+    }
+  }
 
   // 1. Locate Post button and calculate coordinates
   const btnInfo = await view.webContents.executeJavaScript(`(() => {
@@ -488,6 +536,7 @@ export async function tkSubmitPost(account?: string | number): Promise<TikTokRes
     })()`)
 
     if (res.isContent || res.isSuccess) {
+      pendingCaptions.delete(resolved.tabId)
       return { ok: true, submitted: true, account: resolved.tabId, message: 'Video submitted to TikTok Studio successfully', url: res.url }
     }
   }
@@ -860,7 +909,25 @@ export async function tkEditVideoCaption(options: {
         return { ok: false, error: String(e && e.message || e) }
       }
     })()`) as TikTokResult
-    return { ...result, videoId: options.videoId, account: resolved.tabId }
+    if (!result.ok) return { ...result, videoId: options.videoId, account: resolved.tabId }
+    // TikTok answered ok yet kept the old caption on a fresh upload (report
+    // 2026-10-12), so ok means the post list shows the new caption.
+    let now: string | undefined
+    for (let i = 0; i < 3; i++) {
+      await new Promise(r => setTimeout(r, 2000))
+      const list = await view.webContents.executeJavaScript(tiktokStudioItemsScript()) as TikTokResult
+      const post = (Array.isArray(list.posts) ? list.posts as Array<{ id?: string; caption?: string }> : []).find(p => String(p.id) === String(options.videoId))
+      now = post?.caption
+      if (now !== undefined && captionMatches(now, caption)) return { ok: true, edited: true, verified: true, via: 'api', videoId: options.videoId, account: resolved.tabId }
+    }
+    return {
+      ok: false,
+      videoId: options.videoId,
+      account: resolved.tabId,
+      error: now === undefined
+        ? 'TikTok accepted the edit but the video is not in the post list, so the caption could not be checked'
+        : 'TikTok accepted the edit but the caption did not change (still ' + JSON.stringify(now.slice(0, 80)) + '). A video still processing can refuse edits; try again later.',
+    }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e), account: resolved.tabId }
   }

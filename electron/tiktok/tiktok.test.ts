@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as sessions from '../sessions'
 import {
+  captionMatches,
   getActiveTikTokAccount,
+  SCHEDULE_UNSUPPORTED,
   resolveTikTokAccount,
   resolveTikTokPartition,
   setActiveTikTokAccount,
@@ -238,5 +240,22 @@ describe('TikTok Multi-Account & Deletion Engine', () => {
       expect(res.ok).toBe(false)
       expect(res.error).toContain('without a video file path')
     })
+
+    it('refuses to schedule instead of posting at once, before anything uploads', async () => {
+      const later = new Date(Date.now() + 2 * 24 * 3600_000).toISOString()
+      const studio = await tkUploadVideo({ videoFilePath: 'C:/clip.mp4', caption: 'x', scheduleTime: later, account: '2' })
+      const api = await tkApiUploadVideo({ filePath: 'C:/clip.mp4', privacy: 'public', scheduleAt: later, account: '2' })
+      for (const res of [studio, api]) {
+        expect(res.ok).toBe(false)
+        expect(res.error).toBe(SCHEDULE_UNSUPPORTED)
+      }
+      expect(sessions.getViewById).not.toHaveBeenCalled()
+    })
+  })
+
+  it('accepts a Studio caption only when it starts with the given one', () => {
+    expect(captionMatches('Cat gym day #alphapaws  #fyp', 'Cat gym day #alphapaws')).toBe(true)
+    expect(captionMatches('clip_0412.mp4', 'Cat gym day #alphapaws')).toBe(false)
+    expect(captionMatches('', 'Cat gym day')).toBe(false)
   })
 })
