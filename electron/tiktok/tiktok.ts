@@ -6,7 +6,7 @@
  * video performance inspection without requiring login.
  */
 
-import { readFile } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { clipboard, type WebContents } from 'electron'
 import { ensureBackgroundView, getActiveView, getViewById, showView } from '../sessions'
@@ -18,7 +18,6 @@ import {
   tiktokVideoDetailScript,
   tiktokSuggestScript,
   tiktokOutlierScript,
-  tiktokUploadVideoScript,
   tiktokApiSearchScript,
   tiktokApiCreatorFeedScript,
   tiktokApiOutlierScript,
@@ -86,9 +85,26 @@ export async function getTikTokView(account?: string | number): Promise<{ webCon
   return bg
 }
 
+/**
+ * Views holding a video in the Studio upload form, until tiktok_submit_post or
+ * HOLD_MS. Background work (radar, profile reads) used to navigate the same
+ * view to /explore seconds after the upload, losing the video and its caption.
+ */
+const uploadHolds = new Map<number, number>()
+const HOLD_MS = 20 * 60_000
+export const UPLOAD_BUSY = 'this TikTok account has a video waiting in the Studio upload form: call tiktok_submit_post (or tiktok_upload_video again) before using the account for anything else'
+
+function holdsUpload(webContents: WebContents): boolean {
+  const until = uploadHolds.get(webContents.id)
+  if (until && until > Date.now()) return true
+  uploadHolds.delete(webContents.id)
+  return false
+}
+
 async function navigateAndWait(webContents: WebContents, url: string, minWaitMs = 1000, maxWaitMs = 4000): Promise<void> {
   const currentUrl = webContents.getURL()
   if (currentUrl === url) return
+  if (holdsUpload(webContents)) throw new Error(UPLOAD_BUSY)
 
   void webContents.loadURL(url).catch(() => {})
   await new Promise<void>(resolve => {
@@ -269,8 +285,6 @@ export async function tkEval(script: string, account?: string | number): Promise
   return callScript(script, 15000, account)
 }
 
-export const SCHEDULE_UNSUPPORTED = 'scheduling TikTok posts is not supported yet: TikTok rejected the schedule request, and the Studio form posted at once. Nothing was uploaded. Upload as private now and let the user publish, or post at the planned time.'
-
 /** Caption each account's Studio form should carry, from tiktok_upload_video. */
 const pendingCaptions = new Map<string, string>()
 
@@ -301,28 +315,61 @@ export async function tkUploadVideo(options: {
   if (!filePath) return { ok: false, error: 'refusing to upload without a video file path' }
   const resolved = resolveTikTokPartition(options.account)
   if (!resolved) return unknownTikTokAccount(options.account) as TikTokResult
-  // The Studio form never got the time: a "scheduled" upload went public at once (report 2026-10-12).
+  // The Studio form never got the time and a "scheduled" upload went public at
+  // once (report 2026-10-12): a schedule goes over the API, which posts the
+  // video for that time in one step and confirms it with an item id.
   if (options.scheduleTime !== undefined && options.scheduleTime !== null && options.scheduleTime !== '') {
-    return { ok: false, error: SCHEDULE_UNSUPPORTED }
+    const { tkApiUploadVideo } = await import('./tiktokUpload')
+    const scheduled = await tkApiUploadVideo({ filePath, caption: options.caption, privacy: 'public', scheduleAt: options.scheduleTime, account: options.account })
+    return scheduled.ok ? { ...scheduled, note: 'scheduled over the API in one step; do not call tiktok_submit_post' } : scheduled
   }
 
-  let bytes: Buffer
   try {
-    bytes = await readFile(filePath)
+    await stat(filePath)
   } catch (e) {
     return { ok: false, error: `could not read video file ${filePath}: ${e instanceof Error ? e.message : String(e)}` }
   }
 
-  const base64 = bytes.toString('base64')
   const fileName = basename(filePath)
   const view = await getTikTokView(options.account)
+  // A new upload replaces whatever waited in the form before.
+  uploadHolds.delete(view.webContents.id)
 
-  if (!view.webContents.getURL().includes('/tiktokstudio/upload')) {
-    await navigateAndWait(view.webContents, 'https://www.tiktok.com/tiktokstudio/upload')
+  const UPLOAD_URL = 'https://www.tiktok.com/tiktokstudio/upload'
+  const onUpload = view.webContents.getURL().includes('/tiktokstudio/upload')
+  const formEmpty = onUpload && await view.webContents.executeJavaScript(`Boolean(document.querySelector('input[type="file"]'))`).catch(() => false)
+  if (!onUpload) {
+    await navigateAndWait(view.webContents, UPLOAD_URL)
+  } else if (!formEmpty) {
+    // An earlier video still fills the form (no file picker): start a fresh one.
+    // Studio's "Leave site?" (beforeunload) would block the reload; accept it.
+    view.webContents.once('will-prevent-unload', e => e.preventDefault())
+    void view.webContents.loadURL(UPLOAD_URL).catch(() => {})
+    await new Promise(r => setTimeout(r, 2500))
   }
+  // Held from here on, so background work cannot leave the page meanwhile.
+  uploadHolds.set(view.webContents.id, Date.now() + HOLD_MS)
 
-  // 1. Inject video file into file input via native CDP (instant, zero memory limits)
-  let injectedViaCdp = false
+  // 1. The file input mounts after the Studio app boots, often after
+  // did-finish-load; injecting before it existed sent the call down a script
+  // fallback that threw "Script failed to execute" (report 2026-10-12).
+  const inputDeadline = Date.now() + 30_000
+  let hasInput = false
+  let reloads = 0
+  while (Date.now() < inputDeadline) {
+    // A navigation that slipped in before the hold took the page away.
+    if (!view.webContents.getURL().includes('/tiktokstudio/upload') && reloads < 2) {
+      reloads++
+      void view.webContents.loadURL(UPLOAD_URL).catch(() => {})
+      await new Promise(r => setTimeout(r, 2500))
+    }
+    hasInput = await view.webContents.executeJavaScript(`Boolean(document.querySelector('input[type="file"]'))`).catch(() => false)
+    if (hasInput) break
+    await new Promise(r => setTimeout(r, 500))
+  }
+  if (!hasInput) uploadHolds.delete(view.webContents.id)
+  if (!hasInput) return { ok: false, account: resolved.tabId, error: 'the TikTok Studio upload page showed no file picker within 25 s (signed out, or Studio is down?)' }
+
   try {
     const wasAttached = view.webContents.debugger.isAttached()
     if (!wasAttached) view.webContents.debugger.attach('1.3')
@@ -332,29 +379,16 @@ export async function tkUploadVideo(options: {
       nodeId: doc.root.nodeId,
       selector: 'input[type="file"]',
     })) as { nodeId: number }
-    if (node && node.nodeId) {
-      await view.webContents.debugger.sendCommand('DOM.setFileInputFiles', {
-        files: [filePath],
-        nodeId: node.nodeId,
-      })
-      injectedViaCdp = true
-    }
+    if (!node?.nodeId) { uploadHolds.delete(view.webContents.id); return { ok: false, account: resolved.tabId, error: 'the Studio file picker disappeared before the video could be added' } }
+    await view.webContents.debugger.sendCommand('DOM.setFileInputFiles', { files: [filePath], nodeId: node.nodeId })
     if (!wasAttached) {
       try { view.webContents.debugger.detach() } catch {}
     }
-  } catch (cdpErr) {
-    console.warn('[FlowDesk TikTok] CDP file input failed, falling back to script:', cdpErr)
+  } catch (e) {
+    uploadHolds.delete(view.webContents.id)
+    return { ok: false, account: resolved.tabId, error: 'could not hand the video to the Studio file picker: ' + (e instanceof Error ? e.message : String(e)) }
   }
-
-  if (!injectedViaCdp) {
-    const script = tiktokUploadVideoScript(base64, fileName, options.caption, {
-      allowComment: options.allowComment,
-      allowDuet: options.allowDuet,
-      scheduleTime: options.scheduleTime,
-    })
-    const injectResult = await callScript(script, 30000, options.account)
-    if (!injectResult.ok) return injectResult
-  }
+  uploadHolds.set(view.webContents.id, Date.now() + HOLD_MS)
 
   // 2. Wait up to 15s for the Draft.js editor to mount
   let editorReady = false
@@ -397,7 +431,7 @@ export async function tkUploadVideo(options: {
   if (postReady) await new Promise(r => setTimeout(r, 1500))
 
   // 4. Set caption safely via CDP Input.insertText (works in background without OS focus)
-  if (editorReady && options.caption) {
+  const typeCaption = async (text: string) => {
     let typedViaCdp = false
     try {
       const wasAttached = view.webContents.debugger.isAttached()
@@ -413,7 +447,16 @@ export async function tkUploadVideo(options: {
           sel.addRange(range)
         }
       })()`)
-      await view.webContents.debugger.sendCommand('Input.insertText', { text: options.caption })
+      // Studio prefills the file name; a DOM selection alone did not replace it
+      // (caption came out "<file name><caption>"), so clear with the keyboard.
+      const key = (type: string, k: string, code: string, vk: number, modifiers = 0) =>
+        view.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type, key: k, code, windowsVirtualKeyCode: vk, modifiers })
+      await key('rawKeyDown', 'a', 'KeyA', 65, 2)
+      await key('keyUp', 'a', 'KeyA', 65, 2)
+      await key('rawKeyDown', 'Backspace', 'Backspace', 8)
+      await key('keyUp', 'Backspace', 'Backspace', 8)
+      await new Promise(r => setTimeout(r, 200))
+      await view.webContents.debugger.sendCommand('Input.insertText', { text })
       typedViaCdp = true
       if (!wasAttached) {
         try { view.webContents.debugger.detach() } catch {}
@@ -425,7 +468,7 @@ export async function tkUploadVideo(options: {
     if (!typedViaCdp) {
       try {
         view.webContents.selectAll()
-        clipboard.writeText(options.caption)
+        clipboard.writeText(text)
         view.webContents.paste()
         await new Promise(r => setTimeout(r, 600))
       } catch {
@@ -434,11 +477,18 @@ export async function tkUploadVideo(options: {
     }
   }
 
-  // 5. Read the caption back; tiktok_submit_post refuses while it differs.
+  // 5. Type, then read it back; Studio sometimes writes the file name in
+  // after the caption was typed, so retry. tiktok_submit_post refuses while it differs.
   const caption = String(options.caption ?? '').trim()
   pendingCaptions.set(resolved.tabId, caption)
-  const shown = await readStudioCaption(view.webContents)
+  let shown = await readStudioCaption(view.webContents)
+  for (let attempt = 0; editorReady && caption && !captionMatches(shown, caption) && attempt < 3; attempt++) {
+    await typeCaption(options.caption)
+    await new Promise(r => setTimeout(r, 1500))
+    shown = await readStudioCaption(view.webContents)
+  }
   if (caption && !captionMatches(shown, caption)) {
+    uploadHolds.delete(view.webContents.id)
     return {
       ok: false,
       account: resolved.tabId,
@@ -537,6 +587,7 @@ export async function tkSubmitPost(account?: string | number): Promise<TikTokRes
 
     if (res.isContent || res.isSuccess) {
       pendingCaptions.delete(resolved.tabId)
+      uploadHolds.delete(view.webContents.id)
       return { ok: true, submitted: true, account: resolved.tabId, message: 'Video submitted to TikTok Studio successfully', url: res.url }
     }
   }
@@ -647,6 +698,7 @@ export async function tkListPosts(account?: string | number): Promise<TikTokResu
   try {
     const view = await getTikTokView(account)
     if (!/tiktok\.com\/tiktokstudio/.test(view.webContents.getURL())) {
+      if (holdsUpload(view.webContents)) return { ok: false, error: UPLOAD_BUSY, account: resolved.tabId }
       await view.webContents.loadURL('https://www.tiktok.com/tiktokstudio/content')
       await new Promise(r => setTimeout(r, 2500)) // signing SDK loads after did-finish-load
     }
@@ -889,6 +941,7 @@ export async function tkEditVideoCaption(options: {
   try {
     const view = await getTikTokView(options.account)
     if (!/tiktok\.com\/tiktokstudio/.test(view.webContents.getURL())) {
+      if (holdsUpload(view.webContents)) return { ok: false, error: UPLOAD_BUSY, account: resolved.tabId }
       await view.webContents.loadURL('https://www.tiktok.com/tiktokstudio/content')
       await new Promise(r => setTimeout(r, 2500))
     }

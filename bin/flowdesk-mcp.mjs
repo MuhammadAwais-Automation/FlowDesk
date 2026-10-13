@@ -1037,7 +1037,7 @@ server.tool(
     filePath: z.string().min(1).describe('Absolute path to a local .mp4 file.'),
     caption: z.string().optional().describe('Post caption.'),
     privacy: z.enum(['private', 'friends', 'public']).optional().describe('Defaults to private. Scheduling needs friends or public.'),
-    scheduleAt: z.string().optional().describe('NOT SUPPORTED YET: TikTok rejects the schedule request, so any scheduleAt is refused before upload. Post at the planned time instead.'),
+    scheduleAt: z.string().optional().describe('Publish later: ISO date-time 15 minutes to 10 days ahead, e.g. "2026-09-30T18:00:00+05:00" (rounded up to the next 5 minutes, as Studio does). Not with private. The first time an account schedules, TikTok wants "Allow" clicked once in Studio; the error says how.'),
     account: TIKTOK_ACCOUNT,
   },
   { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -1737,7 +1737,7 @@ server.tool(
   {
     videoFilePath: z.string().min(1).describe('Absolute local path to the MP4 video file to upload.'),
     caption: z.string().min(1).describe('Full video caption including description and hashtags (e.g. "#alphapaws #gymcat").'),
-    scheduleTime: z.string().optional().describe('NOT SUPPORTED: the Studio form never received it and the video went public at once, so any scheduleTime is refused.'),
+    scheduleTime: z.string().optional().describe('Schedule instead of posting now: the video is then scheduled over the API in one step (public, confirmed with an item id) and tiktok_submit_post is not needed. Same rules as scheduleAt of tiktok_api_upload_video.'),
     allowComment: z.boolean().optional().describe('Whether to allow comments on the video (defaults to true).'),
     allowDuet: z.boolean().optional().describe('Whether to allow Duet and Stitch reuse (defaults to true).'),
     account: TIKTOK_ACCOUNT,

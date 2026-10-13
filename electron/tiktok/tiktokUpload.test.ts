@@ -40,4 +40,19 @@ describe('TikTok API upload', () => {
     expect(checkSchedule('2026-09-28T01:00:00Z', 'private', now).error).toMatch(/Only you/)
     expect(checkSchedule('not a date', 'public', now).error).toMatch(/not a date/)
   })
+
+  it('rounds a schedule up to the next 5 minutes, as the Studio picker does', () => {
+    const now = Date.parse('2026-09-27T23:00:00Z')
+    expect(checkSchedule('2026-09-28T01:02:30Z', 'public', now)).toEqual({ atSeconds: Date.parse('2026-09-28T01:05:00Z') / 1000 })
+  })
+
+  it('posts a schedule the way Studio does: post_type 0 and schedule_time in seconds', () => {
+    const at = Date.parse('2026-09-28T01:05:00Z') / 1000
+    const scheduled = JSON.parse(publishBody('v0', 'cap', 'public', at))
+    expect(scheduled.post_common_info.post_type).toBe(0)
+    expect(scheduled.feature_common_info_list[0].schedule_time).toBe(at)
+    const now = JSON.parse(publishBody('v0', 'cap', 'public'))
+    expect(now.post_common_info.post_type).toBe(3)
+    expect(now.feature_common_info_list[0].schedule_time).toBeUndefined()
+  })
 })

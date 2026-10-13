@@ -61,7 +61,7 @@ Uploads and publishes a local video file to TikTok over the web API (no Studio U
   - `filePath` (string, required): Absolute local path to an .mp4 file.
   - `caption` (string, optional): Full caption text with description and hashtags.
   - `privacy` (string, optional): `'private'` (default), `'friends'`, or `'public'`.
-  - `scheduleAt` (string, optional): NOT SUPPORTED YET — TikTok rejects the schedule request, so any value is refused before upload. Post at the planned time instead.
+  - `scheduleAt` (string, optional): ISO date-time 15 minutes to 10 days ahead, rounded up to the next 5 minutes. Not with `privacy: 'private'`. First schedule on an account needs "Allow" clicked once in Studio; the error explains it.
   - `account` (string, optional): Target account ID (e.g. `'1'`, `'2'`). Defaults to active account.
 - **Success shape**:
   ```json
@@ -162,7 +162,7 @@ Deletes an owned TikTok video over the authenticated web API using ticket-guard 
    - Verify that the target video file exists on disk and is a valid .mp4 file.
    - Default privacy to `'private'`. If `'public'` or `'friends'` or scheduling is requested, confirm user approval.
 2. **Execute upload**:
-   - Call `tiktok_api_upload_video` with `filePath`, `caption`, `privacy` (no `scheduleAt`: scheduling is not supported yet).
+   - Call `tiktok_api_upload_video` with `filePath`, `caption`, `privacy`, and optional `scheduleAt`.
    - Inspect the response. Ensure `res.ok === true` and verify `res.itemId` is returned.
 3. **Verify in catalog**:
    - Call `tiktok_list_posts({ account })`.

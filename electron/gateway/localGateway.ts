@@ -716,13 +716,39 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'dev.capture': async (p) => {
     if (app.isPackaged) throw new Error('dev.capture is only available in development')
     const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && /^(http:\/\/localhost:\d+|file:)/.test(w.webContents.getURL()) && !w.webContents.getURL().includes('hud'))
-    if (!win) throw new Error('FlowDesk window not found')
-    if (typeof p.script === 'string' && p.script) await win.webContents.executeJavaScript(p.script)
+    // `tab` captures that site view instead of FlowDesk's own window.
+    const wc = typeof p.tab === 'string' && p.tab ? getViewById(p.tab)?.webContents : win?.webContents
+    if (!wc || wc.isDestroyed()) throw new Error('window or view not found')
+    if (typeof p.script === 'string' && p.script) await wc.executeJavaScript(p.script)
     await new Promise(r => setTimeout(r, typeof p.waitMs === 'number' ? Math.min(p.waitMs, 15_000) : 1500))
-    const image = await win.webContents.capturePage(undefined, { stayHidden: true })
+    const image = await wc.capturePage(undefined, { stayHidden: true })
     const file = join(app.getPath('temp'), `flowdesk-capture-${Date.now()}.png`)
     await writeFile(file, image.toPNG())
     return { ok: true, file, size: image.getSize() }
+  },
+  // Dev only: a trusted mouse click on the first element in view `tab` matching
+  // `selector` (and `text`, if given) — for capturing what a site's own UI sends
+  // when it ignores script clicks. Never in the installed app.
+  'dev.click': async (p) => {
+    if (app.isPackaged) throw new Error('dev.click is only available in development')
+    const wc = getViewById(String(p.tab || ''))?.webContents
+    if (!wc || wc.isDestroyed()) return { ok: false, error: `no open view for "${p.tab}"` }
+    const at = await wc.executeJavaScript(`(() => {
+      const els = Array.from(document.querySelectorAll(${JSON.stringify(String(p.selector || ''))}))
+      const want = ${JSON.stringify(typeof p.text === 'string' ? p.text : '')}
+      const el = els.find(e => !want || (e.innerText || '').trim() === want)
+      if (!el) return null
+      el.scrollIntoView({ block: 'center' })
+      const r = el.getBoundingClientRect()
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+    })()`) as { x: number; y: number } | null
+    if (!at) return { ok: false, error: 'no matching element' }
+    wc.focus()
+    wc.sendInputEvent({ type: 'mouseMove', x: at.x, y: at.y })
+    wc.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: 1 })
+    await new Promise(r => setTimeout(r, 60))
+    wc.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: 1 })
+    return { ok: true, ...at }
   },
   // Searches the JS the view `tab` has loaded for request identifiers (bundleScan.ts).
   'dev.bundleScan': async (p) => {

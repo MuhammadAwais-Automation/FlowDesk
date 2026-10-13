@@ -20,7 +20,7 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { crc32 } from 'node:zlib'
-import { getTikTokView, SCHEDULE_UNSUPPORTED, unknownTikTokAccount, type TikTokResult } from './tiktok'
+import { getTikTokView, unknownTikTokAccount, type TikTokResult } from './tiktok'
 
 export interface VodToken {
   access_key_id: string
@@ -81,6 +81,13 @@ const VISIBILITY: Record<TikTokPrivacy, number> = { public: 0, private: 1, frien
  * Studio only offers scheduling between 15 minutes and 10 days ahead, and
  * not for "Only you" — its privacy picker drops Schedule when that is chosen.
  */
+/**
+ * Studio asks each account once, on its first scheduled post, to "Allow your
+ * video to be saved for scheduled posting" (seen live 2026-10-13); an account
+ * that never allowed it is the likeliest reason TikTok refuses a schedule.
+ */
+export const SCHEDULE_REFUSED = 'TikTok refused the scheduled post. If this account has never scheduled a post, open FlowDesk → Social → TikTok → this account → Studio upload, choose "Schedule" once and click "Allow" on "Allow your video to be saved for scheduled posting?", then try again. Nothing was posted.'
+
 export const SCHEDULE_MIN_MS = 15 * 60_000
 export const SCHEDULE_MAX_MS = 10 * 24 * 60 * 60_000
 
@@ -91,14 +98,21 @@ export function checkSchedule(scheduleAt: string | number | undefined, privacy: 
   if (privacy === 'private') return { error: 'TikTok cannot schedule an "Only you" post — use friends or public' }
   if (ms < now + SCHEDULE_MIN_MS) return { error: 'scheduleAt must be at least 15 minutes from now' }
   if (ms > now + SCHEDULE_MAX_MS) return { error: 'scheduleAt must be within 10 days' }
-  return { atSeconds: Math.floor(ms / 1000) }
+  // Studio's picker sends whole minutes in 5-minute steps, seconds zeroed
+  // (its lZ(time, true) in the upload bundle, probe tks-02); round up to match.
+  const step = 5 * 60_000
+  return { atSeconds: Math.ceil(ms / step) * step / 1000 }
 }
 
 export function publishBody(videoId: string, caption: string, privacy: TikTokPrivacy, scheduleAtSeconds?: number): string {
   return JSON.stringify({
-    post_common_info: { creation_id: randomBytes(15).toString('base64url').slice(0, 21), enter_post_page_from: 8, post_type: 3 },
+    // Studio's own form posts as WEB_POST_TYPE_OLD_WEB (0) with or without a
+    // schedule (probe tks-02); 3 (a project without cloud edit) posts now but
+    // was answered "Invalid parameters" with a schedule. Kept for posting now,
+    // where it is proven.
+    post_common_info: { creation_id: randomBytes(15).toString('base64url').slice(0, 21), enter_post_page_from: 8, post_type: scheduleAtSeconds ? 0 : 3 },
     feature_common_info_list: [{
-      // Unix seconds (probe tks-03); absent = publish now.
+      // Unix seconds, as Studio sends it (probe tks-01/02); absent = publish now.
       ...(scheduleAtSeconds ? { schedule_time: scheduleAtSeconds } : {}),
       geofencing_regions: [],
       playlist_name: '',
@@ -152,9 +166,6 @@ export async function tkApiUploadVideo(opts: {
   // Checked before anything is uploaded, so a bad time costs nothing.
   const schedule = checkSchedule(opts.scheduleAt, privacy)
   if (schedule.error) return { ok: false, error: schedule.error, steps }
-  // schedule_time was never captured from Studio; TikTok answers it with
-  // status 5 "Invalid parameters" after the upload (report 2026-10-12).
-  if (schedule.atSeconds) return { ok: false, error: SCHEDULE_UNSUPPORTED, steps }
   try {
     const file = await readFile(opts.filePath)
     const view = await getTikTokView(opts.account)
@@ -231,6 +242,9 @@ export async function tkApiUploadVideo(opts: {
       try { return { status: r.status, json: JSON.parse(t) } } catch (e) { return { status: r.status, text: t.slice(0, 300) } }`)
     const item = published.json?.single_post_resp_list?.[0]
     if (published.json?.status_code !== 0 || !item?.item_id || item.status_code !== 0) {
+      if (schedule.atSeconds) {
+        return { ok: false, error: SCHEDULE_REFUSED, status: published.status, detail: JSON.stringify(published.json ?? published.text).slice(0, 400), videoId: vid, steps }
+      }
       return { ok: false, error: 'publish not confirmed', status: published.status, detail: JSON.stringify(published.json ?? published.text).slice(0, 400), videoId: vid, steps }
     }
     steps.push('publish')
