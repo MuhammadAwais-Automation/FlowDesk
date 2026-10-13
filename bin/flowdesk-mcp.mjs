@@ -2648,7 +2648,7 @@ server.tool(
 
 server.tool(
   'flow_image_models',
-  'The image models Google Flow offers right now (read off its own settings menu, e.g. Nano Banana Pro, Nano Banana 2 Lite, Nano Banana 2), plus the current model, aspect ratio and count, and the ratios/counts flow_generate_image accepts.',
+  'The image models Google Flow offers right now (read off its own settings menu, e.g. Nano Banana Pro, Nano Banana 2 Lite, Nano Banana 2.1), plus the current settings, and the ratios/counts flow_generate_image accepts.',
   {
     projectId: z.string().min(1).describe('Project ID (flow_list_projects or flow_create_project).'),
     account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\x27s own account, else the default.'),
@@ -2659,7 +2659,7 @@ server.tool(
 
 server.tool(
   'flow_generate_image',
-  'Generate AI images in Google Flow by driving Flow\x27s own page like a person: picks the model, aspect ratio and count in Agent settings, types the prompt, presses Start, and waits (up to 4 min) for the new images in the project. Returns mediaIds and images[{mediaId,imageUrl}]; save each with flow_download_media { mediaUrl: imageUrl }. Images spent no credits in the live test. Flow\x27s agent can still choose a ratio from the prompt, so say the ratio in the prompt too (e.g. "3:4 portrait").',
+  'Generate AI images in Google Flow by driving Flow\x27s own page like a person: sets model, aspect ratio and count in the prompt bar settings (Agent off), attaches any ingredients, types the prompt, presses Start, and waits (up to 4 min) for the new images in the project. Returns mediaIds and images[{mediaId,imageUrl}]; save each with flow_download_media { mediaUrl: imageUrl }. Images spent no credits in the live test. Flow\x27s agent can still choose a ratio from the prompt, so say the ratio in the prompt too (e.g. "3:4 portrait").',
   {
     account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\x27s own account, else the default.'),
     projectId: z.string().min(1).describe('Project ID (flow_list_projects or flow_create_project).'),
@@ -2667,6 +2667,7 @@ server.tool(
     model: z.string().optional().describe('Model name exactly as flow_image_models lists it, e.g. "Nano Banana 2". Omit to keep the current one.'),
     aspectRatio: z.enum(['16:9', '4:3', '1:1', '3:4', '9:16']).optional().describe('Omit to keep the current one.'),
     count: z.number().int().min(1).max(4).optional().describe('Images per prompt (1-4). Omit to keep the current one.'),
+    ingredients: z.array(z.string()).max(7).optional().describe('Reference images: project image mediaIds or absolute local image paths.'),
   },
   { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.uiGenerateImage', args))
@@ -2711,12 +2712,19 @@ server.registerTool(
   'flow_generate_video',
   {
     title: 'Google Flow Video Generator',
-    description: 'Start an AI video from a text prompt in Google Flow (spends credits: 12 for abra_t2v_8s in the live test). Returns at once with mediaId (poll flow_media_status until done, about 30 s to a few minutes) and sceneId (needed by flow_extend_video). Fails over to the next account with credits; the result names the account and projectId used.',
+    description: 'Make a video in Google Flow by driving Flow\'s own page like a person: sets the prompt bar (model, ratio, resolution, length, count), attaches images, types the prompt and presses Start. Returns in seconds with mediaIds once Flow shows the new clips: do other work and poll flow_media_status until each has a videoUrl, then flow_download_media. creditsQuoted is what Flow said it would charge. Images: startFrame/endFrame (Frames) OR up to 7 ingredients (reference images), each a project image mediaId or an absolute local image path (uploaded through Flow\'s own Upload media). If Flow says "unusual activity", that account is parked for 12 h and refused until then (heldUntil): do not retry on it; use another account or wait. One generation at a time per account.',
     inputSchema: {
       account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'),
       projectId: z.string().min(1).describe('Project ID.'),
-      prompt: z.string().min(1).describe('Video scene prompt.'),
-      modelKey: z.string().min(1).describe('A textToVideo key from flow_video_models → verifiedModelKeys (verified: abra_t2v_8s). Family names like veo_3_1_lite are rejected.'),
+      prompt: z.string().min(1).max(8000).describe('Video scene prompt.'),
+      model: z.string().optional().describe('Model name exactly as flow_video_models lists it, e.g. "Veo 3.1 - Fast" or "Omni 1.1 Flash". Omit to keep the one set in Flow.'),
+      aspectRatio: z.enum(['16:9', '9:16']).optional().describe('Omit to keep the current one.'),
+      resolution: z.enum(['360p', '720p']).optional().describe('Omit to keep the current one.'),
+      seconds: z.union([z.literal(4), z.literal(6), z.literal(8), z.literal(10)]).optional().describe('Clip length. Omit to keep the current one.'),
+      count: z.number().int().min(1).max(4).optional().describe('Clips per prompt (1-4); each costs credits. Omit to keep the current one.'),
+      startFrame: z.string().optional().describe('First frame: project image mediaId or absolute local image path (Frames mode).'),
+      endFrame: z.string().optional().describe('Last frame (needs startFrame).'),
+      ingredients: z.array(z.string()).max(7).optional().describe('Reference images (Ingredients mode): project image mediaIds or absolute local image paths. Not together with frames.'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     _meta: {
@@ -2732,12 +2740,16 @@ server.registerTool(
   'flow_generate_video_from_image',
   {
     title: 'Google Flow Image-to-Video Generator',
-    description: 'Start an AI video that animates an image already in the project (from flow_upload_image or flow_generate_image) in Google Flow (spends credits: 10 for veo_3_1_r2v_lite in the live test). Returns mediaId to poll with flow_media_status, and sceneId. Runs on the project\'s own account.',
+    description: 'Animate an image in Google Flow: the image becomes the first frame (Frames mode on Flow\'s own page). Same as flow_generate_video with startFrame. Returns mediaIds to poll with flow_media_status.',
     inputSchema: {
       projectId: z.string().min(1).describe('Project ID that holds the image.'),
-      prompt: z.string().min(1).describe('How the image should animate.'),
-      mediaId: z.string().min(1).describe('Image media ID in the project.'),
-      modelKey: z.string().min(1).describe('An imageToVideo key from flow_video_models → verifiedModelKeys (verified: veo_3_1_r2v_lite). Text-to-video (t2v) keys are rejected.'),
+      prompt: z.string().min(1).max(8000).describe('How the image should animate.'),
+      mediaId: z.string().min(1).describe('Project image mediaId, or an absolute local image path.'),
+      endFrame: z.string().optional().describe('Optional last frame (mediaId or local path).'),
+      model: z.string().optional().describe('Model name exactly as flow_video_models lists it, e.g. "Veo 3.1 - Fast" or "Omni 1.1 Flash". Omit to keep the one set in Flow.'),
+      aspectRatio: z.enum(['16:9', '9:16']).optional().describe('Omit to keep the current one.'),
+      resolution: z.enum(['360p', '720p']).optional().describe('Omit to keep the current one.'),
+      seconds: z.union([z.literal(4), z.literal(6), z.literal(8), z.literal(10)]).optional().describe('Clip length. Omit to keep the current one.'),
       account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -2752,15 +2764,15 @@ server.registerTool(
 
 server.tool(
   'flow_extend_video',
-  'Continue a finished Google Flow video with a new shot (spends credits: 20 in the live test). Returns a new mediaId to poll with flow_media_status; the scene stays the same.',
+  'Not available: Flow\'s current page has no Extend (2026-10-13). Continue a clip with flow_generate_video (startFrame = an image of its last frame), or describe the next shot. Always returns an error.',
   {
-    projectId: z.string().min(1).describe('Project ID.'),
-    prompt: z.string().min(1).describe('What happens next.'),
-    sourceVideoId: z.string().min(1).describe('mediaId of the finished video to continue.'),
-    sceneId: z.string().min(1).describe('sceneId returned by the generate call that made that video.'),
-    account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'),
+    projectId: z.string().optional(),
+    prompt: z.string().optional(),
+    sourceVideoId: z.string().optional(),
+    sceneId: z.string().optional(),
+    account: z.string().optional(),
   },
-  { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  { readOnlyHint: true, openWorldHint: false },
   async (args) => textResult(await callGatewayRpc('flow.extendVideo', args))
 )
 
@@ -2789,8 +2801,11 @@ server.tool(
 
 server.tool(
   'flow_video_models',
-  'Video model keys: verifiedModelKeys (textToVideo, imageToVideo, extend) are the keys proven to generate; families is Flow\'s own list of model families, which the generate calls do NOT accept as modelKey.',
-  { account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the default.'), },
+  'The video models Google Flow offers right now (read off a project\'s own settings menu, e.g. Omni 1.1 Flash, Veo 3.1 - Lite/Fast/Quality), the current settings, the credits Flow quotes for them, and the ratios, resolutions, lengths and counts flow_generate_video accepts.',
+  {
+    projectId: z.string().min(1).describe('Any project ID on the account (flow_list_projects).'),
+    account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the project\'s own account, else the default.'),
+  },
   { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.videoModels', args))
 )

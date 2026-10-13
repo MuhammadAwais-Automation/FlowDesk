@@ -11,6 +11,7 @@ import { app, session, webContents as electronWebContents } from 'electron'
 import type { WebContents } from 'electron'
 import { listViewUrls, ensureBackgroundView } from './sessions'
 import { readLocalImage } from './localImageFile'
+import { holdFlowAccount, UNUSUAL_ACTIVITY } from './flowHolds'
 import {
   createProjectScript, renameProjectScript, deleteProjectScript, listProjectsScript,
   listProjectMediaScript, uploadImageScript, fetchMediaUrlScript,
@@ -582,13 +583,25 @@ export function flowGetCredits(account?: string | null): Promise<FlowResult> {
  * Flow's API, so it runs on whatever Flow page the account already has open
  * rather than navigating it (it used to load /project/<mediaId> on every poll).
  */
+/**
+ * A clip Flow accepted can still fail later with "unusual activity"; the
+ * account that made it is parked then too (flowHolds.ts), not only at submit.
+ */
+function parkIfFlagged(r: FlowResult, mediaId: string, account?: string | null): FlowResult {
+  if (!UNUSUAL_ACTIVITY.test(JSON.stringify(r))) return r
+  const resolved = resolvePartition(mediaId, account)
+  if (!('partition' in resolved) || !resolved.partition) return r
+  const until = holdFlowAccount(resolved.partition, 'a generation failed with unusual activity')
+  return { ...r, heldUntil: until, note: 'Flow flagged this account; FlowDesk parks it and will not generate on it until heldUntil.' }
+}
+
 export async function flowMediaStatus(mediaId: string, account?: string | null): Promise<FlowResult> {
   const id = String(mediaId ?? '').trim()
   if (!id) return { ok: false, error: 'refusing to look up without a mediaId' }
   const badId = flowIdError(id, 'mediaId')
   if (badId) return { ok: false, error: badId }
   // A media id routes to the account that made it, like a project id does.
-  const first = await call(mediaStatusScript(id), { owner: id, account })
+  const first = parkIfFlagged(await call(mediaStatusScript(id), { owner: id, account }), id, account)
   if (first.ok || account || !(first as { notFound?: boolean }).notFound) return first
   // Not on the account it was routed to (an id never seen, or made outside
   // FlowDesk): look on the others; the one that has it becomes its owner.

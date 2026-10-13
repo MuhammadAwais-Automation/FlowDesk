@@ -122,20 +122,15 @@ import { openHudWidget, closeHudWidget, getHudStatus } from '../hudWidget'
 import {
   flowListProjects,
   flowCreateProject,
-  flowGenerateImage,
-  flowGenerateVideo,
-  flowGenerateVideoFromImage,
-  flowExtendVideo,
   flowUploadImage,
   flowDownloadMedia,
-  flowVideoModels,
   flowGetCredits,
   flowMediaStatus,
   flowListProjectMedia,
   flowEval,
   flowAccounts,
 } from '../flow'
-import { flowUiGenerateImage, flowUiImageModels } from '../flowUi'
+import { flowUiGenerate, flowUiGenerateImage, flowUiImageModels, flowUiModels } from '../flowUi'
 import { rehearse } from '../rehearsal'
 import { scanBundles } from '../bundleScan'
 import { runHealth } from '../health/health'
@@ -167,6 +162,7 @@ import {
  */
 /** The optional `account` (email or partition) a Flow call should run on. */
 const acct = (p: Record<string, unknown>) => (typeof p.account === 'string' && p.account ? p.account : null)
+const strList = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map(x => x.trim()) : null)
 
 async function runImageJobs(req: ImageRequest, wait: boolean) {
   const jobs = await enqueueImages(req)
@@ -660,12 +656,13 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'flow.accounts': async () => flowAccounts(),
   'flow.listProjects': async (p) => flowListProjects(acct(p)),
   'flow.createProject': async (p) => flowCreateProject(String(p.title || 'Untitled'), acct(p)),
-  'flow.generateImage': async (p) => flowGenerateImage(
-    String(p.prompt || ''),
-    String(p.projectId || ''),
-    typeof p.imageModel === 'string' ? p.imageModel : undefined,
-    acct(p),
-  ),
+  // Older name (CLI): the same page-driven path as flow.uiGenerateImage.
+  'flow.generateImage': async (p) => flowUiGenerateImage({
+    prompt: String(p.prompt || ''),
+    projectId: String(p.projectId || ''),
+    account: acct(p),
+    aspectRatio: ({ LANDSCAPE: '16:9', PORTRAIT: '9:16', SQUARE: '1:1' } as Record<string, string>)[String(p.aspectRatio)] ?? p.aspectRatio,
+  }),
   // Runs one other RPC while requests matching urlPattern (and method) on the
   // view `tab` (or on every open view showing `url`, so no tab of the site can
   // leak) are recorded and blocked before they leave — see rehearsal.ts.
@@ -767,34 +764,49 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     model: typeof p.model === 'string' ? p.model : null,
     aspectRatio: p.aspectRatio,
     count: p.count,
+    ingredients: strList(p.ingredients),
   }),
-  'flow.generateVideo': async (p) => flowGenerateVideo(
-    String(p.prompt || ''),
-    String(p.projectId || ''),
-    String(p.modelKey || ''),
-    acct(p),
-  ),
-  'flow.generateVideoFromImage': async (p) => flowGenerateVideoFromImage(
-    String(p.prompt || ''),
-    String(p.projectId || ''),
-    String(p.mediaId || ''),
-    String(p.modelKey || ''),
-    acct(p),
-  ),
-  'flow.extendVideo': async (p) => flowExtendVideo(
-    String(p.prompt || ''),
-    String(p.projectId || ''),
-    String(p.sourceVideoId || ''),
-    String(p.sceneId || ''),
-    acct(p),
-  ),
+  // Video through Flow's own prompt bar (flowUi.ts); the direct generate RPCs
+  // are refused with UNUSUAL_ACTIVITY since Flow's build of 2026-09-22.
+  'flow.generateVideo': async (p) => flowUiGenerate({
+    kind: 'video',
+    prompt: String(p.prompt || ''),
+    projectId: String(p.projectId || ''),
+    account: acct(p),
+    model: typeof p.model === 'string' ? p.model : null,
+    aspectRatio: p.aspectRatio,
+    count: p.count,
+    resolution: p.resolution,
+    seconds: p.seconds,
+    startFrame: typeof p.startFrame === 'string' ? p.startFrame : null,
+    endFrame: typeof p.endFrame === 'string' ? p.endFrame : null,
+    ingredients: strList(p.ingredients),
+  }),
+  'flow.generateVideoFromImage': async (p) => flowUiGenerate({
+    kind: 'video',
+    prompt: String(p.prompt || ''),
+    projectId: String(p.projectId || ''),
+    account: acct(p),
+    model: typeof p.model === 'string' ? p.model : null,
+    aspectRatio: p.aspectRatio,
+    resolution: p.resolution,
+    seconds: p.seconds,
+    startFrame: String(p.mediaId || ''),
+    endFrame: typeof p.endFrame === 'string' ? p.endFrame : null,
+  }),
+  'flow.extendVideo': async () => ({
+    ok: false,
+    error: "Flow's current page has no Extend (2026-10-13). Continue a clip with flow_generate_video using startFrame: an image of its last frame, or describe the next shot.",
+  }),
   'flow.uploadImage': async (p) => flowUploadImage(
     String(p.localFilePath || ''),
     String(p.projectId || ''),
     acct(p),
   ),
   'flow.downloadMedia': async (p) => flowDownloadMedia(String(p.mediaUrl || ''), acct(p)),
-  'flow.videoModels': async (p) => flowVideoModels(acct(p)),
+  'flow.videoModels': async (p) => typeof p.projectId === 'string' && p.projectId
+    ? flowUiModels('video', p.projectId, acct(p))
+    : { ok: false, error: "pass projectId: the models are read off that project's page in Flow" },
   'flow.credits': async (p) => flowGetCredits(acct(p)),
   'flow.mediaStatus': async (p) => flowMediaStatus(String(p.mediaId || ''), acct(p)),
   'flow.listProjectMedia': async (p) => flowListProjectMedia(String(p.projectId || ''), acct(p)),
