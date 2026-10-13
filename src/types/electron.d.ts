@@ -5,6 +5,12 @@ import type { KnowledgeGraph, AnswerPack, BrainEntity, EntityMention, EntityMerg
 import type { AtomicSkill, Workflow, WorkflowRun, SkillFilter, WorkflowFilter } from './skills'
 
 /** Settings → Security. Names are canonical (e.g. "tiktok_delete_all_videos"). */
+/** Mirrors electron/updater.ts. */
+export type UpdateStatus =
+  | { state: 'idle' }
+  | { state: 'downloading'; version: string; percent: number }
+  | { state: 'ready'; version: string }
+
 export interface ActionPolicy {
   blocked: string[]
   requireApproval: string[]
@@ -268,6 +274,9 @@ export interface ElectronAPI {
   clearPartitionStorage: (partition: string) => Promise<void>
   tiktokSetActiveAccount?: (account: string | number) => Promise<boolean>
   onTikTokAccountSwitched?: (cb: (accountId: string) => void) => () => void
+  updateStatus?: () => Promise<UpdateStatus>
+  updateInstall?: () => Promise<void>
+  onUpdateStatus?: (cb: (status: UpdateStatus) => void) => () => void
   socialAccounts?: (platform: string) => Promise<SocialAccountsResult>
   socialAddAccount?: (platform: string, label?: string, account?: string, googleAccount?: string) => Promise<{ ok: boolean; account?: SocialAccountRow; error?: string }>
   /** Main asks the renderer to show Social → platform (→ account) instead of a separate login window. */

@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { useThemeStore } from '@/store/useThemeStore'
 import {
   Monitor, Info,
-  Check, Zap, Shield, RefreshCw,
+  Check, Shield, RefreshCw,
 } from 'lucide-react'
 import type { AppSettings } from '@/types/database'
+import logoUrl from '@/assets/flowdesk-logo.png'
 import type { ActionLogEntry, ActionPolicy } from '@/types/electron'
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -258,22 +259,12 @@ function AboutSection() {
     <Card title="About FlowDesk">
       <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{
-            width: 44,
-            height: 44,
-            borderRadius: 12,
-            background: 'var(--accent)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}>
-            <Zap size={20} color="#fff" />
-          </div>
+          <img src={logoUrl} alt="" style={{ width: 44, height: 44 }} draggable={false} />
           <div>
             <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', fontFamily: 'Outfit, sans-serif' }}>
               FlowDesk
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Version 1.0.0</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Version {__APP_VERSION__}</div>
           </div>
         </div>
 

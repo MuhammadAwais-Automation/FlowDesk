@@ -1,10 +1,45 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import {
   Globe, Users,
-  Settings, Zap, Youtube,
+  Settings, Youtube,
   ChevronLeft, ChevronRight, BookOpen, Share2, BrainCircuit, Radar, Workflow, Clapperboard,
 } from 'lucide-react'
 import type { Page } from '@/types/pages'
+import type { UpdateStatus } from '@/types/electron'
+import logoUrl from '@/assets/flowdesk-logo.png'
+
+/** Shows a background update downloading, then a silent "Restart to update". */
+export function UpdatePill({ collapsed }: { collapsed: boolean }) {
+  const [status, setStatus] = useState<UpdateStatus>({ state: 'idle' })
+  useEffect(() => {
+    const api = window.electronAPI
+    api.updateStatus?.().then(setStatus).catch(() => {})
+    return api.onUpdateStatus?.(setStatus)
+  }, [])
+  if (status.state === 'idle') return null
+  if (status.state === 'downloading') {
+    const label = `Update ${status.version} downloading ${status.percent}%`
+    return (
+      <div title={label} className="font-retro-mono text-[10.5px] text-stone-700 px-2.5 py-1.5 rounded-xl bg-[#FAF7F0] border border-[#D6CFC0]">
+        {collapsed ? `${status.percent}%` : label}
+        <div className="mt-1 h-1 rounded bg-[#D6CFC0] overflow-hidden">
+          <div className="h-full bg-[#D97706] transition-all" style={{ width: `${status.percent}%` }} />
+        </div>
+      </div>
+    )
+  }
+  const label = `Restart to update (${status.version})`
+  return (
+    <button
+      type="button"
+      title={label}
+      onClick={() => { void window.electronAPI.updateInstall?.() }}
+      className="font-retro-mono text-[11px] font-bold text-white bg-[#D97706] hover:bg-[#B45309] rounded-xl px-2.5 py-2 text-left"
+    >
+      {collapsed ? '↻' : label}
+    </button>
+  )
+}
 
 const MIN_WIDTH      = 120
 const MAX_WIDTH      = 320   // Task 2: expanded from 280 → 320
@@ -206,9 +241,7 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
           collapsed ? 'justify-center py-4 px-0' : 'justify-start gap-2.5 px-3.5 py-3.5'
         }`}
       >
-        <div className="w-7 h-7 rounded-lg bg-[#D97706] border border-[#B45309] flex items-center justify-center shrink-0 shadow-[1px_1px_0px_0px_rgba(180,83,9,0.3)]">
-          <Zap size={14} className="text-white fill-white" />
-        </div>
+        <img src={logoUrl} alt="" className="w-7 h-7 shrink-0" draggable={false} />
         {!collapsed && (
           <span className="font-retro-mono text-sm font-bold tracking-wider text-stone-900 uppercase truncate">
             FlowDesk
@@ -238,6 +271,7 @@ export default function LeftNav({ current, onChange, onWidthChange }: Props) {
 
       {/* Bottom: Settings + Collapse toggle */}
       <div className="shrink-0 flex flex-col gap-1 p-2 border-t border-[#D6CFC0] bg-[#EBE5D5]">
+        <UpdatePill collapsed={collapsed} />
         <NavButton
           icon={Settings}
           label="Settings"

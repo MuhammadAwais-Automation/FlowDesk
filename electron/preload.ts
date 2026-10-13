@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { UpdateStatus } from './updater'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Store
@@ -150,6 +151,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // TikTok Multi-Account state sync
   tiktokSetActiveAccount: (account: string | number) =>
     ipcRenderer.invoke('tiktok:setActiveAccount', account),
+  // App updates (electron/updater.ts)
+  updateStatus: () => ipcRenderer.invoke('update:getStatus'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (cb: (status: UpdateStatus) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, status: UpdateStatus) => cb(status)
+    ipcRenderer.on('update:status', listener)
+    return () => ipcRenderer.removeListener('update:status', listener)
+  },
+
   onTikTokAccountSwitched: (cb: (accountId: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, accountId: string) => cb(accountId)
     ipcRenderer.on('tiktok:accountSwitched', listener)

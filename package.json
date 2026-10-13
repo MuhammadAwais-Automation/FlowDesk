@@ -1,6 +1,6 @@
 {
   "name": "flowdesk",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Local-first AI creator workstation for prompts, AI tools, social workflows, and multi-account sessions",
   "main": "./out/main/main.js",
   "type": "module",
@@ -27,7 +27,7 @@
   "build": {
     "appId": "com.flowdesk.app",
     "productName": "FlowDesk",
-    "copyright": "Copyright (c) 2025 FlowDesk",
+    "copyright": "Copyright (c) 2026 FlowDesk",
     "directories": {
       "output": "dist",
       "buildResources": "resources"
@@ -72,7 +72,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "FlowDesk Retro Workstation",
+      "shortcutName": "FlowDesk",
       "installerIcon": "resources/icon.ico",
       "uninstallerIcon": "resources/icon.ico",
       "installerHeaderIcon": "resources/icon.ico",
