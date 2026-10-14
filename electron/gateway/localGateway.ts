@@ -726,26 +726,47 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   // Dev only: a trusted mouse click on the first element in view `tab` matching
   // `selector` (and `text`, if given) — for capturing what a site's own UI sends
   // when it ignores script clicks. Never in the installed app.
+  // Fills the Studio schedule form and verifies it, without pressing Schedule.
+  'dev.scheduleDryRun': async (p) => {
+    if (app.isPackaged) throw new Error('dev.scheduleDryRun is only available in development')
+    const { tkScheduleVideo } = await import('../tiktok/tiktokSchedule')
+    return tkScheduleVideo({
+      filePath: String(p.videoFilePath || ''),
+      caption: String(p.caption || ''),
+      scheduleAt: typeof p.scheduleAt === 'number' ? p.scheduleAt : String(p.scheduleAt || ''),
+      account: typeof p.account === 'string' || typeof p.account === 'number' ? p.account : undefined,
+      dryRun: true,
+    })
+  },
   'dev.click': async (p) => {
     if (app.isPackaged) throw new Error('dev.click is only available in development')
     const wc = getViewById(String(p.tab || ''))?.webContents
     if (!wc || wc.isDestroyed()) return { ok: false, error: `no open view for "${p.tab}"` }
-    const at = await wc.executeJavaScript(`(() => {
+    const pick = `(() => {
       const els = Array.from(document.querySelectorAll(${JSON.stringify(String(p.selector || ''))}))
       const want = ${JSON.stringify(typeof p.text === 'string' ? p.text : '')}
       const el = els.find(e => !want || (e.innerText || '').trim() === want)
       if (!el) return null
-      el.scrollIntoView({ block: 'center' })
+      el.scrollIntoView({ block: 'center', behavior: 'instant' })
       const r = el.getBoundingClientRect()
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
-    })()`) as { x: number; y: number } | null
+    })()`
+    const at = await wc.executeJavaScript(pick) as { x: number; y: number } | null
     if (!at) return { ok: false, error: 'no matching element' }
-    wc.focus()
-    wc.sendInputEvent({ type: 'mouseMove', x: at.x, y: at.y })
-    wc.sendInputEvent({ type: 'mouseDown', x: at.x, y: at.y, button: 'left', clickCount: 1 })
-    await new Promise(r => setTimeout(r, 60))
-    wc.sendInputEvent({ type: 'mouseUp', x: at.x, y: at.y, button: 'left', clickCount: 1 })
-    return { ok: true, ...at }
+    // Page coordinates through CDP; the position is read again once scrolling has settled.
+    await new Promise(r => setTimeout(r, 300))
+    const now = (await wc.executeJavaScript(pick) as { x: number; y: number } | null) ?? at
+    const wasAttached = wc.debugger.isAttached()
+    if (!wasAttached) wc.debugger.attach('1.3')
+    try {
+      const base = { x: now.x, y: now.y, button: 'left', clickCount: 1 }
+      await wc.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: now.x, y: now.y })
+      await wc.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', ...base })
+      await wc.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base })
+    } finally {
+      if (!wasAttached) { try { wc.debugger.detach() } catch { /* already gone */ } }
+    }
+    return { ok: true, ...now }
   },
   // Searches the JS the view `tab` has loaded for request identifiers (bundleScan.ts).
   'dev.bundleScan': async (p) => {

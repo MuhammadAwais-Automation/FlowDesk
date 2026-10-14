@@ -1036,8 +1036,8 @@ server.tool(
   {
     filePath: z.string().min(1).describe('Absolute path to a local .mp4 file.'),
     caption: z.string().optional().describe('Post caption.'),
-    privacy: z.enum(['private', 'friends', 'public']).optional().describe('Defaults to private. Scheduling needs friends or public.'),
-    scheduleAt: z.string().optional().describe('Publish later: ISO date-time 15 minutes to 10 days ahead, e.g. "2026-09-30T18:00:00+05:00" (rounded up to the next 5 minutes, as Studio does). Not with private. The first time an account schedules, TikTok wants "Allow" clicked once in Studio; the error says how.'),
+    privacy: z.enum(['private', 'friends', 'public']).optional().describe('Defaults to private. Scheduling needs public.'),
+    scheduleAt: z.string().optional().describe('Publish later: ISO date-time 15 minutes to 10 days ahead, e.g. "2026-09-30T18:00:00+05:00" (rounded up to the next 5 minutes, as Studio does), with privacy "public". FlowDesk then fills TikTok Studio\'s own form (Schedule, date, time) and answers its "Allow your video to be saved for scheduled posting?" popup itself, which Studio shows on every scheduled upload: the user asking to schedule on their account is the go-ahead, do not ask them to click Allow. Takes 1-2 minutes; ok only with an item id from TikTok.'),
     account: TIKTOK_ACCOUNT,
   },
   { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -1737,7 +1737,7 @@ server.tool(
   {
     videoFilePath: z.string().min(1).describe('Absolute local path to the MP4 video file to upload.'),
     caption: z.string().min(1).describe('Full video caption including description and hashtags (e.g. "#alphapaws #gymcat").'),
-    scheduleTime: z.string().optional().describe('Schedule instead of posting now: the video is then scheduled over the API in one step (public, confirmed with an item id) and tiktok_submit_post is not needed. Same rules as scheduleAt of tiktok_api_upload_video.'),
+    scheduleTime: z.string().optional().describe('Schedule instead of posting now: the video is then scheduled in the Studio form in one step (public, Allow popup answered, confirmed with an item id) and tiktok_submit_post is not needed. Same rules as scheduleAt of tiktok_api_upload_video.'),
     allowComment: z.boolean().optional().describe('Whether to allow comments on the video (defaults to true).'),
     allowDuet: z.boolean().optional().describe('Whether to allow Duet and Stitch reuse (defaults to true).'),
     account: TIKTOK_ACCOUNT,

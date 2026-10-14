@@ -315,13 +315,11 @@ export async function tkUploadVideo(options: {
   if (!filePath) return { ok: false, error: 'refusing to upload without a video file path' }
   const resolved = resolveTikTokPartition(options.account)
   if (!resolved) return unknownTikTokAccount(options.account) as TikTokResult
-  // The Studio form never got the time and a "scheduled" upload went public at
-  // once (report 2026-10-12): a schedule goes over the API, which posts the
-  // video for that time in one step and confirms it with an item id.
+  // A schedule is done in the Studio form itself (date, time, Schedule, the
+  // Allow popup) and confirmed by TikTok's own answer; see tiktokSchedule.ts.
   if (options.scheduleTime !== undefined && options.scheduleTime !== null && options.scheduleTime !== '') {
-    const { tkApiUploadVideo } = await import('./tiktokUpload')
-    const scheduled = await tkApiUploadVideo({ filePath, caption: options.caption, privacy: 'public', scheduleAt: options.scheduleTime, account: options.account })
-    return scheduled.ok ? { ...scheduled, note: 'scheduled over the API in one step; do not call tiktok_submit_post' } : scheduled
+    const { tkScheduleVideo } = await import('./tiktokSchedule')
+    return tkScheduleVideo({ filePath, caption: options.caption, scheduleAt: options.scheduleTime, account: options.account })
   }
 
   try {
@@ -506,6 +504,16 @@ export async function tkUploadVideo(options: {
     scheduleTime: options.scheduleTime,
     postButtonReady: postReady,
     status: postReady ? 'READY_TO_POST' : 'UPLOADING',
+  }
+}
+
+/** Releases the account's Studio form; `discard` also reloads the page, dropping the form unposted. */
+export function finishUpload(wc: WebContents, tabId: string, discard = false): void {
+  uploadHolds.delete(wc.id)
+  pendingCaptions.delete(tabId)
+  if (discard) {
+    wc.once('will-prevent-unload', e => e.preventDefault())
+    void wc.loadURL('https://www.tiktok.com/tiktokstudio/upload').catch(() => {})
   }
 }
 
@@ -725,13 +733,17 @@ export function tiktokStudioItemsScript(): string {
         var j = JSON.parse(text)
         if (j.status_code !== 0) return { ok: false, error: 'item_list status ' + j.status_code + ': ' + (j.status_msg || '') }
         ;(j.item_list || []).forEach(function (it) {
-          var isScheduled = it.status === 140
+          // 140 was the only scheduled status seen until a post scheduled through
+          // the Studio form came back as 141 (listed "Oct 23, 4:30 PM" in Studio);
+          // a schedule_time still ahead is the surer sign.
+          var at = Number(it.schedule_time) * 1000
+          var isScheduled = it.status === 140 || it.status === 141 || (at > Date.now())
           posts.push({
             id: it.item_id,
             url: 'https://www.tiktok.com/video/' + it.item_id,
             caption: it.desc || '',
             createdAt: it.create_time ? new Date(Number(it.create_time) * 1000).toISOString() : null,
-            scheduledAt: isScheduled ? new Date(Number(it.schedule_time) * 1000).toISOString() : null,
+            scheduledAt: isScheduled && at > 0 ? new Date(at).toISOString() : null,
             isScheduled: isScheduled,
             status: it.status,
             // Studio's own code: 1 = Everyone. Anything else is restricted.

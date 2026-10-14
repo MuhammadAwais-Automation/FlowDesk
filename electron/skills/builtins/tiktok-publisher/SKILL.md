@@ -61,7 +61,7 @@ Uploads and publishes a local video file to TikTok over the web API (no Studio U
   - `filePath` (string, required): Absolute local path to an .mp4 file.
   - `caption` (string, optional): Full caption text with description and hashtags.
   - `privacy` (string, optional): `'private'` (default), `'friends'`, or `'public'`.
-  - `scheduleAt` (string, optional): ISO date-time 15 minutes to 10 days ahead, rounded up to the next 5 minutes. Not with `privacy: 'private'`. First schedule on an account needs "Allow" clicked once in Studio; the error explains it.
+  - `scheduleAt` (string, optional): ISO date-time 15 minutes to 10 days ahead, rounded up to the next 5 minutes. Needs `privacy: 'public'`. FlowDesk schedules in TikTok Studio's own form and answers its "Allow your video to be saved for scheduled posting?" popup (shown on every scheduled upload) itself; the user asking to schedule is the go-ahead. Takes 1-2 minutes.
   - `account` (string, optional): Target account ID (e.g. `'1'`, `'2'`). Defaults to active account.
 - **Success shape**:
   ```json

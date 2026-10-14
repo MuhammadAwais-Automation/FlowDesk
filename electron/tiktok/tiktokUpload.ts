@@ -81,13 +81,6 @@ const VISIBILITY: Record<TikTokPrivacy, number> = { public: 0, private: 1, frien
  * Studio only offers scheduling between 15 minutes and 10 days ahead, and
  * not for "Only you" — its privacy picker drops Schedule when that is chosen.
  */
-/**
- * Studio asks each account once, on its first scheduled post, to "Allow your
- * video to be saved for scheduled posting" (seen live 2026-10-13); an account
- * that never allowed it is the likeliest reason TikTok refuses a schedule.
- */
-export const SCHEDULE_REFUSED = 'TikTok refused the scheduled post. If this account has never scheduled a post, open FlowDesk → Social → TikTok → this account → Studio upload, choose "Schedule" once and click "Allow" on "Allow your video to be saved for scheduled posting?", then try again. Nothing was posted.'
-
 export const SCHEDULE_MIN_MS = 15 * 60_000
 export const SCHEDULE_MAX_MS = 10 * 24 * 60 * 60_000
 
@@ -166,6 +159,13 @@ export async function tkApiUploadVideo(opts: {
   // Checked before anything is uploaded, so a bad time costs nothing.
   const schedule = checkSchedule(opts.scheduleAt, privacy)
   if (schedule.error) return { ok: false, error: schedule.error, steps }
+  // TikTok answered the API's scheduled post "Invalid parameters" (report
+  // 2026-10-14), so a schedule goes through the Studio form like a person's.
+  if (schedule.atSeconds) {
+    if (privacy !== 'public') return { ok: false, error: 'scheduling works for public posts only: pass privacy "public"', steps }
+    const { tkScheduleVideo } = await import('./tiktokSchedule')
+    return tkScheduleVideo({ filePath: opts.filePath, caption, scheduleAt: opts.scheduleAt as string | number, account: opts.account })
+  }
   try {
     const file = await readFile(opts.filePath)
     const view = await getTikTokView(opts.account)
@@ -236,21 +236,17 @@ export async function tkApiUploadVideo(opts: {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
     const published = await inPage<{ status?: number; json?: any; text?: string }>(wc, `
       var r = await fetch('/tiktok/web/project/post/v1/?app_name=tiktok_web&channel=tiktok_web&device_platform=web&tz_name=${encodeURIComponent(tz)}&aid=1988', {
-        method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: ${JSON.stringify(publishBody(vid, caption, privacy, schedule.atSeconds))},
+        method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: ${JSON.stringify(publishBody(vid, caption, privacy))},
       })
       var t = await r.text()
       try { return { status: r.status, json: JSON.parse(t) } } catch (e) { return { status: r.status, text: t.slice(0, 300) } }`)
     const item = published.json?.single_post_resp_list?.[0]
     if (published.json?.status_code !== 0 || !item?.item_id || item.status_code !== 0) {
-      if (schedule.atSeconds) {
-        return { ok: false, error: SCHEDULE_REFUSED, status: published.status, detail: JSON.stringify(published.json ?? published.text).slice(0, 400), videoId: vid, steps }
-      }
       return { ok: false, error: 'publish not confirmed', status: published.status, detail: JSON.stringify(published.json ?? published.text).slice(0, 400), videoId: vid, steps }
     }
     steps.push('publish')
     return {
       ok: true, via: 'api', itemId: String(item.item_id), url: `https://www.tiktok.com/video/${item.item_id}`, privacy, videoId: vid, steps,
-      ...(schedule.atSeconds ? { scheduled: true, scheduledFor: new Date(schedule.atSeconds * 1000).toISOString() } : {}),
     }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e), steps }

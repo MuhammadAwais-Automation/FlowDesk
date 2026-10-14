@@ -15,7 +15,7 @@ inputs:
     type: string
     required: false
     default: 10s
-    description: "Target duration clip length matching Flow models: 10s (abra_t2v_10s) or 8s (abra_t2v_8s)"
+    description: "Target clip length: Flow offers 4, 6, 8 or 10 seconds (the seconds setting of flow_generate_video)"
   styleAnchor:
     type: string
     required: false
@@ -33,7 +33,7 @@ inputs:
 ## When to use
 - Composing professional, cinema-grade prompts for Google Flow text-to-video (`flow_generate_video`).
 - Writing motion and physics conditioning prompts for image-to-video animation (`flow_generate_video_from_image`).
-- Formatting multi-shot continuous sequences that cleanly fit the 8-second (`abra_t2v_8s`) or 10-second (`abra_t2v_10s`) Flow generation ceilings.
+- Formatting multi-shot continuous sequences that cleanly fit the clip length chosen in Flow (4, 6, 8 or 10 seconds).
 - Structuring native audio and environmental soundscape directives into prompts for models that synthesize sound effects.
 
 ## When not to use
@@ -44,25 +44,17 @@ inputs:
 ## Tools
 
 ### flow_video_models
-Inspects active video models registered in Google Flow to verify supported model keys and duration capabilities.
-- **Parameters**: None.
-- **Success shape**:
-  ```json
-  {
-    "ok": true,
-    "models": ["veo_3_1_quality", "veo_3_1_lite", "abra", "veo_3_1_fast"]
-  }
-  ```
+Reads the video models Flow's own settings menu offers (live 2026-10-13: Omni 1.1 Flash, Veo 3.1 - Lite / Fast / Quality), the current settings and the credits Flow quotes.
+- **Parameters**: `projectId` (any project of the account), `account?`.
 - **Known failure shapes**:
-  `{ "ok": false, "error": "Google Flow is not open in any account" }` if no account is running Flow.
+  an error naming the missing project or account; see the `google-flow` skill.
 
 ## Procedure
 
 1. **Determine Clip Duration and Model Target**:
-   Choose the target Flow model key based on desired duration:
-   - `abra_t2v_10s` (10 seconds text-to-video)
-   - `abra_t2v_8s` (8 seconds text-to-video)
-   - `abra_r2v_10s` (10 seconds image-to-video)
+   Choose the clip length Flow offers (`seconds`: 4, 6, 8 or 10) and a model by the name `flow_video_models` lists
+   (for example "Omni 1.1 Flash"). A frame or reference image (`startFrame`, `ingredients`) is passed to
+   `flow_generate_video`; the prompt then describes how it moves.
 
 2. **Select a Stylistic Reference Anchor**:
    Establish a single coherent visual style anchor rather than a laundry list of technical camera parameters:
@@ -94,15 +86,15 @@ Inspects active video models registered in Google Flow to verify supported model
    Output the completed prompt directly to `google-flow` (`flow_generate_video` or `flow_generate_video_from_image`).
 
 ## Limits and safety
-- **Temporal Durations**: Generative video models are bounded to 8-second (`abra_t2v_8s`) or 10-second (`abra_t2v_10s`, `abra_r2v_10s`) generations. Prompts describing multi-minute story arcs will fail to animate properly.
+- **Temporal Durations**: Flow clips are 4, 6, 8 or 10 seconds. Prompts describing multi-minute story arcs will fail to animate properly.
 - **Aspect Ratio Formatting**: Flow models default to landscape or vertical portrait orientations. Format scene blocking so that central action remains safely inside the primary viewport.
 - **Character Consistency**: For multi-video episodic series, maintain an unchanging character anchor description (exact breed, distinctive clothing or gear, eye color) across all prompts.
 
 ## Verified facts
 - Live Flow video generation calls in `probes/out/_network-flow-google-com.SESSION2.json` (line 11717) demonstrated structured prompts containing multi-shot breakdowns (`SHOT 1 — Wide tracking shot (4 seconds) ... SHOT 2 — Medium shot (4 seconds)`).
-- Model keys `abra_t2v_10s` and `abra_t2v_8s` accept text prompt scenes up to several paragraphs with embedded sound design instructions (`_network-flow-google-com.SESSION2.json:11717`).
+- Flow's video models accept text prompt scenes up to several paragraphs with embedded sound design instructions (`_network-flow-google-com.SESSION2.json:11717`).
 - Flow video models generate native audio directly alongside visual synthesis (`probes/out/_network-flow-google-com.SESSION2.json:11717`).
-- Image-to-video prompts use `abra_r2v_10s` and describe how the initial keyframe animates into action (`electron/flowBridge.ts:755`).
+- Image-to-video prompts describe how the initial keyframe animates into action; the image goes in as `startFrame` or `ingredients` (live 2026-10-13/14).
 
 ## Not verified
 - Lip-synced dialogue: Generative video models do not reliably synchronize precise spoken words with lip movements. Dialogues should be kept to off-screen reactions or non-verbal vocalisations.

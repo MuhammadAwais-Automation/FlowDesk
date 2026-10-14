@@ -101,7 +101,7 @@ user to click Allow in the FlowDesk app and fail with "needs approval" otherwise
 
 ## Limits
 - Feed/search/outlier (page versions) return at most 50 items; API search pages with `offset`.
-- Scheduling: `tiktok_api_upload_video` with `scheduleAt` (or `tiktok_upload_video` with `scheduleTime`, which hands over to it) — 15 minutes to 10 days ahead, rounded up to 5 minutes, not private. Confirmed only by an item id. An account that never scheduled before must click "Allow" once in Studio ("Allow your video to be saved for scheduled posting?"); until then TikTok refuses and the error says so. Nothing is posted on a refusal.
+- Scheduling: `tiktok_api_upload_video` with `scheduleAt` (or `tiktok_upload_video` with `scheduleTime`, which hands over to it) — 15 minutes to 10 days ahead, rounded up to 5 minutes, not private. Confirmed only by an item id. Public only. FlowDesk fills Studio's own form (Schedule, date, time) and answers Studio's "Allow your video to be saved for scheduled posting?" popup, which appears on every scheduled upload: the user asking to schedule on their account is the go-ahead, so do not ask them to click Allow. It takes 1-2 minutes. On any failure nothing is scheduled and the form is discarded.
 - While a video waits in the Studio form (after `tiktok_upload_video`), other TikTok tools on that account answer "has a video waiting in the Studio upload form" instead of navigating away and losing it.
 - `tiktok_upload_video` sets the caption after the upload finishes and reads it back; `CAPTION_NOT_SET` means do not call `tiktok_submit_post`, which also refuses a mismatched caption.
 - `tiktok_edit_video_caption` is ok only when the post list shows the new caption; a fresh video still processing can refuse edits, so retry later.

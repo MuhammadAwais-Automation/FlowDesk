@@ -72,7 +72,7 @@ describe('skillRegistry', () => {
     expect(flowSkill?.domain).toBe('flow')
     expect(flowSkill?.tools).toContain('flow_generate_video')
     expect(flowSkill?.playbook).toContain('## When to use')
-    expect(flowSkill?.playbook).toContain('abra_t2v_8s')
+    expect(flowSkill?.playbook).toContain('Omni 1.1 Flash')
     expect(flowSkill?.source).toBe('builtin')
     expect(flowSkill?.references).toEqual([])
 
