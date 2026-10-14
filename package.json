@@ -1,6 +1,6 @@
 {
   "name": "flowdesk",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Local-first AI creator workstation for prompts, AI tools, social workflows, and multi-account sessions",
   "main": "./out/main/main.js",
   "type": "module",
