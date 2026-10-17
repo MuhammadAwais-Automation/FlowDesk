@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { routeLink, isSameApp, registrableHost } from './linkRouting'
+import { routeLink, isSameApp, registrableHost, redirectLeavesApp } from './linkRouting'
 
 /**
  * The behaviour being pinned is the one that was actually broken: a link
@@ -121,5 +121,27 @@ describe('isSameApp', () => {
   it('is false when either side is unparseable, so the browser wins by default', () => {
     expect(isSameApp('nonsense', 'https://web.whatsapp.com/')).toBe(false)
     expect(isSameApp('https://web.whatsapp.com/', 'nonsense')).toBe(false)
+  })
+})
+
+describe('redirectLeavesApp', () => {
+  it('sends a social site\'s off-site redirect to the browser', () => {
+    expect(redirectLeavesApp('social-linkedin', 'https://www.linkedin.com/redir/redirect?url=x', 'https://web.whatsapp.com/send?phone=1')).toBe(true)
+  })
+
+  it('keeps redirects inside the same site', () => {
+    expect(redirectLeavesApp('social-linkedin', 'https://www.linkedin.com/feed/', 'https://www.linkedin.com/login')).toBe(false)
+  })
+
+  it('never touches a Google sign-in handoff, in Flow or anywhere', () => {
+    const setOsid = 'https://flow.google.com/accounts/SetOSID?authuser=0&continue=https://flow.google.com/'
+    expect(redirectLeavesApp('flow-worker-gmail-1', 'https://accounts.google.com/ServiceLogin', setOsid)).toBe(false)
+    expect(redirectLeavesApp('social-youtube', 'https://accounts.youtube.com/accounts/SetSID', 'https://www.youtube.com/')).toBe(false)
+    expect(redirectLeavesApp('social-facebook', 'https://accounts.google.com/o/oauth2/auth', 'https://www.facebook.com/login/callback')).toBe(false)
+  })
+
+  it('leaves every non-social view alone', () => {
+    expect(redirectLeavesApp('studio-flow', 'https://labs.google/fx/tools/flow', 'https://flow.google.com/')).toBe(false)
+    expect(redirectLeavesApp('ai-chatgpt', 'https://chatgpt.com/', 'https://auth.openai.com/authorize')).toBe(false)
   })
 })

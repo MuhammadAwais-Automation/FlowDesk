@@ -1,7 +1,7 @@
 import { app, session, WebContentsView, BrowserWindow, shell, type WebContents } from 'electron'
 import { join } from 'path'
 import { isOAuthPopup } from './oauthRouting'
-import { routeLink } from './linkRouting'
+import { redirectLeavesApp, routeLink } from './linkRouting'
 import { prepareGooglePopup, wantsGoogleChooser } from './googleSignInChooser'
 import { WHATSAPP_BRIDGE_SRC } from './whatsapp/whatsappInject'
 import { startLinkedInRealtimeWatch } from './linkedin/linkedinRealtimeWatch'
@@ -428,9 +428,8 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
     const d = event as unknown as { url?: string; isMainFrame?: boolean }
     if (d.isMainFrame === false) return
     const target = d.url ?? redirectUrl
-    const decision = routeLink(target, view.webContents.getURL())
-    logLinkRoutingDecision('will-navigate', view.webContents.getURL(), target, decision)
-    if (decision !== 'external') return
+    if (!redirectLeavesApp(tabId, view.webContents.getURL(), target)) return
+    logLinkRoutingDecision('will-navigate', view.webContents.getURL(), target, 'external')
     event.preventDefault()
     void shell.openExternal(target)
   })

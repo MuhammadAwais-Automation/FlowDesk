@@ -100,3 +100,28 @@ export function routeLink(targetUrl: string, homeUrl: string): LinkDestination {
 
   return isSameApp(target, homeUrl) ? 'in-app' : 'external'
 }
+
+/** Google's own sites hand a sign-in from one to another (accounts.google.com → flow.google.com/accounts/SetOSID). */
+function isGoogleFamily(url: string): boolean {
+  try {
+    return /(^|\.)(google\.com|google|youtube\.com|googleusercontent\.com|gstatic\.com)$/.test(new URL(url).hostname.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether a server redirect should leave the view for the user's browser.
+ * Only on social platform views (tab ids "social-…"), where a site's own
+ * /redir links sent LinkedIn on to WhatsApp. Never for a sign-in: a redirect
+ * from or to a login page, or between Google's own sites, carries the
+ * session (a new Google account in Flow was left blank, and its one-time
+ * SetOSID link failed with 400 in the outside browser, report 2026-10-17).
+ */
+export function redirectLeavesApp(tabId: string, fromUrl: string, toUrl: string): boolean {
+  if (!tabId.startsWith('social-')) return false
+  if (!/^https?:/i.test(fromUrl)) return false
+  if (isOAuthPopup(fromUrl) || isOAuthPopup(toUrl)) return false
+  if (isGoogleFamily(fromUrl) && isGoogleFamily(toUrl)) return false
+  return routeLink(toUrl, fromUrl) === 'external'
+}
