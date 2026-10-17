@@ -104,7 +104,7 @@ function findGatewayConfig() {
 // page (first background-view load alone can take 15s) or on generation
 // (ask.*, Flow video, TikTok upload) failed on the client while the app kept
 // working. The gateway itself has no shorter limit, so match the real work.
-const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover|uploadThumbnail)$|pinFactory\.nicheScan$|flow\.(uiGenerateImage|imageModels)$|health\.check$|dev\.(rehearse|bundleScan)$)/
+const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover|uploadThumbnail)$|pinFactory\.nicheScan$|flow\.(uiGenerateImage|imageModels)$|health\.check$|dev\.(rehearse|bundleScan)$|youtube\.(search|channel|outliers|nicheScan|nicheCompare|nicheMashup|commentInsights|breakdown|monetization|keyword|trending|watch|videoDetail|channelSearch)$)/
 function rpcTimeoutMs(method) {
   return LONG_RPC.test(method) ? 15 * 60_000 : 120_000
 }
@@ -1279,6 +1279,34 @@ server.tool(
   },
   { readOnlyHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('youtube.watch', args))
+)
+
+server.tool(
+  'youtube_niche_compare',
+  "Score 2-6 YouTube niches side by side to choose one. For each: demand (top-20 views, autocomplete depth), opportunity (breakout videos from channels under 100K subscribers), freshness (recent videos ranking), earning (channels with ads × language RPM), competition (result count), and an overall 0-100 score, with the evidence behind each (top outliers with links, title words, typical length, Flow credits per video). ~1 min per niche.",
+  {
+    topics: z.array(z.string().min(1)).min(2).max(6).describe('Niches to compare, e.g. ["aloo cartoon story", "ai horror story", "bible story animation"].'),
+    type: YT_TYPE.describe('"video" (default) or "short".'),
+    channels: z.number().int().min(2).max(8).optional().describe('Channels to baseline per niche (default 4).'),
+    language: z.string().optional().describe('Autocomplete language, e.g. "en", "ur", "hi".'),
+    country: z.string().optional().describe('Autocomplete country, e.g. "PK", "US".'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.nicheCompare', args))
+)
+
+server.tool(
+  'youtube_niche_mashup',
+  'Combine a base niche with 1-5 others to find a new angle. For each combination: demand on both sides, whether people already search the combination (autocomplete), how many existing videos already combine both and their views, a verdict (gap / proven and still open / crowded / weak demand), a score, examples with links, and the title words each side uses. A gap is an opening to test, not a guarantee. ~30-60 s per combination.',
+  {
+    base: z.string().min(1).describe('The niche to build on, e.g. "aloo cartoon story".'),
+    others: z.array(z.string().min(1)).min(1).max(5).describe('Niches to combine with it, e.g. ["horror", "bible story", "survival"].'),
+    type: YT_TYPE.describe('"video" (default) or "short".'),
+    language: z.string().optional().describe('Autocomplete language, e.g. "en", "ur", "hi".'),
+    country: z.string().optional().describe('Autocomplete country, e.g. "PK", "US".'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.nicheMashup', args))
 )
 
 server.tool(

@@ -4,7 +4,7 @@ vi.mock('electron', () => ({ app: { getPath: () => '' } }))
 vi.mock('./youtube', () => ({}))
 vi.mock('../keepAwake', () => ({ whileAwake: vi.fn() }))
 
-import { commentIntent, heatPeaks, rpmBand, subsPerDay, titleFacts, velocity } from './youtubeResearch'
+import { commentIntent, heatPeaks, mentionsBoth, nicheScores, rpmBand, subsPerDay, titleFacts, topicTerms, velocity } from './youtubeResearch'
 
 describe('heatPeaks', () => {
   it('keeps the strongest moments, spaced apart, in time order', () => {
@@ -61,5 +61,40 @@ describe('subsPerDay', () => {
   it('is subscribers gained per day between two checks', () => {
     expect(subsPerDay({ at: '2026-10-01T00:00:00Z', subscribers: 1000, videoCount: 5 }, { at: '2026-10-03T00:00:00Z', subscribers: 1400, videoCount: 6 })).toBe(200)
     expect(subsPerDay(undefined, { at: '2026-10-03T00:00:00Z', subscribers: 1400, videoCount: 6 })).toBeNull()
+  })
+})
+
+describe('nicheScores', () => {
+  const base = { suggestions: 200, top20MedianViews: 5_000_000, recentShare: 1, estimatedResults: 100_000, channelsChecked: 4, smallChannelOutliers: 6, monetizedShare: 1, rpmBand: 'english' as const }
+  it('gives a strong, open, paying niche a high score', () => {
+    const s = nicheScores(base)
+    expect(s.demand).toBe(100)
+    expect(s.opportunity).toBe(100)
+    expect(s.freshness).toBe(100)
+    expect(s.earning).toBe(100)
+    expect(s.competition).toBe(0)
+    expect(s.overall).toBe(100)
+  })
+  it('scores earning by language and treats unknown earning as neutral', () => {
+    expect(nicheScores({ ...base, rpmBand: 'southAsian' }).earning).toBe(35)
+    const unknown = nicheScores({ ...base, monetizedShare: null, rpmBand: null })
+    expect(unknown.earning).toBeNull()
+    expect(unknown.overall).toBe(90)
+  })
+  it('marks a crowded, stale niche low', () => {
+    const s = nicheScores({ ...base, smallChannelOutliers: 0, recentShare: 0.1, estimatedResults: 100_000_000, monetizedShare: 0 })
+    expect(s.opportunity).toBe(0)
+    expect(s.competition).toBe(100)
+    expect(s.overall).toBeLessThan(40)
+  })
+})
+
+describe('mashup matching', () => {
+  it('finds titles that mention both niches', () => {
+    const a = topicTerms('aloo cartoon story')
+    const b = topicTerms('horror')
+    expect(a).toEqual(['aloo', 'cartoon'])
+    expect(mentionsBoth('Aloo ka bhoot ghar | Horror Cartoon', a, b)).toBe(true)
+    expect(mentionsBoth('Aloo ki shaadi', a, b)).toBe(false)
   })
 })

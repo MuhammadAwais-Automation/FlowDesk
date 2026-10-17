@@ -1015,3 +1015,198 @@ async function videoEarningsOn(wc: WebContents, input: string): Promise<YouTubeR
 export function ytVideoEarnings(input: string): Promise<YouTubeResult> {
   return withView(wc => videoEarningsOn(wc, input))
 }
+
+// ─── niche compare (score cards) and mashup (combining niches) ────────────────
+
+/** Flow credits for one 8-second 720p clip, as Flow quoted it live (2026-10-16). */
+export const CREDITS_PER_CLIP = 12
+const CLIP_SECONDS = 8
+
+const clamp01 = (v: number) => Math.min(Math.max(v, 0), 1)
+const scale = (v: number, lo: number, hi: number) => Math.round(clamp01((v - lo) / (hi - lo)) * 100)
+
+const BAND_WEIGHT: Record<keyof typeof RPM_BANDS, number> = { english: 1, other: 0.6, southAsian: 0.35, short: 0.2, madeForKids: 0.1 }
+
+export interface NicheFacts {
+  suggestions: number
+  top20MedianViews: number | null
+  recentShare: number
+  estimatedResults: number | null
+  channelsChecked: number
+  smallChannelOutliers: number
+  monetizedShare: number | null
+  rpmBand: keyof typeof RPM_BANDS | null
+}
+
+/**
+ * 0-100 scores for one niche, each from numbers the tools measured:
+ *   demand      = 60% top-20 median views (1K → 3M on a log scale) + 40% autocomplete depth (10 → 200)
+ *   opportunity = outliers from channels under 100K subscribers, per channel checked (0 → 1.5)
+ *   freshness   = share of the top 20 uploaded in the last 90 days
+ *   earning     = share of checked channels with ads × the language/format RPM weight
+ *   competition = YouTube's estimated result count, 100K → 100M on a log scale (higher = more crowded)
+ *   overall     = 30% demand + 25% opportunity + 15% freshness + 20% earning (50 when unknown) + 10% (100 − competition)
+ */
+export function nicheScores(f: NicheFacts) {
+  const demand = Math.round(0.6 * scale(Math.log10(f.top20MedianViews || 1), 3, 6.5) + 0.4 * scale(f.suggestions, 10, 200))
+  const opportunity = scale(f.smallChannelOutliers / Math.max(f.channelsChecked, 1), 0, 1.5)
+  const freshness = Math.round(clamp01(f.recentShare) * 100)
+  const competition = scale(Math.log10(f.estimatedResults || 1), 5, 8)
+  const earning = f.monetizedShare == null ? null : Math.round(clamp01(f.monetizedShare) * 100 * (f.rpmBand ? BAND_WEIGHT[f.rpmBand] : 0.5))
+  const overall = Math.round(0.3 * demand + 0.25 * opportunity + 0.15 * freshness + 0.2 * (earning ?? 50) + 0.1 * (100 - competition))
+  return { overall, demand, opportunity, freshness, earning, competition }
+}
+
+interface TopicFacts { suggestions: string[]; top: YtVideo[]; estimatedResults: number | null }
+
+async function topicFactsOn(wc: WebContents, topic: string, type: string, cache: Map<string, TopicFacts>, language?: string, country?: string): Promise<TopicFacts> {
+  const key = `${type}:${topic.toLowerCase()}`
+  const hit = cache.get(key)
+  if (hit) return hit
+  const demand = await ytSuggest({ seed: topic, expand: true, language, country })
+  const s = await searchOn(wc, { query: topic, type, limit: 20 })
+  const facts: TopicFacts = {
+    suggestions: demand.ok ? demand.suggestions as string[] : [],
+    top: s.ok ? s.videos as YtVideo[] : [],
+    estimatedResults: s.ok ? (s.estimatedResults as number | null) : null,
+  }
+  cache.set(key, facts)
+  return facts
+}
+
+/** The most frequent title words across videos, for spotting what a niche's titles lean on. */
+function titleWords(videos: YtVideo[], n = 12): { word: string; videos: number }[] {
+  const counts = new Map<string, number>()
+  for (const v of videos) for (const w of new Set(titleFacts(String(v.title ?? '')).keyWords as string[])) counts.set(w, (counts.get(w) ?? 0) + 1)
+  return [...counts.entries()].filter(([, c]) => c > 1).sort((a, b) => b[1] - a[1]).slice(0, n).map(([word, c]) => ({ word, videos: c }))
+}
+
+export interface NicheCompareOptions { topics: string[]; type?: string; channels?: number; language?: string; country?: string }
+
+async function nicheCompareOn(wc: WebContents, o: NicheCompareOptions): Promise<YouTubeResult> {
+  const topics = [...new Set((o.topics ?? []).map(t => String(t).trim()).filter(Boolean))]
+  if (topics.length < 2 || topics.length > 6) return { ok: false, error: 'give 2 to 6 niches to compare' }
+  const type = o.type === 'short' ? 'short' : 'video'
+  const cache = new Map<string, TopicFacts>()
+  const cards: { topic: string; scores: ReturnType<typeof nicheScores>; evidence: Record<string, unknown> }[] = []
+  for (const topic of topics) {
+    const facts = await topicFactsOn(wc, topic, type, cache, o.language, o.country)
+    const out = await outliersOn(wc, { query: topic, type, uploaded: 'year', channels: clampInt(o.channels, 4, 2, 8), minScore: 2, limit: 15 })
+    const outliers = out.ok ? out.outliers as (YtVideo & { channelSubscribers?: number | null })[] : []
+    const baselines = out.ok ? out.channels as Baseline[] : []
+    // Monetization, lightly: one recent video per channel, for up to three channels.
+    let monetized = 0, checked = 0
+    let spoken: string | null = null, kidsVideos = 0
+    for (const b of baselines.slice(0, 3)) {
+      const ch = await channelOn(wc, { channel: b.channelId, tab: type === 'short' ? 'shorts' : 'videos', limit: 4 })
+      const pick = ch.ok ? (ch.videos as YtVideo[]).find(v => (v.ageDays ?? 0) >= 2) ?? (ch.videos as YtVideo[])[0] : null
+      if (!pick) continue
+      await sleep(400 + Math.random() * 400)
+      const sig = await adSignalsOn(wc, pick.videoId)
+      if (!sig) continue
+      checked++
+      if (sig.ads > 0) monetized++
+      spoken ??= sig.spoken
+      if (sig.madeForKids) kidsVideos++
+    }
+    const views = facts.top.map(v => v.views).filter((n): n is number => n != null)
+    const recentShare = facts.top.length ? facts.top.filter(v => (v.ageDays ?? 9999) <= 90).length / facts.top.length : 0
+    const smallChannelOutliers = outliers.filter(v => (v.channelSubscribers ?? Infinity) < 100_000).length
+    // Made for kids only when most checked channels are, not because one of them is.
+    const band = checked ? rpmBand(spoken, kidsVideos > checked / 2, type === 'short') : null
+    const nf: NicheFacts = {
+      suggestions: facts.suggestions.length, top20MedianViews: median(views), recentShare,
+      estimatedResults: facts.estimatedResults, channelsChecked: baselines.length, smallChannelOutliers,
+      monetizedShare: checked ? monetized / checked : null, rpmBand: band,
+    }
+    const lengthSec = median(outliers.map(v => v.lengthSeconds).filter((n): n is number => n != null))
+    cards.push({
+      topic,
+      scores: nicheScores(nf),
+      evidence: {
+        ...nf,
+        monetizedChannels: `${monetized}/${checked}`,
+        spokenLanguage: spoken,
+        outliers: outliers.length,
+        medianOutlierLengthMinutes: lengthSec == null ? null : Math.round(lengthSec / 6) / 10,
+        flowCreditsPerVideo: lengthSec == null || type === 'short' ? null : Math.ceil(lengthSec / CLIP_SECONDS) * CREDITS_PER_CLIP,
+        titleWords: titleWords(outliers.length ? outliers : facts.top),
+        topOutliers: outliers.slice(0, 3).map(v => ({ title: v.title, url: v.url, outlierScore: v.outlierScore, views: v.views, channel: v.channel, channelSubscribers: v.channelSubscribers ?? null })),
+      },
+    })
+    await sleep(500)
+  }
+  cards.sort((a, b) => b.scores.overall - a.scores.overall)
+  return {
+    ok: true, type, ranking: cards.map(c => ({ topic: c.topic, overall: c.scores.overall })), niches: cards,
+    note: 'scores are 0-100 from measured numbers (see each niche\'s evidence): demand = top-20 views + autocomplete depth; opportunity = outliers from channels under 100K subscribers; freshness = recent videos in the top 20; earning = channels with ads × language RPM weight; competition = result count (higher = more crowded). Overall = 30% demand, 25% opportunity, 15% freshness, 20% earning, 10% low competition. flowCreditsPerVideo assumes every second is an 8-second Flow clip at 12 credits.',
+  }
+}
+
+export function ytNicheCompare(o: NicheCompareOptions): Promise<YouTubeResult> {
+  return withView(wc => nicheCompareOn(wc, o))
+}
+
+const MASHUP_STOP = new Set(['the', 'and', 'for', 'with', 'story', 'stories', 'video', 'videos', 'ki', 'ka', 'ke', 'aur', 'hindi', 'urdu'])
+
+/** Lower-cased words of a topic that identify it in a title. */
+export function topicTerms(topic: string): string[] {
+  return topic.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 2 && !MASHUP_STOP.has(w))
+}
+
+/** Whether a title mentions both niches (at least one identifying word of each). */
+export function mentionsBoth(title: string, a: string[], b: string[]): boolean {
+  const t = title.toLowerCase()
+  return a.some(w => t.includes(w)) && b.some(w => t.includes(w))
+}
+
+export interface MashupOptions { base: string; others: string[]; type?: string; language?: string; country?: string }
+
+async function nicheMashupOn(wc: WebContents, o: MashupOptions): Promise<YouTubeResult> {
+  const base = String(o.base ?? '').trim()
+  const others = [...new Set((o.others ?? []).map(t => String(t).trim()).filter(Boolean))]
+  if (!base || !others.length || others.length > 5) return { ok: false, error: 'give a base niche and 1 to 5 other niches' }
+  const type = o.type === 'short' ? 'short' : 'video'
+  const cache = new Map<string, TopicFacts>()
+  const baseF = await topicFactsOn(wc, base, type, cache, o.language, o.country)
+  const baseTerms = topicTerms(base)
+  const demandOf = (f: TopicFacts) => Math.round(0.6 * scale(Math.log10(median(f.top.map(v => v.views).filter((n): n is number => n != null)) || 1), 3, 6.5) + 0.4 * scale(f.suggestions.length, 10, 200))
+  const results: ({ score: number } & Record<string, unknown>)[] = []
+  for (const other of others) {
+    const otherF = await topicFactsOn(wc, other, type, cache, o.language, o.country)
+    const combined = `${base} ${other}`
+    await sleep(400)
+    const s = await searchOn(wc, { query: combined, type, limit: 20 })
+    const comboSuggest = await ytSuggest({ seed: combined, language: o.language, country: o.country })
+    const otherTerms = topicTerms(other)
+    const matches = (s.ok ? s.videos as YtVideo[] : []).filter(v => mentionsBoth(String(v.title ?? ''), baseTerms, otherTerms))
+    const matchViews = median(matches.map(v => v.views).filter((n): n is number => n != null))
+    const demandBase = demandOf(baseF), demandOther = demandOf(otherF)
+    const weakest = Math.min(demandBase, demandOther)
+    const verdict = weakest < 35 ? 'weak demand'
+      : matches.length <= 3 ? 'gap'
+        : (matchViews ?? 0) < 10_000 ? 'tried, low views'
+          : matches.length <= 8 && (matchViews ?? 0) >= 100_000 ? 'proven and still open'
+            : 'crowded'
+    // Strong demand on both sides, few videos that already combine them, and people already typing the combination.
+    const score = Math.round(0.45 * weakest + 0.4 * Math.max(0, 100 - matches.length * 9) + 0.15 * ((comboSuggest.ok && (comboSuggest.suggestions as string[]).length) ? 100 : 30))
+    results.push({
+      mashup: combined, verdict, score,
+      demand: { [base]: demandBase, [other]: demandOther },
+      peopleSearchCombination: comboSuggest.ok ? (comboSuggest.suggestions as string[]).slice(0, 10) : [],
+      existingVideosCombiningBoth: matches.length,
+      theirMedianViews: matchViews,
+      examples: matches.slice(0, 5).map(v => ({ title: v.title, url: v.url, views: v.views, ageDays: v.ageDays, channel: v.channel })),
+      titleWords: { [base]: titleWords(baseF.top, 8), [other]: titleWords(otherF.top, 8) },
+    })
+  }
+  results.sort((a, b) => b.score - a.score)
+  return {
+    ok: true, base, mashups: results,
+    note: 'verdict: gap = both niches have demand and almost nobody combines them yet; proven and still open = a few combined videos already get 100K+ views; tried, low views = several combine them but their median is under 10K views (people are not watching that combination); crowded = many already combine them; weak demand = one side is too small. score = 45% the weaker side\'s demand + 40% how few videos already combine them + 15% whether people already type the combination. Use titleWords from both sides to write titles; a gap is an opening, not proof the combination will be watched — test it with a few videos.',
+  }
+}
+
+export function ytNicheMashup(o: MashupOptions): Promise<YouTubeResult> {
+  return withView(wc => nicheMashupOn(wc, o))
+}
