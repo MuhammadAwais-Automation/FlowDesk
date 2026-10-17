@@ -15,7 +15,7 @@
 import { app, type WebContents } from 'electron'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { getYouTubeView, parseVideoId, serialized, sleep, videoDetailOn, type YouTubeResult } from './youtube'
+import { getYouTubeView, parseVideoId, quiet, serialized, sleep, videoDetailOn, type YouTubeResult } from './youtube'
 import { whileAwake } from '../keepAwake'
 import {
   channelBaseUrl, encodeSearchParams, median, outlierScore, parseAgo, parseCount, parseLength, viewsPerDay,
@@ -76,10 +76,13 @@ async function ensureYouTube(wc: WebContents): Promise<void> {
 /** One request at a time on the one page; errors come back as { ok: false }. */
 function withView(fn: (wc: WebContents) => Promise<YouTubeResult>): Promise<YouTubeResult> {
   return serialized(async () => {
+    const wc = await getYouTubeView()
     try {
-      return await fn(await getYouTubeView())
+      return await fn(wc)
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    } finally {
+      await quiet(wc)
     }
   })
 }

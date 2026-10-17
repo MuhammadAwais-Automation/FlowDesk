@@ -24,7 +24,17 @@ const HOME = 'https://www.youtube.com/'
 export type YouTubeResult = { ok: true; [k: string]: unknown } | { ok: false; error: string; [k: string]: unknown }
 
 export async function getYouTubeView(): Promise<WebContents> {
-  return (await ensureBackgroundView(YT_TAB, YT_PARTITION, HOME)).webContents
+  const wc = (await ensureBackgroundView(YT_TAB, YT_PARTITION, HOME)).webContents
+  // A watch page starts playing (and autoplay moves on to the next video):
+  // this page is for reading, so it never makes a sound.
+  wc.setAudioMuted(true)
+  return wc
+}
+
+/** Stops whatever the page is playing, so it does not keep running (or autoplaying) after a job. */
+export async function quiet(wc: WebContents): Promise<void> {
+  if (wc.isDestroyed()) return
+  await wc.executeJavaScript(`document.querySelectorAll('video').forEach(function (v) { v.muted = true; v.pause() })`).catch(() => {})
 }
 
 /** The 11-character id from a watch, youtu.be, shorts or embed link, or the id itself. */
@@ -171,6 +181,10 @@ export function ytVideoDetail(input: string, opts: VideoDetailOptions = {}): Pro
   if (!id) return Promise.resolve({ ok: false, error: `"${input}" is not a YouTube video link or id` })
   return serialized(async () => {
     const wc = await getYouTubeView()
-    return whileAwake(wc, () => videoDetailOn(wc, id, opts))
+    try {
+      return await whileAwake(wc, () => videoDetailOn(wc, id, opts))
+    } finally {
+      await quiet(wc)
+    }
   })
 }
