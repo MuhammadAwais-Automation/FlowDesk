@@ -49,6 +49,8 @@ function stripYamlComment(line: string): string {
 export function getDefaultBuiltinsDir(): string {
   const currentDir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url))
   const candidates = [
+    // The installed app ships them as an extra resource (package.json build.extraResources).
+    ...(typeof process.resourcesPath === 'string' ? [join(process.resourcesPath, 'skills', 'builtins')] : []),
     join(process.cwd(), 'electron', 'skills', 'builtins'),
     join(currentDir, 'builtins'),
     join(currentDir, 'skills', 'builtins'),

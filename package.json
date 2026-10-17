@@ -1,6 +1,6 @@
 {
   "name": "flowdesk",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Local-first AI creator workstation for prompts, AI tools, social workflows, and multi-account sessions",
   "main": "./out/main/main.js",
   "type": "module",
@@ -47,6 +47,10 @@
       {
         "from": "out/mcp",
         "to": "mcp"
+      },
+      {
+        "from": "electron/skills/builtins",
+        "to": "skills/builtins"
       }
     ],
     "asarUnpack": [
