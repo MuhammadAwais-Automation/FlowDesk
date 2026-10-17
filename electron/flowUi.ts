@@ -133,7 +133,7 @@ interface UiState {
 /** Text from the page that says Flow refused (unusual activity, policy), if any. */
 const refusalScript = `(function () {
   var t = document.body.innerText
-  var m = t.match(/[^\\n]*(unusual activity|couldn.t generate|could not generate|Failed:)[^\\n]*/i)
+  var m = t.match(/[^\\n]*(unusual activity|couldn.t generate|could not generate|can.t generate|third-party content|Failed:)[^\\n]*/i)
   return m ? m[0].replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/g, '***').slice(0, 200) : null
 })()`
 
@@ -214,14 +214,25 @@ async function mediaIds(wc: WebContents, projectId: string): Promise<string[]> {
   return (r.media ?? []).map(m => m.mediaId)
 }
 
+/** Whether every id has its tile in the project grid. */
+function tilesShown(wc: WebContents, ids: string[]): Promise<boolean> {
+  return wc.executeJavaScript(`${JSON.stringify(ids)}.every(function (id) { return !!document.querySelector('img[data-media-id="' + id + '"]') })`).catch(() => false) as Promise<boolean>
+}
+
 /** Puts one project image into the prompt bar through its tile menu. */
 async function addFromProject(wc: WebContents, mediaId: string): Promise<void> {
   const more = await locate(wc, { tileMenu: mediaId }, 6000)
   if (!more) throw new Error(`image ${mediaId} is not shown in this project's grid (only images can be attached; check the id with flow_list_project_media)`)
   await click(wc, more)
   await sleep(500)
+  const before = await state(wc)
   await press(wc, { menuEnds: 'Add to prompt' }, '"Add to prompt" in the image menu')
-  await sleep(700)
+  // A just-uploaded image takes a few seconds to appear in the bar.
+  await waitFor(async () => {
+    const s = await state(wc)
+    return s.chips.includes(mediaId) || s.frameSlotsFilled > before.frameSlotsFilled || null
+  }, 8000, 400)
+  await sleep(400)
 }
 
 /** Uploads a local image through the page's own "Upload media", which adds it to the prompt. */
@@ -334,6 +345,16 @@ export async function flowUiGenerate(req: FlowUiRequest): Promise<FlowResult> {
   return withFlowPage(id, req.account, async (wc, partition) => {
     const hold = partition ? flowHold(partition) : null
     if (hold) return { ok: false, error: heldError(hold), heldUntil: hold.until }
+
+    // An image added since the page opened (flow_upload_image, another tab) is
+    // not in its grid until the page reloads (seen 2026-10-17): reload once.
+    const projectRefs = [...frames, ...ingredients].filter(r => !isLocalPath(r))
+    if (projectRefs.length && !(await tilesShown(wc, projectRefs))) {
+      wc.once('will-prevent-unload', e => e.preventDefault())
+      wc.reload()
+      await waitFor(async () => (await tilesShown(wc, projectRefs)) || null, 25_000, 500)
+      await sleep(1000)
+    }
 
     // A clean bar, and Flow's agent off: the prompt goes straight to generation.
     let s = await state(wc)

@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { RotateCw, ChevronDown } from 'lucide-react'
+import { RotateCw } from 'lucide-react'
 import { STUDIO_TOOLS, DEFAULT_STUDIO_TOOL_ID } from '@/config/studioTools'
 import type { GmailSession } from '@/types/electron'
 
@@ -40,7 +40,6 @@ export default function Studio({ isActive }: Props) {
   const [accountEmail, setAccountEmail] = useState<string>(() => {
     return localStorage.getItem(`studioAccount:${tool.id}`) || ''
   })
-  const [pickerOpen, setPickerOpen] = useState(false)
 
   useEffect(() => {
     if (!tool.requiresGoogleAccount) return
@@ -54,7 +53,6 @@ export default function Studio({ isActive }: Props) {
   function selectAccount(email: string) {
     setAccountEmail(email)
     localStorage.setItem(`studioAccount:${tool.id}`, email)
-    setPickerOpen(false)
   }
 
   const account = accounts.find(a => a.email === accountEmail) ?? null
@@ -91,10 +89,12 @@ export default function Studio({ isActive }: Props) {
       api.hideView().catch(() => {})
       return
     }
-    // Same tab id electron/flow.ts uses for its hidden worker, so the MCP/agent
-    // tools and this page share one view instead of two Chromium instances
-    // fighting over the same partition's storage locks.
-    api.switchView(tool.id === 'flow' ? 'flow-worker' : `studio-${tool.id}`, partition, tool.url).catch(() => {})
+    // Same tab id electron/flow.ts uses for each account's hidden worker, so the
+    // MCP/agent tools and this page share one view instead of two Chromium
+    // instances fighting over the same partition's storage locks. The id carries
+    // the account: a view is cached by id, so one id for every account kept
+    // showing the first account's page after a switch.
+    api.switchView(tool.id === 'flow' ? `flow-worker-${partition}` : `studio-${tool.id}`, partition, tool.url).catch(() => {})
     applyBounds()
   }, [isActive, tool.id, partition, applyBounds])
 
@@ -133,35 +133,20 @@ export default function Studio({ isActive }: Props) {
 
           <div className="flex items-center gap-2">
             {tool.requiresGoogleAccount && (
-              <div className="relative">
-                <button
-                  onClick={() => setPickerOpen(v => !v)}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[#D6CFC0] bg-[#FAF7F0] text-xs font-retro-sans text-stone-700 hover:bg-white transition-colors"
-                >
-                  <span className="truncate max-w-[160px]">
-                    {account ? account.email : 'Choose Google account'}
-                  </span>
-                  <ChevronDown size={12} />
-                </button>
-                {pickerOpen && (
-                  <div className="absolute right-0 top-full mt-1 z-10 w-56 rounded-lg border border-[#D6CFC0] bg-white shadow-lg py-1">
-                    {accounts.length === 0 && (
-                      <p className="px-3 py-2 text-xs text-stone-400 font-retro-sans">
-                        No Google accounts added yet — add one on the Accounts page.
-                      </p>
-                    )}
-                    {accounts.map(a => (
-                      <button
-                        key={a.email}
-                        onClick={() => selectAccount(a.email)}
-                        className="w-full text-left px-3 py-1.5 text-xs font-retro-sans text-stone-700 hover:bg-[#FAF7F0] truncate"
-                      >
-                        {a.email}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              // A native <select>: its list opens in its own OS window above the
+              // page view. An HTML dropdown here would be painted underneath it.
+              <select
+                value={account?.email ?? ''}
+                onChange={e => selectAccount(e.target.value)}
+                className="max-w-[220px] font-retro-sans text-xs bg-[#FAF7F0] border border-[#D6CFC0] rounded-lg px-2.5 py-1 text-stone-700 focus:outline-none focus:ring-1 focus:ring-stone-400 cursor-pointer"
+              >
+                <option value="" disabled>
+                  {accounts.length === 0 ? 'No Google accounts — add one on the Accounts page' : 'Choose Google account'}
+                </option>
+                {accounts.map(a => (
+                  <option key={a.email} value={a.email}>{a.email}</option>
+                ))}
+              </select>
             )}
             <button
               title={`Reload ${tool.label}`}

@@ -12,6 +12,7 @@
 import type { WebContents } from 'electron'
 import { finishUpload, getTikTokView, resolveTikTokPartition, tkUploadVideo, unknownTikTokAccount, type TikTokResult } from './tiktok'
 import { checkSchedule } from './tiktokUpload'
+import { keepAwake } from '../keepAwake'
 
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
 const POST_URL = '/tiktok/web/project/post/v1'
@@ -70,6 +71,16 @@ async function press(wc: WebContents, finder: string, what: string): Promise<voi
   if (clickLog.length > 14) clickLog.shift()
   await cdpClick(wc, p)
   await sleep(350)
+}
+
+async function pressEscape(wc: WebContents): Promise<void> {
+  const wasAttached = wc.debugger.isAttached()
+  if (!wasAttached) wc.debugger.attach('1.3')
+  try {
+    for (const type of ['keyDown', 'keyUp']) await wc.debugger.sendCommand('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  } catch { /* best effort */ } finally {
+    if (!wasAttached) { try { wc.debugger.detach() } catch { /* already gone */ } }
+  }
 }
 
 const read = <T>(wc: WebContents, expr: string) => wc.executeJavaScript(`(() => (${expr}))()`) as Promise<T>
@@ -186,7 +197,10 @@ async function closePicker(wc: WebContents): Promise<void> {
   if (!(await until(wc, `!(${PICKER_OPEN})`, 4000))) throw new Error('TikTok Studio: the time picker would not close')
 }
 
-interface PostAnswer { requestId: string; done: boolean; body?: any }
+interface PostAnswer { requestId: string; done: boolean; body?: any; scheduled?: boolean }
+
+/** Studio puts schedule_time in the post body only for a scheduled post (captured source, tks-01). */
+export const carriesScheduleTime = (postData: string): boolean => /"schedule_time"\s*:\s*"?[1-9]\d{5,}/.test(postData)
 
 /** Watches the page's own scheduled-post request so the answer can be read. */
 function watchPost(wc: WebContents): { answers: PostAnswer[]; stop: () => void } {
@@ -196,7 +210,14 @@ function watchPost(wc: WebContents): { answers: PostAnswer[]; stop: () => void }
   void wc.debugger.sendCommand('Network.enable').catch(() => {})
   const onMessage = (_e: unknown, method: string, params: any) => {
     if (method === 'Network.requestWillBeSent' && String(params?.request?.url ?? '').includes(POST_URL)) {
-      answers.push({ requestId: params.requestId, done: false })
+      const a: PostAnswer = { requestId: params.requestId, done: false }
+      answers.push(a)
+      const body = params?.request?.postData
+      if (typeof body === 'string') a.scheduled = carriesScheduleTime(body)
+      else if (params?.request?.hasPostData) {
+        void wc.debugger.sendCommand('Network.getRequestPostData', { requestId: a.requestId })
+          .then((r: any) => { a.scheduled = carriesScheduleTime(String(r?.postData ?? '')) }).catch(() => {})
+      }
     } else if (method === 'Network.loadingFinished') {
       const a = answers.find(x => x.requestId === params.requestId)
       if (a) {
@@ -241,7 +262,6 @@ export async function tkScheduleVideo(opts: {
   const wc = (await getTikTokView(opts.account)).webContents
   // A page in a hidden window stops painting, so Studio answered clicks only
   // when something (a screenshot) woke it: keep it rendering while we work.
-  wc.setBackgroundThrottling(false)
   const release = await keepAwake(wc)
   const steps = ['upload']
   let watcher: ReturnType<typeof watchPost> | null = null
@@ -252,16 +272,33 @@ export async function tkScheduleVideo(opts: {
     return { ok: false, account: resolved.tabId, error: `${error}. Nothing was scheduled; the Studio form was discarded.`, steps, ...(traceRef.length ? { trace: traceRef } : {}), clicks: [...clickLog], ...extra }
   }
   try {
-    await dismissTour(wc)
-    await chooseSchedule(wc)
-    steps.push('schedule-chosen')
-    await setDate(wc, target)
-    const trace: string[] = []
-    traceRef = trace
-    await setTime(wc, target, trace)
-    const shown = await read<{ date: string; time: string }>(wc, `({ date: (${DATE_INPUT} || {}).value, time: (${TIME_INPUT} || {}).value })`)
-    const shownLabel = `${shown.date} ${String(shown.time).padStart(5, '0')}`
-    if (shownLabel !== label) return fail(`Studio shows ${shownLabel} instead of ${label}`)
+    // The form sometimes ignores a click (a day "not selectable", a picker that
+    // will not close) and takes it on the next try: fill it again, up to three
+    // times, before giving up; the uploaded video stays in the form.
+    let shownLabel = ''
+    let formError: unknown = null
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await dismissTour(wc)
+        await chooseSchedule(wc)
+        if (!steps.includes('schedule-chosen')) steps.push('schedule-chosen')
+        await setDate(wc, target)
+        const trace: string[] = []
+        traceRef = trace
+        await setTime(wc, target, trace)
+        const shown = await read<{ date: string; time: string }>(wc, `({ date: (${DATE_INPUT} || {}).value, time: (${TIME_INPUT} || {}).value })`)
+        shownLabel = `${shown.date} ${String(shown.time).padStart(5, '0')}`
+        if (shownLabel !== label) throw new Error(`Studio shows ${shownLabel} instead of ${label}`)
+        formError = null
+        break
+      } catch (e) {
+        formError = e
+        steps.push(`form-retry-${attempt}`)
+        await pressEscape(wc)
+        await sleep(1200 * attempt)
+      }
+    }
+    if (formError) return fail(formError instanceof Error ? formError.message : String(formError))
     steps.push('time-set')
     if (opts.dryRun) {
       finishUpload(wc, resolved.tabId, true)
@@ -276,8 +313,25 @@ export async function tkScheduleVideo(opts: {
     // every scheduled upload; scheduling the video is what the user asked for.
     let allowed = false
     let popup = ''
-    for (let i = 0; i < 40; i++) {
+    let continued = false
+    for (let i = 0; i < 60; i++) {
       if (watcher.answers.some(a => a.done)) break
+      // "Continue to post? We're still checking your video…" [Cancel] [Post now]
+      // continues the submission already chosen; the post request is checked
+      // for its schedule time below.
+      const cont = await centerOf(wc, `(() => {
+        const box = Array.from(document.querySelectorAll('[role="dialog"], .TUXModal, [class*="modal"], [class*="Modal"]')).find(d => /Continue to post\\?/.test(d.innerText || ''))
+        return box ? Array.from(box.querySelectorAll('button')).find(b => (b.innerText || '').trim() === 'Post now') : null
+      })()`)
+      if (cont) {
+        const stillScheduled = await read<boolean>(wc, `!!(document.querySelector('input[type=radio][value=schedule]') || {}).checked`).catch(() => false)
+        if (!stillScheduled) return fail('Studio asked "Continue to post?" but the form is no longer on Schedule, so it was not confirmed')
+        await cdpClick(wc, cont)
+        continued = true
+        steps.push('continue-post-confirmed')
+        await sleep(800)
+        continue
+      }
       const p = await centerOf(wc, `Array.from(document.querySelectorAll('button')).find(b => (b.innerText || '').trim() === 'Allow')`)
       if (p) {
         popup = String(await read<string>(wc, `(document.querySelector('[role="dialog"]') || document.body).innerText.replace(/\\s+/g, ' ').slice(0, 160)`))
@@ -291,12 +345,17 @@ export async function tkScheduleVideo(opts: {
     }
     const answer = watcher.answers.find(a => a.done)?.body
     const item = answer?.single_post_resp_list?.[0]
+    const sent = watcher.answers.find(a => a.done)
+    if (sent?.scheduled === false && item?.item_id) {
+      finishUpload(wc, resolved.tabId)
+      return { ok: false, account: resolved.tabId, itemId: String(item.item_id), steps, error: 'TikTok took the post WITHOUT a schedule time, so it may be published now instead of later. Check it with tiktok_list_posts and tell the user; do not upload it again.' }
+    }
     if (answer?.status_code === 0 && item?.item_id && item.status_code === 0) {
       steps.push('scheduled')
       finishUpload(wc, resolved.tabId)
       return {
         ok: true, via: 'studio-ui', account: resolved.tabId, itemId: String(item.item_id), scheduled: true,
-        scheduledFor: target.toISOString(), scheduledLocal: label, allowClicked: allowed, steps,
+        scheduledFor: target.toISOString(), scheduledLocal: label, allowClicked: allowed, continuedPastContentCheck: continued, scheduleTimeSent: sent?.scheduled ?? null, steps,
         note: 'scheduled through TikTok Studio and confirmed by TikTok with an item id; do not call tiktok_submit_post',
       }
     }
@@ -307,24 +366,5 @@ export async function tkScheduleVideo(opts: {
   } finally {
     watcher?.stop()
     release()
-  }
-}
-
-/**
- * Tells the page it is focused and visible, which a hidden view is not. The
- * debugger stays attached until the returned function runs (the emulation ends
- * with the session).
- */
-async function keepAwake(wc: WebContents): Promise<() => void> {
-  const attachedHere = !wc.debugger.isAttached()
-  try {
-    if (attachedHere) wc.debugger.attach('1.3')
-    await wc.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
-    await wc.debugger.sendCommand('Page.setWebLifecycleState', { state: 'active' }).catch(() => {})
-  } catch { /* best effort */ }
-  return () => {
-    if (wc.isDestroyed()) return
-    wc.setBackgroundThrottling(true)
-    if (attachedHere) { try { wc.debugger.detach() } catch { /* already gone */ } }
   }
 }

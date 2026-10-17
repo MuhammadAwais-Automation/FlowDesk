@@ -10,6 +10,7 @@ import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { clipboard, type WebContents } from 'electron'
 import { ensureBackgroundView, getActiveView, getViewById, showView } from '../sessions'
+import { whileAwake } from '../keepAwake'
 import { isSignedIn, listSocialAccounts, resolveSocialAccount, type SocialAccount } from '../socialAccounts'
 import {
   tiktokStatusScript,
@@ -303,14 +304,24 @@ async function readStudioCaption(wc: Electron.WebContents): Promise<string> {
   })()`) ?? '')
 }
 
-export async function tkUploadVideo(options: {
+type UploadOptions = {
   videoFilePath: string
   caption: string
   scheduleTime?: string | number
   allowComment?: boolean
   allowDuet?: boolean
   account?: string | number
-}): Promise<TikTokResult> {
+}
+
+/** The Studio page is kept awake while the video goes in, whatever FlowDesk section is open. */
+export async function tkUploadVideo(options: UploadOptions): Promise<TikTokResult> {
+  const scheduled = options.scheduleTime !== undefined && options.scheduleTime !== null && options.scheduleTime !== ''
+  if (scheduled || !resolveTikTokPartition(options.account)) return uploadInStudio(options)
+  const wc = (await getTikTokView(options.account)).webContents
+  return whileAwake(wc, () => uploadInStudio(options))
+}
+
+async function uploadInStudio(options: UploadOptions): Promise<TikTokResult> {
   const filePath = String(options.videoFilePath ?? '').trim()
   if (!filePath) return { ok: false, error: 'refusing to upload without a video file path' }
   const resolved = resolveTikTokPartition(options.account)
@@ -518,6 +529,12 @@ export function finishUpload(wc: WebContents, tabId: string, discard = false): v
 }
 
 export async function tkSubmitPost(account?: string | number): Promise<TikTokResult> {
+  if (!resolveTikTokPartition(account)) return unknownTikTokAccount(account) as TikTokResult
+  const wc = (await getTikTokView(account)).webContents
+  return whileAwake(wc, () => submitInStudio(account))
+}
+
+async function submitInStudio(account?: string | number): Promise<TikTokResult> {
   const resolved = resolveTikTokPartition(account)
   if (!resolved) return unknownTikTokAccount(account) as TikTokResult
   const view = await getTikTokView(account)

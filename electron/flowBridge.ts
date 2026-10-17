@@ -641,7 +641,13 @@ export function mediaStatusScript(mediaId: string): string {
     // Nothing at all came back: the media is not on this account. Saying so
     // (instead of ok + "unknown") keeps the caller from filing the id under
     // the wrong account and lets it look on the others.
-    if (kind === 'unknown' && statusCode === null) return { ok: false, error: 'media ' + id + ' was not found on this account', notFound: true }
+    if (kind === 'unknown' && statusCode === null) {
+      // A generation Flow refused (content/third-party filter) never becomes a
+      // media item; the reason is only written on the project page (report 2026-10-16).
+      var refusal = (document.body.innerText || '').match(/[^\\n]*(can.t generate|cannot generate|couldn.t generate|third-party content|will be refunded)[^\\n]*/i)
+      if (refusal) return { ok: false, error: 'media ' + id + ' was not found on this account. The Flow page says: "' + refusal[0].slice(0, 300) + '" — Flow most likely refused this generation (credits are refunded). Change the prompt; do not resend it unchanged.', notFound: true, refused: true }
+      return { ok: false, error: 'media ' + id + ' was not found on this account', notFound: true }
+    }
 
     return {
       ok: true,

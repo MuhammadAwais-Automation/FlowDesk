@@ -355,6 +355,7 @@ const SERVER_INSTRUCTIONS = `FlowDesk drives the user's own signed-in accounts (
 Before using a family of tools, read its skill with flowdesk_skill_get — it says which tool fits which job, the order to call them in, timings, costs and what each error means (all verified live):
 - chatgpt_* and ask_chatgpt → flowdesk_skill_get { id: "chatgpt" }
 - flow_* (Google Flow images and video) → flowdesk_skill_get { id: "google-flow" }
+- youtube_* (YouTube niche research, outliers, transcripts, comments; read-only) → flowdesk_skill_get { id: "youtube" }
 - tiktok_* / linkedin_* / reddit_* / whatsapp_* / facebook_* / pinterest_* / gumroad_* → flowdesk_skill_get { id: "tiktok" | "linkedin" | "reddit" | "whatsapp" | "facebook" | "pinterest" | "gumroad" }
 - several accounts per platform: social_accounts lists them; pass account (id, label or partition) to any social tool. An unknown account is an error, never another account.
 flowdesk_skills_list shows every other skill.
@@ -1135,6 +1136,137 @@ server.tool(
   },
   { readOnlyHint: true, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('tiktok.videoDetail', args))
+)
+
+server.tool(
+  'youtube_video_detail',
+  'One YouTube video\'s public details, read from YouTube\'s own watch page (no API key, no sign-in): title, channel, publish date, views, likes, length, Short or not, category, tags, full description, chapters, thumbnail and caption languages. With transcript: true it also returns every transcript line with its start second (YouTube\'s own captions; prefers human-written over auto). Takes ~5-15 s; one video at a time.',
+  {
+    video: z.string().min(1).describe('A YouTube link (watch, youtu.be, shorts) or the 11-character video id.'),
+    transcript: z.boolean().optional().describe('Also return the full transcript. Default false.'),
+    language: z.string().optional().describe('Transcript language code, e.g. "en", "ur", "hi". Default: the video\'s own (human-written first).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.videoDetail', args))
+)
+
+const YT_TYPE = z.enum(['video', 'short']).optional()
+const YT_UPLOADED = z.enum(['hour', 'today', 'week', 'month', 'year']).optional().describe('Only videos uploaded within this window.')
+
+server.tool(
+  'youtube_search',
+  "Search YouTube like a viewer does, with YouTube's own filters, and get every result with exact view counts, upload age, length, channel (name, id, handle) and views per day. No API key, no sign-in. Use it to see what exists and what is getting views for a topic. ~5-20 s.",
+  {
+    query: z.string().min(1).describe('What to search, e.g. "ai animation story".'),
+    type: YT_TYPE.describe('"video" (long-form only) or "short" (Shorts only). Default: both.'),
+    uploaded: YT_UPLOADED,
+    duration: z.enum(['under3', '3to20', 'over20']).optional().describe('Length filter (minutes).'),
+    sort: z.enum(['relevance', 'popularity']).optional().describe('Default relevance.'),
+    limit: z.number().int().min(1).max(200).optional().describe('Results to return (default 40).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.search', args))
+)
+
+server.tool(
+  'youtube_channel_videos',
+  "A YouTube channel's profile (subscribers, video count, description, keywords) and its videos or Shorts with views, age, length, views per day and an outlierScore (views ÷ the median of the listed videos). Channel pages round views (\"620K\"); each video says viewsApprox. ~5-30 s.",
+  {
+    channel: z.string().min(1).describe('@handle, a channel link, or a UC… channel id.'),
+    tab: z.enum(['videos', 'shorts']).optional().describe('Default videos (long-form).'),
+    sort: z.enum(['latest', 'popular', 'oldest']).optional().describe('Default latest. Use latest for a fair median.'),
+    limit: z.number().int().min(1).max(500).optional().describe('Videos to return (default 30).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.channel', args))
+)
+
+server.tool(
+  'youtube_outliers',
+  "Find YouTube videos that beat their own channel's typical views (outlierScore = views ÷ that channel's median over its last ~30 videos). Give a topic (query) to scan the channels behind a popularity-sorted search, or a channel to find its own breakout videos. This is the main signal for what works in a niche. Topic mode opens each channel, so it takes ~1-3 min.",
+  {
+    query: z.string().optional().describe('Topic to scan, e.g. "fruit drama ai". Give this or channel.'),
+    channel: z.string().optional().describe("@handle, link or UC… id, to rank one channel's own videos."),
+    type: YT_TYPE.describe('"video" (default) or "short".'),
+    uploaded: YT_UPLOADED,
+    minScore: z.number().positive().optional().describe('Minimum views ÷ channel median (default 2).'),
+    channels: z.number().int().min(1).max(20).optional().describe('Topic mode: how many channels to baseline (default 8).'),
+    limit: z.number().int().min(1).max(100).optional().describe('Outliers to return (default 20).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.outliers', args))
+)
+
+server.tool(
+  'youtube_niche_scan',
+  'One-call map of a YouTube niche: what people search (autocomplete, a-z expanded), the channels in it (subscribers, median views), the outlier videos (1.5×+ their channel median, last year by default) and the patterns across those outliers (common title words, typical length, Shorts share, age). Start niche research here. ~2-4 min.',
+  {
+    topic: z.string().min(1).describe('The niche, e.g. "animal comedy cartoon".'),
+    type: YT_TYPE.describe('"video" (default) or "short".'),
+    uploaded: YT_UPLOADED.describe('Window for the outliers (default year).'),
+    channels: z.number().int().min(1).max(20).optional().describe('Channels to baseline (default 10).'),
+    language: z.string().optional().describe('Autocomplete language, e.g. "en", "ur", "hi" (default en).'),
+    country: z.string().optional().describe('Autocomplete country, e.g. "PK", "US" (default US).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.nicheScan', args))
+)
+
+server.tool(
+  'youtube_suggest',
+  'What people type into YouTube search for a seed (YouTube autocomplete). With expand: true it also tries the seed plus each letter a-z for a long-tail list. Shows demand and wording, not search volumes. ~1-5 s.',
+  {
+    seed: z.string().min(1).describe('Seed phrase, e.g. "ai cartoon".'),
+    expand: z.boolean().optional().describe('Also seed + a…z (26 more lookups). Default false.'),
+    language: z.string().optional().describe('e.g. "en", "ur", "hi" (default en).'),
+    country: z.string().optional().describe('e.g. "PK", "US", "IN" (default US).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.suggest', args))
+)
+
+server.tool(
+  'youtube_comments',
+  'Top-level comments on a YouTube video with likes, reply count, age and author, plus the total comment count. Use it to see what viewers liked, asked or complained about (content gaps, next video ideas). ~3-20 s.',
+  {
+    video: z.string().min(1).describe('A YouTube link or the 11-character video id.'),
+    sort: z.enum(['top', 'newest']).optional().describe('Default top.'),
+    limit: z.number().int().min(1).max(500).optional().describe('Comments to return (default 50).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.comments', args))
+)
+
+server.tool(
+  'youtube_most_replayed',
+  'The "Most replayed" graph of a YouTube video: 100 segments with how much each part is replayed (0-1), and the 5 strongest moments. Shows which moments hold viewers. Videos with few views have no graph (heatmap: null). ~2-5 s.',
+  {
+    video: z.string().min(1).describe('A YouTube link or the 11-character video id.'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.mostReplayed', args))
+)
+
+server.tool(
+  'youtube_breakdown',
+  'Everything needed to judge why one YouTube video worked, in one call: details, performance against its channel (outlierScore, views per day, likes per 1000 views), packaging facts (title length, numbers, caps, emoji, thumbnail URL, chapters), the hook (what is said in the first 15/30 s), what is said at the most replayed moments, and the top comments. ~30-60 s.',
+  {
+    video: z.string().min(1).describe('A YouTube link or the 11-character video id.'),
+    includeTranscript: z.boolean().optional().describe('Also return the full transcript lines. Default false.'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.breakdown', args))
+)
+
+server.tool(
+  'youtube_watchlist',
+  'Track YouTube videos over time. add stores the live view count of new videos; refresh stores a new count for every tracked video; list shows them sorted by views per hour between the last two checks (viewsPerHourRecent), the speed a video is growing right now. remove stops tracking. Stored on this computer.',
+  {
+    action: z.enum(['add', 'remove', 'list', 'refresh']),
+    videos: z.array(z.string()).optional().describe('YouTube links or ids (for add and remove).'),
+  },
+  { readOnlyHint: false, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.watch', args))
 )
 
 server.tool(

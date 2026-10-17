@@ -50,7 +50,7 @@ function logCdpDecision(url: string, matchedHost: string | undefined, packaged: 
   } catch { /* discovery aid only */ }
 }
 
-const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'flow.google.com', 'labs.google', 'reddit.com', 'tiktok.com', 'chatgpt.com', 'pinterest.com', 'gumroad.com']
+const CDP_RECORDER_HOSTS = ['linkedin.com', 'facebook.com', 'flow.google.com', 'labs.google', 'reddit.com', 'tiktok.com', 'chatgpt.com', 'pinterest.com', 'gumroad.com', 'youtube.com']
 
 /**
  * Extra hosts to capture ALONGSIDE a matched tab host, for sites whose real
@@ -420,6 +420,19 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
     if (decision !== 'external') return
     event.preventDefault()
     void shell.openExternal(targetUrl)
+  })
+
+  // A link on the page can also leave by a server redirect (LinkedIn's own
+  // /redir links sent a view on to WhatsApp), which will-navigate never sees.
+  view.webContents.on('will-redirect', (event, redirectUrl) => {
+    const d = event as unknown as { url?: string; isMainFrame?: boolean }
+    if (d.isMainFrame === false) return
+    const target = d.url ?? redirectUrl
+    const decision = routeLink(target, view.webContents.getURL())
+    logLinkRoutingDecision('will-navigate', view.webContents.getURL(), target, decision)
+    if (decision !== 'external') return
+    event.preventDefault()
+    void shell.openExternal(target)
   })
 
   // Must be set before the first loadURL: which page WhatsApp serves is

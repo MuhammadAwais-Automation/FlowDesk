@@ -11,6 +11,7 @@ import { app, session, webContents as electronWebContents } from 'electron'
 import type { WebContents } from 'electron'
 import { listViewUrls, ensureBackgroundView } from './sessions'
 import { readLocalImage } from './localImageFile'
+import { whileAwake } from './keepAwake'
 import { holdFlowAccount, UNUSUAL_ACTIVITY } from './flowHolds'
 import {
   createProjectScript, renameProjectScript, deleteProjectScript, listProjectsScript,
@@ -418,7 +419,9 @@ export async function withFlowPage(
     const wc = await ensureFlowWebContents(projectId, partition)
     if (!wc) return { ok: false, error: NOT_OPEN + openUrlSummary() }
     try {
-      const r = await fn(wc, partition)
+      // Flow's page stops painting when its view is hidden (another FlowDesk
+      // section is open), and its menus then never open: keep it awake.
+      const r = await whileAwake(wc, () => fn(wc, partition))
       if (partition) learnOwners(r, partition)
       return r
     } catch (e) {

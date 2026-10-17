@@ -768,6 +768,38 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     }
     return { ok: true, ...now }
   },
+  'youtube.videoDetail': async (p) => {
+    const { ytVideoDetail } = await import('../youtube/youtube')
+    return ytVideoDetail(String(p.video || p.url || ''), { transcript: p.transcript === true, language: typeof p.language === 'string' ? p.language : null })
+  },
+  'youtube.search': async (p) => (await import('../youtube/youtubeResearch')).ytSearch({ query: String(p.query || ''), type: typeof p.type === 'string' ? p.type : undefined, uploaded: typeof p.uploaded === 'string' ? p.uploaded : undefined, duration: typeof p.duration === 'string' ? p.duration : undefined, sort: typeof p.sort === 'string' ? p.sort : undefined, limit: typeof p.limit === 'number' ? p.limit : undefined }),
+  'youtube.channel': async (p) => (await import('../youtube/youtubeResearch')).ytChannel({ channel: String(p.channel || ''), tab: typeof p.tab === 'string' ? p.tab : undefined, sort: typeof p.sort === 'string' ? p.sort : undefined, limit: typeof p.limit === 'number' ? p.limit : undefined }),
+  'youtube.outliers': async (p) => (await import('../youtube/youtubeResearch')).ytOutliers({ query: typeof p.query === 'string' ? p.query : undefined, channel: typeof p.channel === 'string' ? p.channel : undefined, type: typeof p.type === 'string' ? p.type : undefined, uploaded: typeof p.uploaded === 'string' ? p.uploaded : undefined, duration: typeof p.duration === 'string' ? p.duration : undefined, limit: typeof p.limit === 'number' ? p.limit : undefined, minScore: typeof p.minScore === 'number' ? p.minScore : undefined, channels: typeof p.channels === 'number' ? p.channels : undefined, baseline: typeof p.baseline === 'number' ? p.baseline : undefined }),
+  'youtube.nicheScan': async (p) => (await import('../youtube/youtubeResearch')).ytNicheScan({ topic: String(p.topic || ''), type: typeof p.type === 'string' ? p.type : undefined, uploaded: typeof p.uploaded === 'string' ? p.uploaded : undefined, channels: typeof p.channels === 'number' ? p.channels : undefined, language: typeof p.language === 'string' ? p.language : undefined, country: typeof p.country === 'string' ? p.country : undefined }),
+  'youtube.suggest': async (p) => (await import('../youtube/youtubeResearch')).ytSuggest({ seed: String(p.seed || ''), expand: p.expand === true, language: typeof p.language === 'string' ? p.language : undefined, country: typeof p.country === 'string' ? p.country : undefined }),
+  'youtube.comments': async (p) => (await import('../youtube/youtubeResearch')).ytComments({ video: String(p.video || ''), sort: typeof p.sort === 'string' ? p.sort : undefined, limit: typeof p.limit === 'number' ? p.limit : undefined }),
+  'youtube.mostReplayed': async (p) => (await import('../youtube/youtubeResearch')).ytMostReplayed(String(p.video || '')),
+  'youtube.breakdown': async (p) => (await import('../youtube/youtubeResearch')).ytBreakdown(String(p.video || ''), p.includeTranscript === true),
+  'youtube.watch': async (p) => (await import('../youtube/youtubeResearch')).ytWatch({ action: String(p.action || ''), videos: Array.isArray(p.videos) ? p.videos.filter((v): v is string => typeof v === 'string') : undefined }),
+  // Dev only: runs a script on a Flow project's page (the view the Flow tools
+  // drive), for reading what the page shows. Never in the installed app.
+  'dev.flowEval': async (p) => {
+    if (app.isPackaged) throw new Error('dev.flowEval is only available in development')
+    const { withFlowPage } = await import('../flow')
+    return withFlowPage(String(p.projectId || ''), acct(p), async wc => ({ ok: true, url: wc.getURL(), result: await wc.executeJavaScript(`(async () => { ${String(p.code || 'return null')} })()`, true) }))
+  },
+  // Dev only: runs a script in the hidden YouTube view (opening it first), for
+  // reading what YouTube's own page holds and sends. Never in the installed app.
+  'dev.youtubeEval': async (p) => {
+    if (app.isPackaged) throw new Error('dev.youtubeEval is only available in development')
+    const { getYouTubeView } = await import('../youtube/youtube')
+    const wc = await getYouTubeView()
+    if (typeof p.goto === 'string' && p.goto.startsWith('https://www.youtube.com/')) {
+      await wc.loadURL(p.goto).catch(() => {})
+    }
+    const { whileAwake } = await import('../keepAwake')
+    return { ok: true, url: wc.getURL(), result: await whileAwake(wc, () => wc.executeJavaScript(String(p.code || 'null'), true)) }
+  },
   // Searches the JS the view `tab` has loaded for request identifiers (bundleScan.ts).
   'dev.bundleScan': async (p) => {
     const tab = String(p.tab || '')
