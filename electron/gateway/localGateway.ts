@@ -780,6 +780,7 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'youtube.comments': async (p) => (await import('../youtube/youtubeResearch')).ytComments({ video: String(p.video || ''), sort: typeof p.sort === 'string' ? p.sort : undefined, limit: typeof p.limit === 'number' ? p.limit : undefined }),
   'youtube.mostReplayed': async (p) => (await import('../youtube/youtubeResearch')).ytMostReplayed(String(p.video || '')),
   'youtube.breakdown': async (p) => (await import('../youtube/youtubeResearch')).ytBreakdown(String(p.video || ''), p.includeTranscript === true),
+  'youtube.monetization': async (p) => (await import('../youtube/youtubeResearch')).ytMonetization({ channel: String(p.channel || ''), sample: typeof p.sample === 'number' ? p.sample : undefined }),
   'youtube.watch': async (p) => (await import('../youtube/youtubeResearch')).ytWatch({ action: String(p.action || ''), videos: Array.isArray(p.videos) ? p.videos.filter((v): v is string => typeof v === 'string') : undefined }),
   // Dev only: runs a script on a Flow project's page (the view the Flow tools
   // drive), for reading what the page shows. Never in the installed app.

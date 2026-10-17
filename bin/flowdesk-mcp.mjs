@@ -1259,6 +1259,17 @@ server.tool(
 )
 
 server.tool(
+  'youtube_monetization',
+  "Is a YouTube channel monetized, and roughly what might it earn? Checks whether YouTube serves ads on its latest few videos (and whether they are made for kids), reads the spoken language from the auto captions, and estimates earnings as views of the last 30 days' uploads × an assumed RPM range for that language. A strong sign, not proof; the RPM ranges are assumptions, since YouTube does not publish other channels' earnings. ~20-40 s.",
+  {
+    channel: z.string().min(1).describe('@handle, a channel link, or a UC… id.'),
+    sample: z.number().int().min(1).max(6).optional().describe('How many recent videos to check for ads (default 3).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.monetization', args))
+)
+
+server.tool(
   'youtube_watchlist',
   'Track YouTube videos over time. add stores the live view count of new videos; refresh stores a new count for every tracked video; list shows them sorted by views per hour between the last two checks (viewsPerHourRecent), the speed a video is growing right now. remove stops tracking. Stored on this computer.',
   {

@@ -4,7 +4,7 @@ vi.mock('electron', () => ({ app: { getPath: () => '' } }))
 vi.mock('./youtube', () => ({}))
 vi.mock('../keepAwake', () => ({ whileAwake: vi.fn() }))
 
-import { heatPeaks, titleFacts, velocity } from './youtubeResearch'
+import { heatPeaks, rpmBand, titleFacts, velocity } from './youtubeResearch'
 
 describe('heatPeaks', () => {
   it('keeps the strongest moments, spaced apart, in time order', () => {
@@ -32,5 +32,16 @@ describe('velocity', () => {
     expect(velocity({ at: '2026-10-16T10:00:00Z', views: 1000, likes: null }, { at: '2026-10-16T12:00:00Z', views: 3000, likes: null })).toBe(1000)
     expect(velocity(undefined, { at: '2026-10-16T12:00:00Z', views: 3000, likes: null })).toBeNull()
     expect(velocity({ at: '2026-10-16T12:00:00Z', views: 1, likes: null }, { at: '2026-10-16T12:00:00Z', views: 2, likes: null })).toBeNull()
+  })
+})
+
+describe('rpmBand', () => {
+  it('picks the band from format first, then the spoken language', () => {
+    expect(rpmBand('hi', true, false)).toBe('madeForKids')
+    expect(rpmBand('en', false, true)).toBe('short')
+    expect(rpmBand('hi', false, false)).toBe('southAsian')
+    expect(rpmBand('ur', false, false)).toBe('southAsian')
+    expect(rpmBand('en-US', false, false)).toBe('english')
+    expect(rpmBand(null, false, false)).toBe('other')
   })
 })

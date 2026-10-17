@@ -644,3 +644,88 @@ export function ytWatch(o: WatchOptions): Promise<YouTubeResult> {
       note: 'each add/refresh stores the live view count; viewsPerHourRecent compares the last two checks, viewsPerHourSinceAdded the first and the last' }
   })
 }
+
+// ─── monetization and earnings estimate ───────────────────────────────────────
+
+/**
+ * Creator earnings per 1000 views (USD), as ranges creators commonly report.
+ * These are assumptions, not measurements: YouTube does not publish another
+ * channel's earnings, and every result says so.
+ */
+export const RPM_BANDS = {
+  madeForKids: [0.1, 0.5],
+  short: [0.03, 0.1],
+  southAsian: [0.3, 1.2],
+  english: [2, 6],
+  other: [0.5, 2],
+} as const
+
+/** Which band a channel's videos fall in, from its spoken language and format. */
+export function rpmBand(spoken: string | null, madeForKids: boolean, shorts: boolean): keyof typeof RPM_BANDS {
+  if (madeForKids) return 'madeForKids'
+  if (shorts) return 'short'
+  const lang = String(spoken ?? '').toLowerCase().split('-')[0]
+  if (['hi', 'ur', 'bn', 'pa', 'ta', 'te', 'mr', 'gu', 'ne'].includes(lang)) return 'southAsian'
+  if (lang === 'en') return 'english'
+  return 'other'
+}
+
+interface AdSignals { videoId: string; ads: number; madeForKids: boolean; spoken: string | null }
+
+async function adSignalsOn(wc: WebContents, id: string): Promise<AdSignals | null> {
+  if (!(await openPage(wc, `https://www.youtube.com/watch?v=${id}`))) return null
+  const r = await run<{ id: string | null; ads: number; kids: boolean; spoken: string | null }>(wc, `
+    const pr = window.ytInitialPlayerResponse || {}
+    const list = ((pr.captions || {}).playerCaptionsTracklistRenderer) || {}
+    const tracks = list.captionTracks || []
+    // Dubbed videos carry auto captions for every dub; the original audio track's own is the spoken language.
+    const audio = (list.audioTracks || [])[list.defaultAudioTrackIndex || 0] || {}
+    const own = (audio.captionTrackIndices || []).map(i => tracks[i]).filter(Boolean)
+    const asr = own.find(t => t.kind === 'asr') || (tracks.length && !list.audioTracks ? tracks.find(t => t.kind === 'asr') : null)
+    const audioLang = typeof audio.audioTrackId === 'string' ? audio.audioTrackId.split('.')[0] : null
+    return { id: (pr.videoDetails || {}).videoId || null, ads: (pr.adPlacements || []).length + (pr.playerAds || []).length,
+      kids: /"isMadeForKids":true|made for kids/i.test(JSON.stringify(pr)), spoken: audioLang || (asr ? asr.languageCode : null) }`)
+  return r.id === id ? { videoId: id, ads: r.ads, madeForKids: r.kids, spoken: r.spoken } : null
+}
+
+export interface MonetizationOptions { channel: string; sample?: number }
+
+async function monetizationOn(wc: WebContents, o: MonetizationOptions): Promise<YouTubeResult> {
+  const ch = await channelOn(wc, { channel: o.channel, limit: 40 })
+  if (!ch.ok) return ch
+  const videos = ch.videos as YtVideo[]
+  const sample = clampInt(o.sample, 3, 1, 6)
+  // Recent, but not brand new: ads can start a little after upload.
+  const picks = videos.filter(v => (v.ageDays ?? 0) >= 2).slice(0, sample)
+  const checked: AdSignals[] = []
+  for (const v of picks) {
+    await sleep(500 + Math.random() * 500)
+    const s = await adSignalsOn(wc, v.videoId)
+    if (s) checked.push(s)
+  }
+  const withAds = checked.filter(s => s.ads > 0).length
+  const kids = checked.length > 0 && checked.every(s => s.madeForKids)
+  const spoken = checked.map(s => s.spoken).find(Boolean) ?? null
+  const status = withAds > 0 ? 'monetized (ads seen)' : kids ? 'made for kids (no ads seen)' : 'no ads seen'
+  const recent = videos.filter(v => v.ageDays != null && v.ageDays <= 30)
+  const recentViews = recent.reduce((n, v) => n + (v.views ?? 0), 0)
+  const band = rpmBand(spoken, kids, false)
+  const [lo, hi] = RPM_BANDS[band]
+  const earning = withAds > 0
+    ? { usdLow: Math.round(recentViews * lo / 1000), usdHigh: Math.round(recentViews * hi / 1000), rpmBand: band, rpmUsd: [lo, hi] }
+    : null
+  return {
+    ok: true,
+    channel: ch.channel,
+    status,
+    videosChecked: checked.map(s => ({ ...s, url: `https://www.youtube.com/watch?v=${s.videoId}` })),
+    spokenLanguage: spoken,
+    last30Days: { uploads: recent.length, views: recentViews },
+    estimatedEarningsLast30DaysUploads: earning,
+    note: 'Monetization is read from whether YouTube served ads on the sampled videos to a signed-out viewer here; no ads on a few videos is a strong sign, not proof. Earnings = views of videos uploaded in the last 30 days (rounded counts) × an assumed RPM range for the spoken language and format; YouTube does not publish real figures.',
+  }
+}
+
+export function ytMonetization(o: MonetizationOptions): Promise<YouTubeResult> {
+  return withView(wc => monetizationOn(wc, o))
+}
