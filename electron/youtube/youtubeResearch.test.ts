@@ -4,7 +4,7 @@ vi.mock('electron', () => ({ app: { getPath: () => '' } }))
 vi.mock('./youtube', () => ({}))
 vi.mock('../keepAwake', () => ({ whileAwake: vi.fn() }))
 
-import { heatPeaks, rpmBand, titleFacts, velocity } from './youtubeResearch'
+import { commentIntent, heatPeaks, rpmBand, subsPerDay, titleFacts, velocity } from './youtubeResearch'
 
 describe('heatPeaks', () => {
   it('keeps the strongest moments, spaced apart, in time order', () => {
@@ -43,5 +43,23 @@ describe('rpmBand', () => {
     expect(rpmBand('ur', false, false)).toBe('southAsian')
     expect(rpmBand('en-US', false, false)).toBe('english')
     expect(rpmBand(null, false, false)).toBe('other')
+  })
+})
+
+describe('commentIntent', () => {
+  it('sorts comments into requests, questions, complaints and praise', () => {
+    expect(commentIntent('Part 2 please!!')).toBe('request')
+    expect(commentIntent('agla video kab aayega bhai, aur video banao')).toBe('request')
+    expect(commentIntent('ye cartoon kaise banate ho?')).toBe('question')
+    expect(commentIntent('Such a boring video')).toBe('complaint')
+    expect(commentIntent('Bahut accha laga ❤')).toBe('praise')
+    expect(commentIntent('first')).toBe('other')
+  })
+})
+
+describe('subsPerDay', () => {
+  it('is subscribers gained per day between two checks', () => {
+    expect(subsPerDay({ at: '2026-10-01T00:00:00Z', subscribers: 1000, videoCount: 5 }, { at: '2026-10-03T00:00:00Z', subscribers: 1400, videoCount: 6 })).toBe(200)
+    expect(subsPerDay(undefined, { at: '2026-10-03T00:00:00Z', subscribers: 1400, videoCount: 6 })).toBeNull()
   })
 })

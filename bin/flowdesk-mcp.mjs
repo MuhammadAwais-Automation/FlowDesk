@@ -1271,13 +1271,83 @@ server.tool(
 
 server.tool(
   'youtube_watchlist',
-  'Track YouTube videos over time. add stores the live view count of new videos; refresh stores a new count for every tracked video; list shows them sorted by views per hour between the last two checks (viewsPerHourRecent), the speed a video is growing right now. remove stops tracking. Stored on this computer.',
+  'Track YouTube videos and channels over time (history starts the day you add them). add stores live numbers for new videos/channels; refresh stores new numbers for everything tracked; list shows them. Videos: views per hour between the last two checks (the speed it grows right now) and any title changes seen. Channels: subscribers per day and video count. remove stops tracking. Stored on this computer.',
   {
     action: z.enum(['add', 'remove', 'list', 'refresh']),
-    videos: z.array(z.string()).optional().describe('YouTube links or ids (for add and remove).'),
+    videos: z.array(z.string()).optional().describe('YouTube video links or ids.'),
+    channels: z.array(z.string()).optional().describe('@handles, channel links or UC… ids.'),
   },
   { readOnlyHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('youtube.watch', args))
+)
+
+server.tool(
+  'youtube_related_videos',
+  'The videos YouTube recommends next to a video (signed out, not personalised), with views, age, length and channel. Use it to find similar videos, see which topics YouTube groups together, and expand one winning video into a cluster of ideas. ~3-10 s.',
+  {
+    video: z.string().min(1).describe('A YouTube link or the 11-character video id.'),
+    limit: z.number().int().min(1).max(100).optional().describe('Videos to return (default 20).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.related', args))
+)
+
+server.tool(
+  'youtube_channel_search',
+  'Find YouTube channels for a topic (YouTube search with the Channels filter): name, handle, link, subscribers, video count and description. Use it to map who is in a niche and to pick channels for youtube_outliers or youtube_monetization. ~5-15 s.',
+  {
+    query: z.string().min(1).describe('Topic or name, e.g. "aloo cartoon story".'),
+    limit: z.number().int().min(1).max(100).optional().describe('Channels to return (default 20).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.channelSearch', args))
+)
+
+server.tool(
+  'youtube_trending',
+  "The fastest-growing videos on a topic right now: uploads from today, this week or this month, ranked by views per hour since upload, whatever the channel size. YouTube has no single public trending list anymore, so this is per topic. For growth against a channel's own normal, use youtube_outliers. ~10-20 s.",
+  {
+    topic: z.string().min(1).describe('Topic, e.g. "ai cartoon story".'),
+    window: z.enum(['today', 'week', 'month']).optional().describe('Upload window (default week).'),
+    type: YT_TYPE.describe('"video" (default) or "short".'),
+    limit: z.number().int().min(1).max(100).optional().describe('Videos to return (default 20).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.trending', args))
+)
+
+server.tool(
+  'youtube_keyword_research',
+  "Demand and competition signals for a YouTube keyword: autocomplete depth and long-tail phrases (demand), YouTube's estimated result count, the top-20 videos' median views and age, how many of them are recent and how many use the exact keyword (competition). YouTube does not publish search volume, so there is no monthly-search figure. ~15-30 s.",
+  {
+    keyword: z.string().min(1).describe('Keyword or phrase, e.g. "aloo ki kahani".'),
+    language: z.string().optional().describe('Autocomplete language, e.g. "en", "ur", "hi" (default en).'),
+    country: z.string().optional().describe('Autocomplete country, e.g. "PK", "US" (default US).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.keyword', args))
+)
+
+server.tool(
+  'youtube_comment_insights',
+  'What viewers ask for across a niche: reads the top comments on the most popular videos for a topic and groups them into requests (part 2, make a video on…), questions, complaints and praise, each sorted by likes with the video it came from. Use it for video ideas and content gaps. ~1-2 min.',
+  {
+    topic: z.string().min(1).describe('The niche, e.g. "aloo cartoon story".'),
+    videos: z.number().int().min(1).max(15).optional().describe('How many popular videos to read (default 6).'),
+    perVideo: z.number().int().min(10).max(100).optional().describe('Comments per video (default 40).'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.commentInsights', args))
+)
+
+server.tool(
+  'youtube_video_earnings',
+  "Rough earnings estimate for one YouTube video: checks whether YouTube serves ads on it, reads the spoken language, and multiplies its views by an assumed RPM range for that language and format. No ads seen = no estimate. An estimate, not the creator's real earnings. ~5-10 s.",
+  {
+    video: z.string().min(1).describe('A YouTube link or the 11-character video id.'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('youtube.videoEarnings', args))
 )
 
 server.tool(

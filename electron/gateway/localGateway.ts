@@ -781,7 +781,13 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'youtube.mostReplayed': async (p) => (await import('../youtube/youtubeResearch')).ytMostReplayed(String(p.video || '')),
   'youtube.breakdown': async (p) => (await import('../youtube/youtubeResearch')).ytBreakdown(String(p.video || ''), p.includeTranscript === true),
   'youtube.monetization': async (p) => (await import('../youtube/youtubeResearch')).ytMonetization({ channel: String(p.channel || ''), sample: typeof p.sample === 'number' ? p.sample : undefined }),
-  'youtube.watch': async (p) => (await import('../youtube/youtubeResearch')).ytWatch({ action: String(p.action || ''), videos: Array.isArray(p.videos) ? p.videos.filter((v): v is string => typeof v === 'string') : undefined }),
+  'youtube.watch': async (p) => (await import('../youtube/youtubeResearch')).ytWatch({ action: String(p.action || ''), videos: Array.isArray(p.videos) ? p.videos.filter((v): v is string => typeof v === 'string') : undefined, channels: Array.isArray(p.channels) ? p.channels.filter((v): v is string => typeof v === 'string') : undefined }),
+  'youtube.related': async (p) => (await import('../youtube/youtubeResearch')).ytRelated({ video: String(p.video || ''), limit: typeof p.limit === 'number' ? p.limit : undefined }),
+  'youtube.channelSearch': async (p) => (await import('../youtube/youtubeResearch')).ytChannelSearch({ query: String(p.query || ''), limit: typeof p.limit === 'number' ? p.limit : undefined }),
+  'youtube.trending': async (p) => (await import('../youtube/youtubeResearch')).ytTrending({ topic: String(p.topic || ''), window: typeof p.window === 'string' ? p.window : undefined, type: typeof p.type === 'string' ? p.type : undefined, limit: typeof p.limit === 'number' ? p.limit : undefined }),
+  'youtube.keyword': async (p) => (await import('../youtube/youtubeResearch')).ytKeyword({ keyword: String(p.keyword || ''), language: typeof p.language === 'string' ? p.language : undefined, country: typeof p.country === 'string' ? p.country : undefined }),
+  'youtube.commentInsights': async (p) => (await import('../youtube/youtubeResearch')).ytCommentInsights({ topic: String(p.topic || ''), videos: typeof p.videos === 'number' ? p.videos : undefined, perVideo: typeof p.perVideo === 'number' ? p.perVideo : undefined }),
+  'youtube.videoEarnings': async (p) => (await import('../youtube/youtubeResearch')).ytVideoEarnings(String(p.video || '')),
   // Dev only: runs a script on a Flow project's page (the view the Flow tools
   // drive), for reading what the page shows. Never in the installed app.
   'dev.flowEval': async (p) => {

@@ -30,6 +30,10 @@ const PAGE = String.raw`
 const __H = () => ({ 'content-type': 'application/json', 'x-youtube-client-name': '1', 'x-youtube-client-version': ytcfg.get('INNERTUBE_CLIENT_VERSION') })
 const __post = (path, body) => fetch(path + '?prettyPrint=false', { method: 'POST', credentials: 'include', headers: __H(), body: JSON.stringify(Object.assign({ context: ytcfg.get('INNERTUBE_CONTEXT') }, body)) })
   .then(r => { if (!r.ok) throw new Error('YouTube answered ' + r.status + ' for ' + path); return r.json() })
+// Recommendations follow what this page has watched, even signed out: ask as a fresh visitor.
+const __postAnon = (path, body) => { const ctx = JSON.parse(JSON.stringify(ytcfg.get('INNERTUBE_CONTEXT'))); delete ctx.client.visitorData
+  return fetch(path + '?prettyPrint=false', { method: 'POST', credentials: 'omit', headers: __H(), body: JSON.stringify(Object.assign({ context: ctx }, body)) })
+    .then(r => { if (!r.ok) throw new Error('YouTube answered ' + r.status + ' for ' + path); return r.json() }) }
 const __t = x => x == null ? null : typeof x === 'string' ? x : (x.simpleText || x.content || (x.runs || []).map(r => r.text).join('') || null)
 const __all = (obj, key) => { const out = []; JSON.parse(JSON.stringify(obj || {}), (k, v) => { if (k === key && v && typeof v === 'object') out.push(v); return v }); return out }
 const __lastToken = obj => { const m = [...JSON.stringify(obj || {}).matchAll(/"continuationCommand":\{"token":"([^"]+)"/g)]; return m.length ? m[m.length - 1][1] : null }
@@ -565,20 +569,23 @@ export function ytNicheScan(o: NicheOptions): Promise<YouTubeResult> {
   return withView(wc => nicheOn(wc, o))
 }
 
-// ─── watchlist (views over time) ──────────────────────────────────────────────
+// ─── watchlist (views, subscribers and titles over time) ──────────────────────
 
 interface Snapshot { at: string; views: number | null; likes: number | null }
-interface WatchEntry { title: string | null; channel: string | null; addedAt: string; snapshots: Snapshot[] }
-type WatchFile = { videos: Record<string, WatchEntry> }
+interface TitleChange { at: string; from: string | null; to: string }
+interface WatchEntry { title: string | null; channel: string | null; addedAt: string; snapshots: Snapshot[]; titleChanges?: TitleChange[] }
+interface ChannelSnapshot { at: string; subscribers: number | null; videoCount: number | null }
+interface ChannelEntry { title: string | null; addedAt: string; snapshots: ChannelSnapshot[] }
+type WatchFile = { videos: Record<string, WatchEntry>; channels?: Record<string, ChannelEntry> }
 
 const watchFile = () => join(app.getPath('userData'), 'youtube', 'watchlist.json')
 
 async function loadWatch(): Promise<WatchFile> {
   try {
     const j = JSON.parse(await readFile(watchFile(), 'utf8')) as WatchFile
-    return j && typeof j.videos === 'object' ? j : { videos: {} }
+    return j && typeof j.videos === 'object' ? { videos: j.videos, channels: j.channels ?? {} } : { videos: {}, channels: {} }
   } catch {
-    return { videos: {} }
+    return { videos: {}, channels: {} }
   }
 }
 
@@ -604,8 +611,15 @@ export function velocity(a: Snapshot | undefined, b: Snapshot | undefined): numb
   return hours > 0 ? Math.round((b.views - a.views) / hours) : null
 }
 
+/** Subscribers gained per day between two channel snapshots. */
+export function subsPerDay(a: ChannelSnapshot | undefined, b: ChannelSnapshot | undefined): number | null {
+  if (!a || !b || a.subscribers == null || b.subscribers == null) return null
+  const days = (Date.parse(b.at) - Date.parse(a.at)) / 86_400_000
+  return days > 0 ? Math.round((b.subscribers - a.subscribers) / days) : null
+}
+
 function watchReport(w: WatchFile) {
-  return Object.entries(w.videos).map(([videoId, e]) => {
+  const videos = Object.entries(w.videos).map(([videoId, e]) => {
     const s = e.snapshots
     const last = s[s.length - 1]
     return {
@@ -613,38 +627,74 @@ function watchReport(w: WatchFile) {
       views: last?.views ?? null, likes: last?.likes ?? null, lastChecked: last?.at ?? null, snapshots: s.length,
       viewsPerHourRecent: velocity(s[s.length - 2], last),
       viewsPerHourSinceAdded: velocity(s[0], last),
+      ...(e.titleChanges?.length ? { titleChanges: e.titleChanges } : {}),
+      history: s.slice(-30),
     }
   }).sort((a, b) => (b.viewsPerHourRecent ?? -1) - (a.viewsPerHourRecent ?? -1))
+  const channels = Object.entries(w.channels ?? {}).map(([channel, e]) => {
+    const s = e.snapshots
+    const last = s[s.length - 1]
+    return {
+      channel, url: channelBaseUrl(channel), title: e.title, addedAt: e.addedAt,
+      subscribers: last?.subscribers ?? null, videoCount: last?.videoCount ?? null, lastChecked: last?.at ?? null,
+      subscribersPerDayRecent: subsPerDay(s[s.length - 2], last),
+      subscribersPerDaySinceAdded: subsPerDay(s[0], last),
+      history: s.slice(-30),
+    }
+  })
+  return { videos, channels }
 }
 
-export interface WatchOptions { action: string; videos?: string[] }
+export interface WatchOptions { action: string; videos?: string[]; channels?: string[] }
 
 export function ytWatch(o: WatchOptions): Promise<YouTubeResult> {
   const action = String(o.action ?? '')
   if (!['add', 'remove', 'list', 'refresh'].includes(action)) return Promise.resolve({ ok: false, error: 'action must be add, remove, list or refresh' })
   const ids = (o.videos ?? []).map(v => parseVideoId(v))
-  if ((action === 'add' || action === 'remove') && (!ids.length || ids.some(id => !id))) return Promise.resolve({ ok: false, error: 'videos must list YouTube links or ids' })
+  const chans = (o.channels ?? []).map(c => String(c).trim())
+  if (ids.some(id => !id)) return Promise.resolve({ ok: false, error: 'videos must list YouTube links or ids' })
+  if (chans.some(c => !channelBaseUrl(c))) return Promise.resolve({ ok: false, error: 'channels must list @handles, channel links or UC… ids' })
+  if ((action === 'add' || action === 'remove') && !ids.length && !chans.length) return Promise.resolve({ ok: false, error: 'give videos and/or channels to ' + action })
   return withView(async wc => {
     const w = await loadWatch()
-    if (action === 'remove') for (const id of ids) delete w.videos[id!]
+    w.channels ??= {}
+    if (action === 'remove') {
+      for (const id of ids) delete w.videos[id!]
+      for (const c of chans) delete w.channels[c]
+    }
     if (action === 'add' || action === 'refresh') {
-      const targets = action === 'add' ? ids as string[] : Object.keys(w.videos).slice(0, 200)
-      if (targets.length) await ensureYouTube(wc)
-      for (const id of targets) {
+      const videoTargets = action === 'add' ? ids as string[] : Object.keys(w.videos).slice(0, 200)
+      const channelTargets = action === 'add' ? chans : Object.keys(w.channels).slice(0, 50)
+      if (videoTargets.length) await ensureYouTube(wc)
+      const now = () => new Date().toISOString()
+      for (const id of videoTargets) {
         const snap = await snapshotOn(wc, id)
-        const entry = w.videos[id] ?? { title: snap.title, channel: snap.channel, addedAt: new Date().toISOString(), snapshots: [] }
+        const entry = w.videos[id] ?? { title: snap.title, channel: snap.channel, addedAt: now(), snapshots: [] }
+        // A creator re-titling a video is a packaging test worth knowing about.
+        if (snap.title && entry.title && snap.title !== entry.title) (entry.titleChanges ??= []).push({ at: now(), from: entry.title, to: snap.title })
         entry.title = snap.title ?? entry.title
         entry.channel = snap.channel ?? entry.channel
-        entry.snapshots.push({ at: new Date().toISOString(), views: snap.views, likes: snap.likes })
+        entry.snapshots.push({ at: now(), views: snap.views, likes: snap.likes })
         if (entry.snapshots.length > 500) entry.snapshots.splice(0, entry.snapshots.length - 500)
         w.videos[id] = entry
         await sleep(400 + Math.random() * 400)
       }
+      for (const c of channelTargets) {
+        const r = await channelOn(wc, { channel: c, limit: 1 })
+        if (!r.ok) continue
+        const info = r.channel as { title: string | null; subscribers: number | null; videoCount: number | null }
+        const entry = w.channels[c] ?? { title: info.title, addedAt: now(), snapshots: [] }
+        entry.title = info.title ?? entry.title
+        entry.snapshots.push({ at: now(), subscribers: info.subscribers, videoCount: info.videoCount })
+        if (entry.snapshots.length > 500) entry.snapshots.splice(0, entry.snapshots.length - 500)
+        w.channels[c] = entry
+        await sleep(400 + Math.random() * 400)
+      }
     }
     if (action !== 'list') await saveWatch(w)
-    const videos = watchReport(w)
-    return { ok: true, action, count: videos.length, videos,
-      note: 'each add/refresh stores the live view count; viewsPerHourRecent compares the last two checks, viewsPerHourSinceAdded the first and the last' }
+    const report = watchReport(w)
+    return { ok: true, action, videoCount: report.videos.length, channelCount: report.channels.length, ...report,
+      note: 'each add/refresh stores live numbers. Videos: viewsPerHourRecent compares the last two checks; titleChanges lists re-titles seen between checks. Channels: subscribers per day (YouTube rounds subscriber counts, so small channels move in steps). History starts on the day a video or channel is added.' }
   })
 }
 
@@ -731,4 +781,237 @@ async function monetizationOn(wc: WebContents, o: MonetizationOptions): Promise<
 
 export function ytMonetization(o: MonetizationOptions): Promise<YouTubeResult> {
   return withView(wc => monetizationOn(wc, o))
+}
+
+// ─── related videos (what YouTube recommends next to a video) ─────────────────
+
+const relatedScript = String.raw`
+const __related = r => {
+  const sec = ((r.contents || {}).twoColumnWatchNextResults || {}).secondaryResults || r.onResponseReceivedEndpoints || r
+  return __all(sec, 'lockupViewModel').filter(l => l.contentId && l.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO').map(L => {
+    const m = (L.metadata || {}).lockupMetadataViewModel || {}
+    const rows = ((((m.metadata || {}).contentMetadataViewModel) || {}).metadataRows || []).map(x => (x.metadataParts || []).map(p => (p.text || {}).content))
+    const badges = __all(L.contentImage, 'thumbnailBadgeViewModel').map(b => b.text)
+    const ch = (JSON.stringify(m.image || {}).match(/"browseId":"(UC[^"]+)"/) || [])[1] || null
+    return { videoId: L.contentId, title: (m.title || {}).content || null, channel: (rows[0] || [])[0] || null, channelId: ch, channelHandle: null,
+      viewsText: (rows[1] || [])[0] || null, publishedText: (rows[1] || [])[1] || null, lengthText: badges[0] || null, isShort: false }
+  })
+}
+`
+
+export interface RelatedOptions { video: string; limit?: number }
+
+async function relatedOn(wc: WebContents, o: RelatedOptions): Promise<YouTubeResult> {
+  const id = parseVideoId(o.video)
+  if (!id) return { ok: false, error: `"${o.video}" is not a YouTube video link or id` }
+  const limit = clampInt(o.limit, 20, 1, 100)
+  await ensureYouTube(wc)
+  const first = await run<{ items: RawItem[]; token: string | null }>(wc, `${relatedScript}
+    const r = await __postAnon('/youtubei/v1/next', { videoId: ${JSON.stringify(id)} })
+    const sec = ((r.contents || {}).twoColumnWatchNextResults || {}).secondaryResults || {}
+    return { items: __related(r), token: __lastToken(sec) }`)
+  const found = new Map<string, YtVideo>()
+  addUnique(found, first.items.filter(x => x.videoId !== id))
+  let token = first.token
+  for (let page = 0; token && found.size < limit && page < 5; page++) {
+    await sleep(400 + Math.random() * 400)
+    const next = await run<{ items: RawItem[]; token: string | null }>(wc, `${relatedScript}
+      const r = await __postAnon('/youtubei/v1/next', { continuation: ${JSON.stringify(token)} })
+      return { items: __related(r), token: __lastToken(r) }`)
+    const before = found.size
+    addUnique(found, next.items.filter(x => x.videoId !== id))
+    token = next.token
+    if (found.size === before) break
+  }
+  const videos = [...found.values()].slice(0, limit)
+  return { ok: true, videoId: id, count: videos.length, videos,
+    note: 'the videos YouTube recommends next to this one (signed out, so not personalised); related videos show which topics and channels YouTube groups with it' }
+}
+
+export function ytRelated(o: RelatedOptions): Promise<YouTubeResult> {
+  return withView(wc => relatedOn(wc, o))
+}
+
+// ─── channel search ───────────────────────────────────────────────────────────
+
+export interface ChannelSearchOptions { query: string; limit?: number }
+
+async function channelSearchOn(wc: WebContents, o: ChannelSearchOptions): Promise<YouTubeResult> {
+  const query = String(o.query ?? '').trim()
+  if (!query) return { ok: false, error: 'query is empty' }
+  const limit = clampInt(o.limit, 20, 1, 100)
+  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&sp=${encodeURIComponent(encodeSearchParams({ type: 'channel' })!)}`
+  if (!(await openPage(wc, url))) return { ok: false, error: 'the YouTube search page did not load' }
+  type RawChannel = { channelId: string; title: string | null; handle: string | null; texts: (string | null)[]; description: string | null }
+  const script = (src: string) => `
+    const pick = c => ({ channelId: c.channelId, title: __t(c.title), handle: (((c.navigationEndpoint || {}).browseEndpoint || {}).canonicalBaseUrl || '').replace(/^\\//, '') || null,
+      texts: [__t(c.subscriberCountText), __t(c.videoCountText)], description: __t(c.descriptionSnippet) })
+    const src = ${src}
+    return { items: __all(src, 'channelRenderer').filter(c => c.channelId).map(pick), token: __lastToken(src) }`
+  const out = new Map<string, RawChannel>()
+  let r = await run<{ items: RawChannel[]; token: string | null }>(wc, script('window.ytInitialData'))
+  for (const c of r.items) out.set(c.channelId, c)
+  for (let page = 0; r.token && out.size < limit && page < 5; page++) {
+    await sleep(500 + Math.random() * 400)
+    r = await run<{ items: RawChannel[]; token: string | null }>(wc, script(`await __post('/youtubei/v1/search', { continuation: ${JSON.stringify(r.token)} })`))
+    const before = out.size
+    for (const c of r.items) out.set(c.channelId, c)
+    if (out.size === before) break
+  }
+  // The search page shows the handle where the subscriber count used to be, and the
+  // subscriber count where the video count was: read each by what it says.
+  const channels = [...out.values()].slice(0, limit).map(c => {
+    const subs = c.texts.find(t => /subscriber/i.test(t ?? ''))
+    const vids = c.texts.find(t => /video/i.test(t ?? ''))
+    const handle = c.handle || c.texts.find(t => /^@/.test(t ?? '')) || null
+    return { channelId: c.channelId, title: c.title, handle, url: handle ? `https://www.youtube.com/${handle}` : `https://www.youtube.com/channel/${c.channelId}`,
+      subscribers: parseCount(subs), videoCount: parseCount(vids), description: c.description }
+  })
+  return { ok: true, query, count: channels.length, channels }
+}
+
+export function ytChannelSearch(o: ChannelSearchOptions): Promise<YouTubeResult> {
+  return withView(wc => channelSearchOn(wc, o))
+}
+
+// ─── trending (fastest views per hour on a topic) ─────────────────────────────
+
+export interface TrendingOptions { topic: string; window?: string; type?: string; limit?: number }
+
+async function trendingOn(wc: WebContents, o: TrendingOptions): Promise<YouTubeResult> {
+  const topic = String(o.topic ?? '').trim()
+  if (!topic) return { ok: false, error: 'topic is empty (trending is per topic; YouTube no longer has one public trending list)' }
+  const window = o.window === 'today' ? 'today' : o.window === 'month' ? 'month' : 'week'
+  const limit = clampInt(o.limit, 20, 1, 100)
+  const s = await searchOn(wc, { query: topic, type: o.type === 'short' ? 'short' : 'video', uploaded: window, sort: 'popularity', limit: 80 })
+  if (!s.ok) return s
+  const videos = (s.videos as YtVideo[])
+    .map(v => {
+      const ageHours = v.ageDays == null ? null : Math.max(v.ageDays * 24, 1)
+      return { ...v, viewsPerHour: v.views != null && ageHours ? Math.round(v.views / ageHours) : null }
+    })
+    .filter(v => v.viewsPerHour != null)
+    .sort((a, b) => (b.viewsPerHour ?? 0) - (a.viewsPerHour ?? 0))
+    .slice(0, limit)
+  return { ok: true, topic, window, count: videos.length, videos,
+    note: 'views per hour since upload (upload age is YouTube\'s "N hours/days ago", so it is approximate); the fastest absolute growers on this topic, whatever the channel size. For growth against the channel\'s normal, use youtube_outliers.' }
+}
+
+export function ytTrending(o: TrendingOptions): Promise<YouTubeResult> {
+  return withView(wc => trendingOn(wc, o))
+}
+
+// ─── keyword research (demand and competition signals) ────────────────────────
+
+export interface KeywordOptions { keyword: string; language?: string; country?: string }
+
+async function keywordOn(wc: WebContents, o: KeywordOptions): Promise<YouTubeResult> {
+  const keyword = String(o.keyword ?? '').trim()
+  if (!keyword) return { ok: false, error: 'keyword is empty' }
+  const demand = await ytSuggest({ seed: keyword, expand: true, language: o.language, country: o.country })
+  const s = await searchOn(wc, { query: keyword, type: 'video', limit: 20 })
+  if (!s.ok) return s
+  const top = s.videos as YtVideo[]
+  const views = top.map(v => v.views).filter((n): n is number => n != null)
+  const ages = top.map(v => v.ageDays).filter((n): n is number => n != null)
+  const kw = keyword.toLowerCase()
+  const exact = top.filter(v => String(v.title ?? '').toLowerCase().includes(kw)).length
+  const recent = top.filter(v => (v.ageDays ?? 9999) <= 90).length
+  const suggestions = demand.ok ? (demand.suggestions as string[]) : []
+  return {
+    ok: true, keyword,
+    demand: { autocompleteSuggestions: suggestions.length, keywordIsSuggested: suggestions.some(x => x.toLowerCase() === kw), longTail: suggestions.slice(0, 40) },
+    competition: {
+      estimatedResults: s.estimatedResults ?? null,
+      top20MedianViews: median(views),
+      top20MedianAgeDays: median(ages),
+      top20WithExactKeywordInTitle: exact,
+      top20UploadedLast90Days: recent,
+    },
+    top: top.slice(0, 10).map(v => ({ title: v.title, url: v.url, views: v.views, ageDays: v.ageDays, channel: v.channel })),
+    note: 'YouTube does not publish search volume, so there is no monthly-search number here. Read it this way: many autocomplete suggestions = people search it; a high top-20 median view count = the topic pulls views; many recent videos in the top 20 = YouTube still rewards new uploads (an opening); exact-keyword titles everywhere = crowded.',
+  }
+}
+
+export function ytKeyword(o: KeywordOptions): Promise<YouTubeResult> {
+  return withView(wc => keywordOn(wc, o))
+}
+
+// ─── niche-wide comment insights ──────────────────────────────────────────────
+
+const INTENTS: [string, RegExp][] = [
+  ['request', /part\s*2|part\s*two|next (part|video|episode)|please make|make (a|more|one)|agl[ai] (part|video|episode)|aur (video|banao|banaiye)|banao|bana(?:iye|ye|na)\b|plz|pls/i],
+  ['question', /\?|\b(how|why|what|which|when|kaise|kyun|kya|kab|kaun|kitn[ae])\b/i],
+  ['complaint', /\b(boring|worst|fake|bad|hate|waste|stop|clickbait|bakwas|bekar|ghatiya)\b|👎/i],
+  ['praise', /\b(love|best|amazing|great|awesome|nice|beautiful|wow|zabardast|bahut accha|bohat acha|mast)\b|❤|😍|🔥/i],
+]
+
+/** The first intent a comment's words match, in order of how useful it is for ideas. */
+export function commentIntent(text: string): string {
+  for (const [name, re] of INTENTS) if (re.test(text)) return name
+  return 'other'
+}
+
+export interface CommentInsightOptions { topic: string; videos?: number; perVideo?: number }
+
+async function commentInsightsOn(wc: WebContents, o: CommentInsightOptions): Promise<YouTubeResult> {
+  const topic = String(o.topic ?? '').trim()
+  if (!topic) return { ok: false, error: 'topic is empty' }
+  const n = clampInt(o.videos, 6, 1, 15)
+  const per = clampInt(o.perVideo, 40, 10, 100)
+  const s = await searchOn(wc, { query: topic, type: 'video', uploaded: 'year', limit: n })
+  if (!s.ok) return s
+  const all: { intent: string; text: string; likes: number; video: string; videoTitle: string | null }[] = []
+  const sampled: { title: string | null; url: string; comments: number }[] = []
+  for (const v of (s.videos as YtVideo[]).slice(0, n)) {
+    await sleep(500 + Math.random() * 500)
+    const c = await commentsOn(wc, { video: v.videoId, limit: per })
+    if (!c.ok) continue
+    const list = c.comments as { text: string | null; likes: number }[]
+    sampled.push({ title: v.title, url: v.url, comments: list.length })
+    for (const x of list) if (x.text) all.push({ intent: commentIntent(x.text), text: x.text.slice(0, 300), likes: x.likes, video: v.url, videoTitle: v.title })
+  }
+  const groups: Record<string, typeof all> = {}
+  for (const x of all) (groups[x.intent] ??= []).push(x)
+  for (const k of Object.keys(groups)) groups[k].sort((a, b) => b.likes - a.likes)
+  return {
+    ok: true, topic, videosSampled: sampled, commentsRead: all.length,
+    counts: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, v.length])),
+    requests: (groups.request ?? []).slice(0, 25),
+    questions: (groups.question ?? []).slice(0, 25),
+    complaints: (groups.complaint ?? []).slice(0, 15),
+    praise: (groups.praise ?? []).slice(0, 10),
+    note: 'top comments from the most relevant videos of the last year on this topic, sorted by likes and grouped by simple word rules (request / question / complaint / praise). The groups are a first sort, not a verdict: read the requests and questions for video ideas and count how many different videos say the same thing.',
+  }
+}
+
+export function ytCommentInsights(o: CommentInsightOptions): Promise<YouTubeResult> {
+  return withView(wc => commentInsightsOn(wc, o))
+}
+
+// ─── one video's earnings estimate ────────────────────────────────────────────
+
+async function videoEarningsOn(wc: WebContents, input: string): Promise<YouTubeResult> {
+  const id = parseVideoId(input)
+  if (!id) return { ok: false, error: `"${input}" is not a YouTube video link or id` }
+  const signals = await adSignalsOn(wc, id)
+  if (!signals) return { ok: false, error: `YouTube did not show video ${id}` }
+  const info = await run<{ views: string | null; lengthSeconds: string | null; title: string | null }>(wc, `
+    const pr = window.ytInitialPlayerResponse || {}
+    const vd = pr.videoDetails || {}
+    return { views: vd.viewCount || null, lengthSeconds: vd.lengthSeconds || null, title: vd.title || null }`)
+  const views = parseCount(info.views)
+  const isShort = Number(info.lengthSeconds) > 0 && Number(info.lengthSeconds) <= 60
+  const band = rpmBand(signals.spoken, signals.madeForKids, isShort)
+  const [lo, hi] = RPM_BANDS[band]
+  return {
+    ok: true, videoId: id, title: info.title, views, spokenLanguage: signals.spoken, madeForKids: signals.madeForKids,
+    adsSeen: signals.ads,
+    estimatedEarnings: signals.ads > 0 && views != null ? { usdLow: Math.round(views * lo / 1000), usdHigh: Math.round(views * hi / 1000), rpmBand: band, rpmUsd: [lo, hi] } : null,
+    note: signals.ads > 0 ? 'lifetime views × an assumed RPM range for the language and format; an estimate, not the creator\'s real earnings' : 'no ads were served on this video here, so no earnings are estimated (it may not be monetized)',
+  }
+}
+
+export function ytVideoEarnings(input: string): Promise<YouTubeResult> {
+  return withView(wc => videoEarningsOn(wc, input))
 }
