@@ -720,6 +720,43 @@ export function ensureBackgroundView(tabId: string, partition: string, url: stri
   return ready
 }
 
+/**
+ * A view taken off the main window (the user opened another section) stops
+ * drawing frames altogether: requestAnimationFrame runs 0 times a second, even
+ * with keepAwake's focus and lifecycle emulation, so animated menus such as
+ * Flow's generation settings never open (measured 2026-10-19). While a job
+ * drives such a view, it sits in its own invisible window, full size, where it
+ * draws at 60 fps. Showing the view again moves it back to the main window on
+ * its own (a view has one parent). Returns the undo, or null for a view that is
+ * on screen or already parked (left alone).
+ */
+export function keepPainting(wc: WebContents): (() => void) | null {
+  const entry = [...viewCache.entries()].find(([, v]) => v.webContents === wc)
+  if (!entry || !mainWindow || wc.isDestroyed()) return null
+  const [tabId, view] = entry
+  if (mainWindow.contentView.children.includes(view) || parkingWindows.has(tabId)) return null
+  // Same invisible, click-through window as createHiddenWindow, minus a page of its own.
+  const host = new BrowserWindow({ width: 1280, height: 900, show: false, opacity: 0, skipTaskbar: true, frame: false, transparent: true })
+  host.setIgnoreMouseEvents(true)
+  parkingWindows.set(tabId, host)
+  console.log(`[sessions] ${tabId} is off screen: drawing it in a hidden window while a job runs`)
+  host.contentView.addChildView(view)
+  view.setBounds({ x: 0, y: 0, width: 1280, height: 900 })
+  // Shown only once it holds the view, and told to redraw: a view moved into an
+  // already-shown window kept drawing 0 frames (measured).
+  view.setVisible(true)
+  host.showInactive()
+  wc.invalidate()
+  return () => {
+    parkingWindows.delete(tabId)
+    if (host.isDestroyed()) return
+    try { if (host.contentView.children.includes(view)) host.contentView.removeChildView(view) } catch { /* view gone */ }
+    host.destroy()
+  }
+}
+
+const parkingWindows = new Map<string, BrowserWindow>()
+
 export function hideView(specificTabId?: string) {
   if (!mainWindow) return
   if (specificTabId) {

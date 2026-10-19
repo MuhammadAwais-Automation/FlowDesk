@@ -792,6 +792,11 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'youtube.videoEarnings': async (p) => (await import('../youtube/youtubeResearch')).ytVideoEarnings(String(p.video || '')),
   // Dev only: runs a script on a Flow project's page (the view the Flow tools
   // drive), for reading what the page shows. Never in the installed app.
+  // Dev only: every live page, for telling a Studio view from a hidden worker window.
+  'dev.pages': async (p) => {
+    if (app.isPackaged) throw new Error('dev.pages is only available in development')
+    return { ok: true, pages: allWebContents.getAllWebContents().filter(w => !w.isDestroyed()).map(w => ({ id: w.id, type: w.getType(), url: w.getURL().slice(0, 90), owner: BrowserWindow.fromWebContents(w)?.id ?? null, view: getViewById(String(p.tab || ''))?.webContents === w })) }
+  },
   'dev.flowEval': async (p) => {
     if (app.isPackaged) throw new Error('dev.flowEval is only available in development')
     const { withFlowPage } = await import('../flow')
@@ -865,7 +870,7 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     String(p.projectId || ''),
     acct(p),
   ),
-  'flow.downloadMedia': async (p) => flowDownloadMedia(String(p.mediaUrl || ''), acct(p)),
+  'flow.downloadMedia': async (p) => flowDownloadMedia(String(p.mediaUrl || ''), acct(p), { outputDir: typeof p.outputDir === 'string' ? p.outputDir : undefined, fileName: typeof p.fileName === 'string' ? p.fileName : undefined }),
   'flow.videoModels': async (p) => typeof p.projectId === 'string' && p.projectId
     ? flowUiModels('video', p.projectId, acct(p))
     : { ok: false, error: "pass projectId: the models are read off that project's page in Flow" },

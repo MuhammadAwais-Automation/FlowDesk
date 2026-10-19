@@ -6,7 +6,7 @@
 
 import { writeFile, mkdir, rename } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { app, session, webContents as electronWebContents } from 'electron'
 import type { WebContents } from 'electron'
 import { listViewUrls, ensureBackgroundView } from './sessions'
@@ -762,9 +762,17 @@ async function fetchMediaBytes(mediaUrl: string, account?: string | null): Promi
 }
 
 /** Saves one media item to disk, given its URL from a listing or direct mediaId. */
-export async function flowDownloadMedia(mediaUrl: string, account?: string | null): Promise<FlowResult> {
+export async function flowDownloadMedia(mediaUrl: string, account?: string | null, save: { outputDir?: string; fileName?: string } = {}): Promise<FlowResult> {
   const target = String(mediaUrl ?? '').trim()
   if (!target) return { ok: false, error: 'refusing to download without a media URL or mediaId' }
+  const outputDir = String(save.outputDir ?? '').trim()
+  if (outputDir && !isAbsolute(outputDir)) return { ok: false, error: 'outputDir must be an absolute folder path' }
+  // A bare name only: no folders, nothing Windows refuses in a file name.
+  const fileName = String(save.fileName ?? '').trim().replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 120)
+  // The file name carries the media id (asked for 2026-10-18: 20 clips named only by time could not be told apart).
+  const mediaId = /^[a-z][a-z0-9+.-]*:/i.test(target)
+    ? target.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] ?? null
+    : target
 
   let downloadUrl = target
   // A media id: its signed URL comes from a status lookup on its own account.
@@ -783,11 +791,12 @@ export async function flowDownloadMedia(mediaUrl: string, account?: string | nul
   const type = (fetched.contentType ?? '').split(';')[0].trim().toLowerCase()
   const ext = EXT_BY_TYPE[type] ?? (type.startsWith('video/') ? 'mp4' : 'jpg')
   try {
-    const dir = join(app.getPath('downloads'), 'FlowDesk Studio')
+    const dir = outputDir || join(app.getPath('downloads'), 'FlowDesk Studio')
     await mkdir(dir, { recursive: true })
-    const filePath = join(dir, `flow-${Date.now()}.${ext}`)
+    const base = fileName || (mediaId ? `flow-${mediaId.replace(/[^0-9a-z-]/gi, '_').slice(0, 64)}-${Date.now()}` : `flow-${Date.now()}`)
+    const filePath = join(dir, `${base}.${ext}`)
     await writeFile(filePath, fetched.bytes)
-    return { ok: true, downloaded: true, filePath, byteSize: fetched.bytes.length }
+    return { ok: true, downloaded: true, filePath, byteSize: fetched.bytes.length, mediaId }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }

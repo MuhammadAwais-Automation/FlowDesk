@@ -8,7 +8,7 @@
 
 import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { clipboard, type WebContents } from 'electron'
+import type { WebContents } from 'electron'
 import { ensureBackgroundView, getActiveView, getViewById, showView } from '../sessions'
 import { whileAwake } from '../keepAwake'
 import { isSignedIn, listSocialAccounts, resolveSocialAccount, type SocialAccount } from '../socialAccounts'
@@ -471,18 +471,20 @@ async function uploadInStudio(options: UploadOptions): Promise<TikTokResult> {
         try { view.webContents.debugger.detach() } catch {}
       }
     } catch (err) {
-      console.warn('[FlowDesk TikTok] CDP Input.insertText failed during upload caption, falling back to clipboard:', err)
+      console.warn('[FlowDesk TikTok] CDP Input.insertText failed during upload caption, falling back to a paste event:', err)
     }
 
     if (!typedViaCdp) {
-      try {
-        view.webContents.selectAll()
-        clipboard.writeText(text)
-        view.webContents.paste()
-        await new Promise(r => setTimeout(r, 600))
-      } catch {
-        // Best-effort native clipboard paste
-      }
+      // A paste event inside the page, never the system clipboard every app shares.
+      await view.webContents.executeJavaScript(`(() => {
+        const editor = document.querySelector('.notranslate.public-DraftEditor-content[contenteditable="true"], [contenteditable="true"]')
+        if (!editor) return
+        editor.focus()
+        const dt = new DataTransfer()
+        dt.setData('text/plain', ${JSON.stringify(text)})
+        editor.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+      })()`).catch(() => {})
+      await new Promise(r => setTimeout(r, 600))
     }
   }
 

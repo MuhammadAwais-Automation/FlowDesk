@@ -320,8 +320,15 @@ export async function tkScheduleVideo(opts: {
       // continues the submission already chosen; the post request is checked
       // for its schedule time below.
       const cont = await centerOf(wc, `(() => {
-        const box = Array.from(document.querySelectorAll('[role="dialog"], .TUXModal, [class*="modal"], [class*="Modal"]')).find(d => /Continue to post\\?/.test(d.innerText || ''))
-        return box ? Array.from(box.querySelectorAll('button')).find(b => (b.innerText || '').trim() === 'Post now') : null
+        // Any "Post now" button that sits inside the box asking "Continue to post?",
+        // whatever the dialog's class (the 2026-10-18 report saw the class list miss it).
+        return Array.from(document.querySelectorAll('button')).find(b => {
+          if ((b.innerText || '').trim() !== 'Post now') return false
+          for (let el = b.parentElement, i = 0; el && i < 10; el = el.parentElement, i++) {
+            if (/Continue to post\\?/.test(el.innerText || '')) return true
+          }
+          return false
+        }) || null
       })()`)
       if (cont) {
         const stillScheduled = await read<boolean>(wc, `!!(document.querySelector('input[type=radio][value=schedule]') || {}).checked`).catch(() => false)

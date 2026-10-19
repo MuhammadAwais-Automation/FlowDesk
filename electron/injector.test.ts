@@ -51,11 +51,12 @@ describe('1-Shot Instant Prompt Injection (c20)', () => {
     expect(fastDuration).toBeLessThan(legacyDuration + 50)
   })
 
-  it('injectPromptCDP performs 1-shot paste, verifies text landed, and restores clipboard', async () => {
+  it('pastes inside the page only and never touches the system clipboard', async () => {
     const cdpCommands: Array<{ method: string; params?: any }> = []
     let composerText = ''
 
     clipboard.writeText('user previous clipboard content')
+    vi.mocked(clipboard.writeText).mockClear()
 
     const mockWebContents: any = {
       debugger: {
@@ -64,27 +65,15 @@ describe('1-Shot Instant Prompt Injection (c20)', () => {
         detach: vi.fn(),
         sendCommand: vi.fn(async (method: string, params?: any) => {
           cdpCommands.push({ method, params })
-          if (method === 'Input.dispatchKeyEvent' && params?.key === 'v') {
-            // Simulate clipboard paste landing into the composer
-            composerText = clipboard.readText()
-          }
           return {}
         }),
       },
       executeJavaScript: vi.fn(async (code: string) => {
-        // Focus check
-        if (code.includes('getBoundingClientRect')) {
-          return { focused: true, w: 500, h: 100 }
-        }
-        // Read composer text
-        if (code.includes('el.value !== undefined ? el.value : (el.textContent || \'\')')) {
-          return composerText
-        }
-        // Button click
-        if (code.includes('isSend')) {
-          composerText = '' // Composer empties on send
-          return 'Send message'
-        }
+        if (code.includes('getBoundingClientRect')) return { focused: true, w: 500, h: 100 }
+        // The page-local paste event lands the text in the composer
+        if (code.includes("new ClipboardEvent('paste'")) { composerText = testPrompt; return null }
+        if (code.includes('el.value !== undefined ? el.value : (el.textContent || \'\')')) return composerText
+        if (code.includes('isSend')) { composerText = ''; return 'Send message' }
         return null
       }),
     }
@@ -93,19 +82,13 @@ describe('1-Shot Instant Prompt Injection (c20)', () => {
     const success = await injectPromptCDP(mockWebContents, testPrompt, 'claude', true)
 
     expect(success).toBe(true)
-
-    // Check key commands dispatched:
-    // 1. Select All (KeyA)
-    // 2. Del (Backspace)
-    // 3. Fast Paste (KeyV) with modifier
-    const keyMethods = cdpCommands.filter(c => c.method === 'Input.dispatchKeyEvent')
-    const keyVCommands = keyMethods.filter(c => c.params?.key === 'v')
-
-    expect(keyVCommands.length).toBe(2) // 1 keyDown, 1 keyUp
-    expect(keyVCommands[0].params.type).toBe('keyDown')
-    expect(keyVCommands[1].params.type).toBe('keyUp')
-
-    // Original clipboard must be restored
+    const pasteCalls = mockWebContents.executeJavaScript.mock.calls.filter((c: string[]) => c[0].includes("new ClipboardEvent('paste'"))
+    expect(pasteCalls.length).toBe(1)
+    expect(pasteCalls[0][0]).toContain(JSON.stringify(testPrompt))
+    // No Ctrl+V key events, no fallback, and the user's clipboard was never written
+    expect(cdpCommands.filter(c => c.params?.key === 'v')).toHaveLength(0)
+    expect(cdpCommands.filter(c => c.method === 'Input.insertText')).toHaveLength(0)
+    expect(clipboard.writeText).not.toHaveBeenCalled()
     expect(clipboard.readText()).toBe('user previous clipboard content')
   })
 

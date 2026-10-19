@@ -18,7 +18,13 @@ app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
 // Electron has no FedCM UI, so the click silently did nothing. With FedCM off,
 // Google falls back to its own popup window (accounts.google.com/gsi/...),
 // which the sign-in windows open on the same session.
-app.commandLine.appendSwitch('disable-features', 'FedCm')
+//
+// CalculateNativeWinOcclusion: Windows Chromium stops drawing a window that
+// another window covers. FlowDesk's invisible worker windows (Flow, TikTok,
+// AI providers) sit behind the main window, so they drew 0 frames a second and
+// Flow's settings menu never opened ("generation settings did not open", on
+// every account, measured 2026-10-19).
+app.commandLine.appendSwitch('disable-features', 'FedCm,CalculateNativeWinOcclusion')
 
 // Two instances share one user-data dir: the second cannot write the cookie
 // databases the first holds open, so its logins lived only in memory and were

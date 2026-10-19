@@ -1,4 +1,4 @@
-import { WebContents, clipboard } from 'electron'
+import { WebContents } from 'electron'
 
 export type AITool = 'chatgpt' | 'claude' | 'gemini' | 'grok' | 'perplexity' | 'deepseek'
 
@@ -147,31 +147,24 @@ export async function injectPromptCDP(webContents: WebContents, text: string, to
     await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...del })
     await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...del })
 
-    // 1-Shot Instant Fast Paste (replacing per-character CDP loop)
-    let pasteSucceeded = false
-    let prevClipboard: string | null = null
-
+    // One paste, but a page-local one: a paste event carrying the text, which
+    // ProseMirror, Quill and Lexical read from event.clipboardData. The system
+    // clipboard is never touched — it is shared by every app on the computer,
+    // and a prompt put there turned up as a sent WhatsApp message while
+    // ask_perplexity ran (report 2026-10-17).
     try {
-      try {
-        prevClipboard = clipboard.readText()
-      } catch {
-        // clipboard access might throw in sandboxed environments
-      }
-
-      clipboard.writeText(text)
-
-      const ctrlV = {
-        windowsVirtualKeyCode: 86,
-        nativeVirtualKeyCode: 86,
-        key: 'v',
-        code: 'KeyV',
-        modifiers: mod,
-      }
-      await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...ctrlV })
-      await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...ctrlV })
-      pasteSucceeded = true
+      await webContents.executeJavaScript(`
+        (function () {
+          var el = document.querySelector(${JSON.stringify(selector)})
+          if (!el) return
+          el.focus()
+          var dt = new DataTransfer()
+          dt.setData('text/plain', ${JSON.stringify(text)})
+          el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+        })()
+      `)
     } catch (err) {
-      console.log(`[FlowDesk inject:cdp][${tool}] clipboard paste dispatch error:`, err)
+      console.log(`[FlowDesk inject:cdp][${tool}] paste event error:`, err)
     }
 
     // Confirm the text actually reached the editor rather than assuming it.
@@ -182,9 +175,9 @@ export async function injectPromptCDP(webContents: WebContents, text: string, to
       await sleep(50)
     }
 
-    // Robust Fallback: if clipboard paste did not land, use Input.insertText + synthetic input events
+    // Robust Fallback: if the paste event did not land, use Input.insertText + synthetic input events
     if (!landed.trim()) {
-      console.log(`[FlowDesk inject:cdp][${tool}] clipboard paste did not register in composer, attempting Input.insertText fallback`)
+      console.log(`[FlowDesk inject:cdp][${tool}] paste event did not register in composer, attempting Input.insertText fallback`)
       try {
         await webContents.debugger.sendCommand('Input.insertText', { text })
         await webContents.executeJavaScript(`
@@ -205,13 +198,6 @@ export async function injectPromptCDP(webContents: WebContents, text: string, to
         if (landed.trim().length > 0) break
         await sleep(100)
       }
-    }
-
-    // Restore previous clipboard content if we modified it
-    if (pasteSucceeded && prevClipboard !== null && prevClipboard !== text) {
-      try {
-        clipboard.writeText(prevClipboard)
-      } catch {}
     }
 
     if (!landed.trim()) {

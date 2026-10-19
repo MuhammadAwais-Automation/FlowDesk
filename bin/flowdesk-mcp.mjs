@@ -3031,10 +3031,12 @@ server.tool(
 
 server.tool(
   'flow_download_media',
-  'Download a Google Flow media file by its URL to disk.',
+  'Download a Google Flow media file by its mediaId or URL to disk. The file is named flow-<mediaId>-<time> (returned as filePath and mediaId) unless fileName is given; it goes to Downloads\\FlowDesk Studio unless outputDir is given.',
   {
     mediaUrl: z.string().min(1).describe('A mediaId, or a Flow media URL (videoUrl/imageUrl from flow_media_status, or a listing thumbnail). Other hosts are refused.'),
     account: z.string().optional().describe('Google account (email or partition from flow_accounts). Omit to use the media\'s own account, else the default.'),
+    outputDir: z.string().optional().describe('Absolute folder to save into (created if missing).'),
+    fileName: z.string().max(120).optional().describe('File name without extension, e.g. "videoB-clip04". The extension comes from the media type.'),
   },
   { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('flow.downloadMedia', args))

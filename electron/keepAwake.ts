@@ -9,6 +9,9 @@ import type { WebContents } from 'electron'
  */
 export async function keepAwake(wc: WebContents): Promise<() => void> {
   if (wc.isDestroyed()) return () => {}
+  // Emulation alone does not bring back frames on a view taken off the window.
+  const { keepPainting } = await import('./sessions')
+  const unpark = keepPainting(wc)
   wc.setBackgroundThrottling(false)
   const attachedHere = !wc.debugger.isAttached()
   try {
@@ -16,7 +19,10 @@ export async function keepAwake(wc: WebContents): Promise<() => void> {
     await wc.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
     await wc.debugger.sendCommand('Page.setWebLifecycleState', { state: 'active' }).catch(() => {})
   } catch { /* best effort */ }
+  // A view just moved into its hidden window drew 1 frame in its first second (measured): let it settle.
+  if (unpark) await new Promise(r => setTimeout(r, 1500))
   return () => {
+    unpark?.()
     if (wc.isDestroyed()) return
     if (attachedHere) {
       wc.setBackgroundThrottling(true)

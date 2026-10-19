@@ -108,7 +108,10 @@ const stateScript = `(function () {
   for (var j = 0; j < 8 && bar && bar.parentElement; j++) { bar = bar.parentElement; if (bar.querySelector('button[aria-label="Start generation"]')) break }
   var buttons = bar ? Array.from(bar.querySelectorAll('button')).filter(vis) : []
   var family = Array.from(document.querySelectorAll('button')).filter(vis).find(function (b) { return b.getAttribute('aria-label') === 'Select model family' })
-  var agent = buttons.find(function (b) { return txt(b) === 'Agent' })
+  var agent = buttons.find(function (b) { return txt(b) === 'Agent' }) || Array.from(document.querySelectorAll('.agent-mode-chip')).filter(vis)[0]
+  // Newer accounts open on an agent chat panel ("Hi …, What would you like to create?") whose
+  // bar has no Agent chip and hides the settings button (seen 2026-10-19).
+  var panel = Array.from(document.querySelectorAll('button')).filter(vis).some(function (b) { return b.getAttribute('aria-label') === 'Start new session' })
   // The sentence can wrap its number in its own element: take the smallest match.
   var cost = Array.from(document.querySelectorAll('*')).filter(function (e) { return vis(e) && /^Generating will use \\d+ credits?/.test(txt(e)) }).map(txt).sort(function (a, b) { return a.length - b.length })[0] || null
   return {
@@ -118,6 +121,7 @@ const stateScript = `(function () {
     menu: Array.from(document.querySelectorAll('[role=menuitem]')).filter(vis).map(txt),
     cost: cost ? Number(cost.match(/\\d+/)[0]) : null,
     agentOn: !!agent && agent.getAttribute('aria-pressed') === 'true',
+    agentPanel: panel,
     chips: bar ? Array.from(bar.querySelectorAll('img')).map(function (im) { var m = (im.getAttribute('src') || '').match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/); return m ? m[0] : null }) : [],
     frameSlotsFilled: buttons.filter(function (b) { return b.getAttribute('aria-label') === 'Image ingredient' }).length,
     canClear: buttons.some(function (b) { return b.getAttribute('aria-label') === 'Clear prompt' }),
@@ -127,7 +131,7 @@ const stateScript = `(function () {
 
 interface UiState {
   settingsOpen: boolean; model: string | null; radios: { words: string[]; checked: boolean }[]; menu: string[]
-  cost: number | null; agentOn: boolean; chips: (string | null)[]; frameSlotsFilled: number; canClear: boolean; settingsLabel: string
+  cost: number | null; agentOn: boolean; agentPanel: boolean; chips: (string | null)[]; frameSlotsFilled: number; canClear: boolean; settingsLabel: string
 }
 
 /** Text from the page that says Flow refused (unusual activity, policy), if any. */
@@ -168,7 +172,45 @@ async function escape(wc: WebContents): Promise<void> {
   await sleep(350)
 }
 
+/** Reloads the project page (past its "leave site?" guard) and waits for the prompt bar, or for `ready`. */
+async function reloadPage(wc: WebContents, ready?: () => Promise<boolean>): Promise<void> {
+  wc.once('will-prevent-unload', e => e.preventDefault())
+  wc.reload()
+  await sleep(1500)
+  await waitFor(async () => (ready ? await ready() : (await state(wc).catch(() => null))?.settingsLabel) || null, 25_000, 500)
+  await sleep(1000)
+}
+
+/** Size, visibility and frame rate of the page, for an error that needs a diagnosis. */
+async function pageFacts(wc: WebContents): Promise<string> {
+  const f = await wc.executeJavaScript(`new Promise(function (done) {
+    var n = 0; function tick() { n++; requestAnimationFrame(tick) } requestAnimationFrame(tick)
+    // A dialog over the page (a first-run tour, terms) hides the prompt bar's buttons.
+    var d = Array.from(document.querySelectorAll('[role=dialog],[role=alertdialog]')).map(function (x) { return (x.innerText || '').replace(/\\s+/g, ' ').trim() }).filter(Boolean)[0] || ''
+    setTimeout(function () { done({ w: innerWidth, h: innerHeight, vis: document.visibilityState, fps: n, dialog: d.slice(0, 120) }) }, 1000)
+  })`).catch(() => null) as { w: number; h: number; vis: string; fps: number; dialog: string } | null
+  return f ? `page ${f.w}x${f.h}, ${f.vis}, ${f.fps} frames/s${f.dialog ? `, a dialog says "${f.dialog}"` : ''}` : 'page did not answer'
+}
+
 const checked = (s: UiState, word: string) => s.radios.some(r => r.checked && r.words.includes(word))
+
+/**
+ * The plain prompt bar: settings closed, the agent chat panel closed and
+ * Flow's agent off, since the agent hides the settings button.
+ */
+async function plainBar(wc: WebContents): Promise<UiState> {
+  let s = await state(wc)
+  if (s.settingsOpen) { await escape(wc); s = await state(wc) }
+  if (s.agentPanel) {
+    await press(wc, { aria: 'Close' }, 'the agent panel\'s Close button')
+    s = await waitFor(async () => { const x = await state(wc); return x.agentPanel ? null : x }, 5000, 250) ?? await state(wc)
+  }
+  if (s.agentOn) {
+    await press(wc, { buttonText: 'Agent' }, 'the Agent switch')
+    s = await state(wc)
+  }
+  return s
+}
 
 async function openSettings(wc: WebContents): Promise<UiState> {
   let s = await state(wc)
@@ -350,45 +392,62 @@ export async function flowUiGenerate(req: FlowUiRequest): Promise<FlowResult> {
     // not in its grid until the page reloads (seen 2026-10-17): reload once.
     const projectRefs = [...frames, ...ingredients].filter(r => !isLocalPath(r))
     if (projectRefs.length && !(await tilesShown(wc, projectRefs))) {
-      wc.once('will-prevent-unload', e => e.preventDefault())
-      wc.reload()
-      await waitFor(async () => (await tilesShown(wc, projectRefs)) || null, 25_000, 500)
-      await sleep(1000)
+      await reloadPage(wc, () => tilesShown(wc, projectRefs))
     }
 
-    // A clean bar, and Flow's agent off: the prompt goes straight to generation.
-    let s = await state(wc)
-    if (s.settingsOpen) { await escape(wc); s = await state(wc) }
-    if (s.canClear) await press(wc, { aria: 'Clear prompt' }, 'the Clear prompt button')
-    if (s.agentOn) await press(wc, { buttonText: 'Agent' }, 'the Agent switch')
+    // Everything before "Start generation" spends nothing, so a page that went
+    // stale (settings that never open after a long run, report 2026-10-19) is
+    // reloaded and set up once more instead of failing the call.
+    const setUp = async (): Promise<{ error: string } | { credits: number | null }> => {
+      // A clean bar, and Flow's agent off: the prompt goes straight to generation.
+      let s = await plainBar(wc)
+      if (s.canClear) await press(wc, { aria: 'Clear prompt' }, 'the Clear prompt button')
 
-    await openSettings(wc)
-    await choose(wc, video ? 'Video' : 'Image')
-    if (video) await choose(wc, frames.length ? 'Frames' : 'Ingredients')
-    if (ratio) await choose(wc, ratio)
-    if (model) {
-      const err = await chooseModel(wc, model)
-      if (err) { await escape(wc); return { ok: false, error: err } }
-    }
-    if (video && req.resolution) await choose(wc, String(req.resolution))
-    if (video && req.seconds) await choose(wc, `${Number(req.seconds)}s`)
-    if (count) await choose(wc, `x${count}`)
-    s = await state(wc)
-    const credits = s.cost
-    await escape(wc)
+      await openSettings(wc)
+      await choose(wc, video ? 'Video' : 'Image')
+      if (video) await choose(wc, frames.length ? 'Frames' : 'Ingredients')
+      if (ratio) await choose(wc, ratio)
+      if (model) {
+        const err = await chooseModel(wc, model)
+        if (err) { await escape(wc); return { error: err } }
+      }
+      if (video && req.resolution) await choose(wc, String(req.resolution))
+      if (video && req.seconds) await choose(wc, `${Number(req.seconds)}s`)
+      if (count) await choose(wc, `x${count}`)
+      s = await state(wc)
+      const credits = s.cost
+      await escape(wc)
 
-    for (const ref of [...frames, ...ingredients]) {
-      if (isLocalPath(ref)) await addLocalFile(wc, ref)
-      else await addFromProject(wc, ref)
-    }
-    s = await state(wc)
-    if (frames.length && s.frameSlotsFilled < frames.length) return { ok: false, error: `only ${s.frameSlotsFilled} of ${frames.length} frames reached the prompt box` }
-    if (ingredients.length) {
-      const missing = ingredients.filter(r => !isLocalPath(r) && !s.chips.includes(r))
-      if (s.chips.length < ingredients.length || missing.length) return { ok: false, error: `the prompt box holds ${s.chips.length} of ${ingredients.length} ingredients${missing.length ? ` (missing ${missing.join(', ')})` : ''}` }
+      for (const ref of [...frames, ...ingredients]) {
+        if (isLocalPath(ref)) await addLocalFile(wc, ref)
+        else await addFromProject(wc, ref)
+      }
+      s = await state(wc)
+      if (frames.length && s.frameSlotsFilled < frames.length) return { error: `only ${s.frameSlotsFilled} of ${frames.length} frames reached the prompt box` }
+      if (ingredients.length) {
+        const missing = ingredients.filter(r => !isLocalPath(r) && !s.chips.includes(r))
+        if (s.chips.length < ingredients.length || missing.length) return { error: `the prompt box holds ${s.chips.length} of ${ingredients.length} ingredients${missing.length ? ` (missing ${missing.join(', ')})` : ''}` }
+      }
+
+      await typePrompt(wc, prompt)
+      return { credits }
     }
 
-    await typePrompt(wc, prompt)
+    let ready: { error: string } | { credits: number | null }
+    try {
+      ready = await setUp()
+    } catch (e) {
+      if (!(e instanceof Error && e.message.startsWith('Flow page:'))) throw e
+      await reloadPage(wc)
+      try {
+        ready = await setUp()
+      } catch (again) {
+        throw new Error(`${again instanceof Error ? again.message : String(again)} (also after reloading the page; ${await pageFacts(wc)})`)
+      }
+    }
+    if ('error' in ready) return { ok: false, error: ready.error }
+    const credits = ready.credits
+    const s = await state(wc)
     const before = await mediaIds(wc, id)
     await press(wc, { aria: 'Start generation' }, 'the Start generation button')
 
@@ -450,6 +509,7 @@ export function flowUiModels(kind: 'image' | 'video', projectId: string, account
   const bad = flowIdError(id, 'projectId')
   if (bad) return Promise.resolve({ ok: false, error: bad })
   return withFlowPage(id, account, async wc => {
+    await plainBar(wc)
     await openSettings(wc)
     await choose(wc, kind === 'video' ? 'Video' : 'Image')
     const models = await readModels(wc)
