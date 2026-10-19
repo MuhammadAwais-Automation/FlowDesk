@@ -168,17 +168,24 @@ export async function injectPromptCDP(webContents: WebContents, text: string, to
     }
 
     // Confirm the text actually reached the editor rather than assuming it.
+    // Up to ~1 s: Gemini's editor takes a paste event in a few hundred ms, and
+    // a fallback typed before it lands sent the prompt twice (2026-10-19).
     let landed = ''
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
       landed = (await webContents.executeJavaScript(readComposerSrc(selector))) ?? ''
       if (landed.trim().length > 0) break
-      await sleep(50)
+      await sleep(100)
     }
 
     // Robust Fallback: if the paste event did not land, use Input.insertText + synthetic input events
     if (!landed.trim()) {
       console.log(`[FlowDesk inject:cdp][${tool}] paste event did not register in composer, attempting Input.insertText fallback`)
       try {
+        // Empty the box first, so a late paste cannot double the prompt.
+        await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...selectAll })
+        await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...selectAll })
+        await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', ...del })
+        await webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...del })
         await webContents.debugger.sendCommand('Input.insertText', { text })
         await webContents.executeJavaScript(`
           (function() {
@@ -492,6 +499,30 @@ export async function probeProvider(webContents: WebContents): Promise<void> {
 export async function getSelectedText(webContents: WebContents): Promise<string> {
   try {
     return await webContents.executeJavaScript(`window.getSelection()?.toString() ?? ''`)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The newest reply bubble only, for providers whose reply element was checked
+ * on the live page; '' for the rest. Unlike getLatestAssistantText it has no
+ * length floor and no generic fallback, which returned Gemini's disclaimer
+ * and Grok's echo of the user's own prompt for a short answer (2026-10-19).
+ */
+const REPLY_SELECTORS: Partial<Record<AITool, string>> = {
+  gemini: 'model-response message-content',
+}
+
+export async function readLatestReply(webContents: WebContents, tool: AITool): Promise<string> {
+  const selector = REPLY_SELECTORS[tool]
+  if (!selector) return ''
+  try {
+    return await webContents.executeJavaScript(`(function () {
+      var all = document.querySelectorAll(${JSON.stringify(selector)})
+      var last = all[all.length - 1]
+      return last ? (last.innerText || '').replace(/\\u00a0/g, ' ').trim() : ''
+    })()`) as string
   } catch {
     return ''
   }

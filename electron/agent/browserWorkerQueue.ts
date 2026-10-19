@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import { ensureBackgroundView, getViewById } from '../sessions'
-import { injectPrompt, type AITool } from '../injector'
+import type { WebContents } from 'electron'
+import { injectPrompt, readLatestReply, type AITool } from '../injector'
 import { PROVIDER_URLS } from '../providerUrls'
 import {
   classifyAccountFailure,
@@ -144,6 +145,40 @@ interface PendingWaiter {
   partialText: string
 }
 
+/**
+ * Network capture misses a provider whenever its streaming call changes
+ * (Gemini answered "OK" on screen while no capture arrived, 2026-10-19), and
+ * the caller then waited the full 10-minute idle timeout. So the page itself
+ * is read too: the newest reply, once it differs from the one before the
+ * prompt and has stopped changing for PAGE_STABLE_POLLS reads in a row, is the
+ * answer — unless network capture has started delivering text by then.
+ */
+const PAGE_POLL_MS = 3000
+const PAGE_STABLE_POLLS = 3
+
+// Gemini prefixes its reply with a screen-reader label ("Gemini said").
+const replyText = (t: string) => t.trim().replace(/^(Gemini|ChatGPT|Claude|Grok) said:?\s*/i, '')
+
+async function watchPageReply(tool: AITool, wc: WebContents, before: string, waiter: PendingWaiter) {
+  const was = replyText(before)
+  let last = ''
+  let stable = 0
+  while (pendingWaiters.get(tool) === waiter) {
+    await sleep(PAGE_POLL_MS)
+    if (pendingWaiters.get(tool) !== waiter || wc.isDestroyed()) return
+    if (waiter.partialText.trim()) return // network capture is working; let it finish
+    const now = replyText(await readLatestReply(wc, tool).catch(() => ''))
+    if (!now || now === was) { stable = 0; continue }
+    stable = now === last ? stable + 1 : 0
+    last = now
+    if (stable >= PAGE_STABLE_POLLS) {
+      clearWaiter(tool, waiter)
+      waiter.resolve(now)
+      return
+    }
+  }
+}
+
 function clearWaiter(tool: string, waiter: PendingWaiter) {
   pendingWaiters.delete(tool)
   clearTimeout(waiter.idleTimer)
@@ -270,6 +305,8 @@ async function runOne(tool: AITool, prompt: string, account: BrowserAccount): Pr
   const view = getViewById(tabId)
   if (!view) throw new Error(`Could not open a browser session for ${tool}`)
 
+  const replyBefore = await readLatestReply(view.webContents, tool).catch(() => '')
+
   return new Promise<string>((resolve, reject) => {
     const startedAt = Date.now()
     const idleTimer = setTimeout(() => settleIdle(tool), IDLE_TIMEOUT_MS)
@@ -290,16 +327,24 @@ async function runOne(tool: AITool, prompt: string, account: BrowserAccount): Pr
     }, HEARTBEAT_INTERVAL_MS)
     pendingWaiters.set(tool, { resolve, reject, idleTimer, hardTimer, heartbeat, startedAt, partialText: '' })
 
-    injectPrompt(view.webContents, prompt, tool, true).then(ok => {
+    injectPrompt(view.webContents, prompt, tool, true).then(async ok => {
       if (!ok) {
+        // What the page shows instead of a chat box (claude.ai showed "Identity
+        // verification required" on 2026-10-19), so the cause is in the error.
+        const shown = await Promise.resolve(view.webContents.executeJavaScript(
+          `((document.querySelector('main') || document.body).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160)`
+        )).catch(() => '') as string
         const w = pendingWaiters.get(tool)
         if (w) {
           clearWaiter(tool, w)
-          reject(new Error(`Could not submit the message to ${tool}`))
+          reject(new Error(`Could not submit the message to ${tool}${shown ? ` (the page shows: "${shown}")` : ''}`))
         }
       } else {
         if (tool === 'chatgpt' && isLikelyImagePrompt(prompt)) {
           notifyImageProgress(tool, 15, 'Prompt injected & request received by ChatGPT backend')
+        } else {
+          const w = pendingWaiters.get(tool)
+          if (w) watchPageReply(tool, view.webContents, replyBefore, w).catch(() => {})
         }
       }
       // else: wait for notifyCaptureComplete() to be called by main.ts's

@@ -792,6 +792,14 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'youtube.videoEarnings': async (p) => (await import('../youtube/youtubeResearch')).ytVideoEarnings(String(p.video || '')),
   // Dev only: runs a script on a Flow project's page (the view the Flow tools
   // drive), for reading what the page shows. Never in the installed app.
+  // Dev only: runs a script in the first live page whose URL contains `url`.
+  'dev.pageEval': async (p) => {
+    if (app.isPackaged) throw new Error('dev.pageEval is only available in development')
+    const want = String(p.url || '')
+    const wc = want ? allWebContents.getAllWebContents().find(w => !w.isDestroyed() && w.getURL().includes(want)) : null
+    if (!wc) return { ok: false, error: `no live page for "${want}"` }
+    return { ok: true, url: wc.getURL(), result: await wc.executeJavaScript(`(async () => { ${String(p.code || 'return null')} })()`, true) }
+  },
   // Dev only: every live page, for telling a Studio view from a hidden worker window.
   'dev.pages': async (p) => {
     if (app.isPackaged) throw new Error('dev.pages is only available in development')

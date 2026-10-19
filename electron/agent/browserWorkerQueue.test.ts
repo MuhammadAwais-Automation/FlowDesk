@@ -6,7 +6,7 @@ vi.mock('../sessions', () => ({
   ensureBackgroundView: vi.fn(async () => ({ webContents: {} })),
   getViewById: vi.fn(() => ({ webContents: {} })),
 }))
-vi.mock('../injector', () => ({ injectPrompt: vi.fn(async () => true) }))
+vi.mock('../injector', () => ({ injectPrompt: vi.fn(async () => true), readLatestReply: vi.fn(async () => '') }))
 vi.mock('../providerUrls', () => ({ PROVIDER_URLS: { chatgpt: 'https://chatgpt.com/' } }))
 
 const { askBrowserProvider, configureBrowserWorkerQueue, notifyCaptureActivity, notifyCaptureComplete, notifyImageProgress, workerProgress, isLikelyImagePrompt } =
@@ -175,5 +175,35 @@ describe('image progress tracking', () => {
     expect(progressEvents[4]).toMatchObject({ type: 'image_progress', tool: 'chatgpt', percent: 100 })
 
     workerProgress.off('progress', listener)
+  })
+})
+
+describe('reply read from the page when network capture is silent', () => {
+  it('resolves with the new reply once it stops changing', async () => {
+    const { readLatestReply } = await import('../injector')
+    const { getViewById } = await import('../sessions')
+    vi.mocked(getViewById).mockReturnValue({ webContents: { isDestroyed: () => false } } as never)
+    const replies = ['old answer', 'OK', 'OK', 'OK', 'OK', 'OK']
+    vi.mocked(readLatestReply).mockImplementation(async () => replies.shift() ?? 'OK')
+
+    const call = askBrowserProvider('chatgpt' as never, 'reply OK')
+    await vi.advanceTimersByTimeAsync(20_000)
+
+    await expect(call).resolves.toBe('OK')
+  })
+
+  it('does not take the reply that was already on the page', async () => {
+    const { readLatestReply } = await import('../injector')
+    const { getViewById } = await import('../sessions')
+    vi.mocked(getViewById).mockReturnValue({ webContents: { isDestroyed: () => false } } as never)
+    vi.mocked(readLatestReply).mockImplementation(async () => 'old answer')
+
+    const call = askBrowserProvider('chatgpt' as never, 'hello')
+    let settled = false
+    void call.then(() => { settled = true }, () => { settled = true })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(settled).toBe(false)
+    notifyCaptureComplete('chatgpt', 'network answer')
+    await expect(call).resolves.toBe('network answer')
   })
 })
