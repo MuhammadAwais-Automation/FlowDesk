@@ -1,10 +1,12 @@
+import { createHash } from 'node:crypto'
 import { watch, type FSWatcher } from 'node:fs'
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises'
-import { basename, extname, join } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import type { WebContents } from 'electron'
+import { PROBE_TOOLKIT_SCRIPT, type HostInjectedFile } from './probeToolkit'
 
 /**
- * Discovery probe runner — the harness for reverse-engineering a web app
+ * Discovery probe runner — the autonomous harness for reverse-engineering a web app
  * from inside a live, logged-in session.
  *
  * The problem it removes: a probe used to live inside the app's own source,
@@ -24,6 +26,16 @@ import type { WebContents } from 'electron'
  * (copy this folder, wire three lines) rather than something that has to be
  * rewritten per platform.
  *
+ * In addition to raw evaluation, the harness injects an autonomous action toolkit
+ * (`window.probe`) providing primitives for:
+ * - Smart typing across regular inputs and rich contenteditable editors (Draft.js, Lexical)
+ * - Synthetic pointer and mouse event dispatching (`probe.click`)
+ * - Switch / checkbox toggling (`probe.setSwitch`)
+ * - Virtual file injection (`probe.injectFile` using DataTransfer + File)
+ * - Host-assisted file loading via `// @file <alias> <path>`
+ * - Action-scoped network interception (`probe.captureNetwork`)
+ * - In-page DOM waiting (`probe.waitFor`)
+ *
  * NOT exposed to the in-app agent, and it must stay that way. This evaluates
  * arbitrary JavaScript inside an authenticated session; the agent reads
  * message and post content written by strangers, and a tool of this shape
@@ -35,8 +47,11 @@ import type { WebContents } from 'electron'
  * ── Probe file format ──────────────────────────────────────────────
  *
  *   // @target linkedin.com
- *   const r = await fetch('/voyager/api/me', { headers: {...} })
- *   return { status: r.status, body: await r.json() }
+ *   // @file resume ../assets/resume.pdf
+ *   // @timeout 45000
+ *   await probe.waitFor('input[type="file"]')
+ *   await probe.injectFile('input[type="file"]', probe.files.resume)
+ *   return { uploaded: true }
  *
  * The `@target` directive picks which open view to run in, matched as a URL
  * substring. The rest is the body of an async function, so `await` works and
@@ -65,6 +80,14 @@ export interface ProbeResult {
   result?: unknown
   error?: string
   stack?: string
+  filesInjected?: string[]
+}
+
+export interface ProbeDirectives {
+  target: string | null
+  timeoutMs?: number
+  goto?: string
+  files: Array<{ alias: string; path: string }>
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -105,11 +128,63 @@ const SAFE_SERIALIZER = `
   }
 `
 
-/** Wraps probe source so `await` and `return` work, and nothing can throw across the boundary. */
-function buildProbeScript(source: string): string {
+function lookupMimeType(filePath: string): string {
+  const ext = extname(filePath).toLowerCase()
+  switch (ext) {
+    case '.mp4': return 'video/mp4'
+    case '.webm': return 'video/webm'
+    case '.mov': return 'video/quicktime'
+    case '.png': return 'image/png'
+    case '.jpg':
+    case '.jpeg': return 'image/jpeg'
+    case '.webp': return 'image/webp'
+    case '.gif': return 'image/gif'
+    case '.json': return 'application/json'
+    case '.txt': return 'text/plain'
+    case '.csv': return 'text/csv'
+    case '.pdf': return 'application/pdf'
+    default: return 'application/octet-stream'
+  }
+}
+
+/** Reads the directives (// @target, // @file, // @timeout, // @goto). */
+export function parseDirectives(source: string): ProbeDirectives {
+  const targetMatch = source.match(/^\s*(?:\/\/|\/\*)\s*@target\s+(\S+)/m)
+  const timeoutMatch = source.match(/^\s*(?:\/\/|\/\*)\s*@timeout\s+(\d+)/m)
+  const gotoMatch = source.match(/^\s*(?:\/\/|\/\*)\s*@goto\s+(\S+)/m)
+
+  const files: Array<{ alias: string; path: string }> = []
+  const fileRegex = /^\s*(?:\/\/|\/\*)\s*@file\s+([a-zA-Z0-9_$]+)\s+([^\r\n]+)$/gm
+  let m: RegExpExecArray | null
+  while ((m = fileRegex.exec(source)) !== null) {
+    const alias = m[1].trim()
+    const rawPath = m[2].trim().replace(/^['"]|['"]$/g, '')
+    files.push({ alias, path: rawPath })
+  }
+
+  return {
+    target: targetMatch ? targetMatch[1] : null,
+    timeoutMs: timeoutMatch ? parseInt(timeoutMatch[1], 10) : undefined,
+    goto: gotoMatch ? gotoMatch[1] : undefined,
+    files,
+  }
+}
+
+/** Backward-compatible helper to parse @target directive. */
+export function parseTarget(source: string): string | null {
+  return parseDirectives(source).target
+}
+
+/** Wraps probe source so `await` and `return` work, toolkit is injected, and nothing throws across boundary. */
+export function buildProbeScript(source: string, files: Record<string, HostInjectedFile> = {}): string {
+  const filesJson = JSON.stringify(files)
   return `(async function () {
 ${SAFE_SERIALIZER}
+${PROBE_TOOLKIT_SCRIPT}
   try {
+    if (window.probe) {
+      window.probe.files = ${filesJson};
+    }
     var __fdRun = async function () {
 ${source}
     }
@@ -118,12 +193,6 @@ ${source}
     return { ok: false, error: String((e && e.message) || e), stack: String((e && e.stack) || '').slice(0, 4000) }
   }
 })()`
-}
-
-/** Reads the `// @target ...` directive. Probes without one cannot be aimed. */
-function parseTarget(source: string): string | null {
-  const match = source.match(/^\s*(?:\/\/|\/\*)\s*@target\s+(\S+)/m)
-  return match ? match[1] : null
 }
 
 export async function runProbeFile(
@@ -141,7 +210,8 @@ export async function runProbeFile(
     return { ...base, ok: false, target: '', durationMs: 0, error: `could not read probe: ${String(e)}` }
   }
 
-  const target = parseTarget(source)
+  const directives = parseDirectives(source)
+  const target = directives.target
   if (!target) {
     return {
       ...base, ok: false, target: '', durationMs: Date.now() - startedAt,
@@ -157,12 +227,49 @@ export async function runProbeFile(
     }
   }
 
+  // Load any host files specified via @file directives
+  const loadedFiles: Record<string, HostInjectedFile> = {}
+  for (const { alias, path: targetPath } of directives.files) {
+    try {
+      const resolved = isAbsolute(targetPath)
+        ? targetPath
+        : resolve(dirname(filePath), targetPath)
+      const buf = await readFile(resolved)
+      loadedFiles[alias] = {
+        name: basename(resolved),
+        type: lookupMimeType(resolved),
+        size: buf.length,
+        base64: buf.toString('base64'),
+      }
+    } catch (e) {
+      return {
+        ...base, ok: false, target, durationMs: Date.now() - startedAt,
+        error: `could not load @file "${alias}" from "${targetPath}": ${String(e)}`,
+      }
+    }
+  }
+
+  // Handle optional @goto navigation
+  if (directives.goto && typeof (view as any).loadURL === 'function') {
+    try {
+      const currentUrl = view.getURL()
+      if (currentUrl !== directives.goto) {
+        await (view as any).loadURL(directives.goto)
+      }
+    } catch (e) {
+      return {
+        ...base, ok: false, target, durationMs: Date.now() - startedAt,
+        error: `failed to navigate to @goto "${directives.goto}": ${String(e)}`,
+      }
+    }
+  }
+
   let url = ''
   try { url = view.getURL() } catch { /* destroyed mid-run */ }
 
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const timeoutMs = directives.timeoutMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   try {
-    const evaluation = view.executeJavaScript(buildProbeScript(source)) as Promise<{
+    const evaluation = view.executeJavaScript(buildProbeScript(source, loadedFiles)) as Promise<{
       ok: boolean; value?: unknown; error?: string; stack?: string
     }>
     // A probe that never settles must not wedge the watcher for every later
@@ -174,9 +281,10 @@ export async function runProbeFile(
         setTimeout(() => reject(new Error(`probe timed out after ${timeoutMs}ms`)), timeoutMs)),
     ])
 
+    const filesInjected = Object.keys(loadedFiles)
     return outcome.ok
-      ? { ...base, ok: true, target, url, durationMs: Date.now() - startedAt, result: outcome.value }
-      : { ...base, ok: false, target, url, durationMs: Date.now() - startedAt, error: outcome.error, stack: outcome.stack }
+      ? { ...base, ok: true, target, url, durationMs: Date.now() - startedAt, result: outcome.value, ...(filesInjected.length ? { filesInjected } : {}) }
+      : { ...base, ok: false, target, url, durationMs: Date.now() - startedAt, error: outcome.error, stack: outcome.stack, ...(filesInjected.length ? { filesInjected } : {}) }
   } catch (e) {
     return {
       ...base, ok: false, target, url, durationMs: Date.now() - startedAt,
@@ -209,10 +317,29 @@ export async function startProbeRunner(options: ProbeRunnerOptions): Promise<() 
   // from a single save.
   const debounce = new Map<string, NodeJS.Timeout>()
 
+  // Content hash per probe, seeded with every file already present at startup.
+  // Watch events and mtimes are not proof of an edit: twice in one session
+  // something touched the whole folder (restart / resume) and ~200 probes ran at
+  // once — including ones that post LinkedIn comments. Only a real change of
+  // content runs a probe now.
+  const lastHash = new Map<string, string>()
+  const hashOf = async (filePath: string) => {
+    const text = await readFile(filePath, 'utf8').catch(() => null)
+    return text === null ? null : createHash('sha1').update(text).digest('hex')
+  }
+  for (const f of await readdir(dir).catch(() => [] as string[])) {
+    if (!f.endsWith('.js')) continue
+    const h = await hashOf(join(dir, f))
+    if (h) lastHash.set(f, h)
+  }
+
   async function run(fileName: string) {
     if (!fileName.endsWith('.js')) return
     const filePath = join(dir, fileName)
     if (running.has(filePath)) return
+    const hash = await hashOf(filePath)
+    if (!hash || lastHash.get(fileName) === hash) return // deleted, or not actually changed
+    lastHash.set(fileName, hash)
     running.add(filePath)
     try {
       const result = await runProbeFile(filePath, options)
@@ -238,14 +365,6 @@ export async function startProbeRunner(options: ProbeRunnerOptions): Promise<() 
   }
 
   // Belt-and-braces mtime poll alongside fs.watch.
-  //
-  // fs.watch is the fast path but is not uniformly reliable — on Windows in
-  // particular it can miss events depending on the editor's save strategy
-  // (write-to-temp-then-rename is common, and some setups surface that as a
-  // rename of a file the watcher was not told about). The failure mode is
-  // the worst kind for a discovery tool: you save, nothing happens, and
-  // there is no error explaining why. A 1s stat poll costs nothing on a
-  // directory holding a handful of files and removes that silence entirely.
   const seenMtimes = new Map<string, number>()
   let firstPoll = true
   const poll = setInterval(async () => {
@@ -257,9 +376,6 @@ export async function startProbeRunner(options: ProbeRunnerOptions): Promise<() 
       const mtime = stats.mtimeMs
       const previous = seenMtimes.get(file)
       seenMtimes.set(file, mtime)
-      // The first pass only records what is already there. Running every
-      // existing probe at launch would fire code with side effects that
-      // nobody asked for at that moment.
       if (firstPoll || previous === undefined || previous === mtime) continue
       schedule(file)
     }
@@ -270,7 +386,7 @@ export async function startProbeRunner(options: ProbeRunnerOptions): Promise<() 
   console.log(`[probe] watching ${dir}`)
   if (existing.length) {
     console.log(`[probe] ready: ${existing.join(', ')}`)
-    console.log('[probe] SAVE one of those files (Ctrl+S) to run it — editing is not required, a plain save is enough')
+    console.log('[probe] change a probe file content (or add a new file) to run it — an unchanged save no longer re-runs it')
   } else {
     console.log('[probe] no probe files yet — add a .js file with a "// @target <url-substring>" first line')
   }
