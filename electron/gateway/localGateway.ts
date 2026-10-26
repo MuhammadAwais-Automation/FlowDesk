@@ -138,7 +138,7 @@ import { listReports, writeReport } from '../reports'
 import { callContext, contextFromHeaders, withLedger } from '../operator/capture'
 import { BackgroundJobs } from '../operator/jobs'
 import { PLATFORMS, toolRegistry } from '../health/spec'
-import { findAnyViewByUrl, getViewById } from '../sessions'
+import { findAnyViewByUrl, getActiveView, getViewById, listViews } from '../sessions'
 import {
   initSkillsRegistry,
   listSkills,
@@ -162,6 +162,13 @@ import {
  */
 /** The optional `account` (email or partition) a Flow call should run on. */
 const acct = (p: Record<string, unknown>) => (typeof p.account === 'string' && p.account ? p.account : null)
+
+/** `view` is a view id from browser.views or part of a URL; absent → the view on screen. */
+function browserView(p: Record<string, unknown>) {
+  const v = typeof p.view === 'string' ? p.view.trim() : ''
+  const wc = v ? (getViewById(v) ?? findAnyViewByUrl(v))?.webContents : getActiveView()?.webContents
+  return wc && !wc.isDestroyed() ? wc : null
+}
 const strList = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map(x => x.trim()) : null)
 
 async function runImageJobs(req: ImageRequest, wait: boolean) {
@@ -767,6 +774,26 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
       if (!wasAttached) { try { wc.debugger.detach() } catch { /* already gone */ } }
     }
     return { ok: true, ...now }
+  },
+  // Perception engine: a labelled text map of any open view, and actions by ref.
+  'browser.views': async () => ({ ok: true, views: listViews() }),
+  'browser.snapshot': async (p) => {
+    const wc = browserView(p)
+    if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
+    const { snapshotPage, stateFor } = await import('../perception/capture')
+    const { diffMaps, formatSummary } = await import('../perception/serialize')
+    const prev = stateFor(wc).last
+    const map = await snapshotPage(wc)
+    if (p.diff === true) return { ok: true, url: map.url, ...diffMaps(prev, map) }
+    return { ok: true, url: map.url, text: formatSummary(map, { scope: p.scope === 'all' ? 'all' : 'viewport' }) }
+  },
+  'browser.act': async (p) => {
+    const wc = browserView(p)
+    if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
+    const { actOnPage, parseActRequest } = await import('../perception/actions')
+    const req = parseActRequest(p)
+    if (typeof req === 'string') return { ok: false, error: req }
+    return actOnPage(wc, req)
   },
   'youtube.videoDetail': async (p) => {
     const { ytVideoDetail } = await import('../youtube/youtube')

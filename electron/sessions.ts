@@ -902,6 +902,21 @@ export function listViewUrls(): string[] {
   return urls
 }
 
+export interface ViewInfo { id: string; url: string; title: string; kind: 'tab' | 'background'; active: boolean }
+
+/** Every live view and hidden background window, for agents choosing a page to read. */
+export function listViews(): ViewInfo[] {
+  const out: ViewInfo[] = []
+  for (const [id, view] of viewCache) {
+    const wc = view.webContents
+    if (!wc.isDestroyed()) out.push({ id, url: wc.getURL(), title: wc.getTitle(), kind: 'tab', active: id === activeTabId })
+  }
+  for (const [id, win] of backgroundWindows) {
+    if (!win.isDestroyed()) out.push({ id, url: win.webContents.getURL(), title: win.webContents.getTitle(), kind: 'background', active: false })
+  }
+  return out
+}
+
 export function getWhatsAppView(): { webContents: WebContents } | null {
   return findAnyViewByUrl('web.whatsapp.com')
 }

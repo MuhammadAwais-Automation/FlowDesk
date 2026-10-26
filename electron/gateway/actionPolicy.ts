@@ -59,7 +59,7 @@ export function actionName(method: string, params: Record<string, unknown>): str
   return canonicalAction(method === 'tools.call' && typeof params.name === 'string' ? params.name : method)
 }
 
-const WRITE = /(^|_)(send|create|delete|remove|like|unlike|comment|reply|react|share|follow|hide|update|upload|submit|vote|subscribe|mark_read|connection|edit|switch_account|publish|unpublish|generate|extend|remember|decide|save|run|ask|download|add|open|eval)(_|$)/
+const WRITE = /(^|_)(send|create|delete|remove|like|unlike|comment|reply|react|share|follow|hide|update|upload|submit|vote|subscribe|mark_read|connection|edit|switch_account|publish|unpublish|generate|extend|remember|decide|save|run|ask|download|add|open|eval|act)(_|$)/
 
 export function isWriteAction(canonical: string): boolean {
   return !canonical.startsWith('tools_list') && WRITE.test(canonical)
