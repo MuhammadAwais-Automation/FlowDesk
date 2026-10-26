@@ -642,6 +642,7 @@ export function getWorkflow(id: string): Workflow | undefined {
 }
 
 export async function saveWorkflow(wf: Workflow): Promise<void> {
+  assertValidSkillId(wf.id)
   const dir = activeUserSkillsDir ?? getDefaultUserSkillsDir()
   await mkdir(dir, { recursive: true })
 
@@ -658,6 +659,7 @@ export async function saveWorkflow(wf: Workflow): Promise<void> {
 }
 
 export async function deleteWorkflow(id: string): Promise<boolean> {
+  assertValidSkillId(id)
   let existed = cachedWorkflows.delete(id)
   const dir = activeUserSkillsDir ?? getDefaultUserSkillsDir()
 

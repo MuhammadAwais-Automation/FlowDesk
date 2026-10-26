@@ -397,6 +397,11 @@ describe('skillRegistry', () => {
     expect(getWorkflow('custom-daily-triage')).toBeUndefined()
   })
 
+  it('refuses workflow ids that would escape the skills folder', async () => {
+    await expect(saveWorkflow({ id: '..\\..\\x' } as Workflow)).rejects.toThrow(/Invalid skill id/)
+    await expect(deleteWorkflow('../action-policy')).rejects.toThrow(/Invalid skill id/)
+  })
+
   it('gracefully handles missing user directory without throwing', async () => {
     const nonExistentDir = join(tempUserDir, 'non_existent_sub_path')
     await expect(initSkillsRegistry({ userSkillsDir: nonExistentDir })).resolves.not.toThrow()

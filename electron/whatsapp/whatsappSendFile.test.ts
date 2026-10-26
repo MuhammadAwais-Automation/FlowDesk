@@ -10,7 +10,7 @@ vi.mock('../socialAccounts', () => ({
 }))
 vi.mock('../sessions', () => ({ ensureBackgroundView: async () => { throw new Error('no window in tests') } }))
 
-const { mimetypeFor, shouldSendAsDocument, waSendFile, MAX_ATTACHMENT_BYTES } = await import('./whatsapp')
+const { mimetypeFor, shouldSendAsDocument, waSendFile, sendTimeoutMs, MAX_ATTACHMENT_BYTES, MAX_DOCUMENT_BYTES } = await import('./whatsapp')
 
 /**
  * The two decisions here change what the recipient SEES, and both were settled
@@ -84,5 +84,17 @@ describe('failing before anything is sent', () => {
     // Without a stated ceiling, an oversized file becomes a hung renderer with
     // no explanation instead of a refusal with a number in it.
     expect(MAX_ATTACHMENT_BYTES).toBeGreaterThan(0)
+  })
+})
+
+describe('large files as documents', () => {
+  it('lets a document be far larger than inline media', () => {
+    expect(MAX_DOCUMENT_BYTES).toBe(1024 * 1024 * 1024)
+    expect(MAX_DOCUMENT_BYTES).toBeGreaterThan(MAX_ATTACHMENT_BYTES)
+  })
+  it('gives the send time in line with the size, within 30 minutes', () => {
+    expect(sendTimeoutMs(1)).toBe(62_000)
+    expect(sendTimeoutMs(200 * 1024 * 1024)).toBe(60_000 + 400_000)
+    expect(sendTimeoutMs(MAX_DOCUMENT_BYTES)).toBe(30 * 60_000)
   })
 })

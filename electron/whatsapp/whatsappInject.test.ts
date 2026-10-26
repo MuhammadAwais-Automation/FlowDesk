@@ -128,6 +128,7 @@ describe('__fdWaSend server ack', () => {
         if (opts.ackAfterPolls !== undefined && polls >= opts.ackAfterPolls) msg.ack = opts.finalAck
         return setTimeout(fn, 0)
       },
+      clearTimeout: () => {},
     }
     sandbox.window = sandbox
     vm.runInNewContext(WHATSAPP_BRIDGE_SRC, sandbox)
@@ -171,6 +172,7 @@ describe('bridge calls verified against WhatsApp\'s own bundle (2026-10-04)', ()
       setInterval: () => 0,
       clearInterval() {},
       setTimeout: (fn: () => void, ms: number) => (ms >= 30000 ? 0 : setTimeout(fn, 0)),
+      clearTimeout: () => {},
       AbortController,
     }
     sandbox.window = sandbox
@@ -227,5 +229,22 @@ describe('bridge calls verified against WhatsApp\'s own bundle (2026-10-04)', ()
     // instanceof checks that a vm sandbox cannot satisfy.
     await w.__fdWaDownloadMedia('1@lid', 'M1')
     expect(seen).toMatchObject({ mimetype: 'image/jpeg', type: 'image' })
+  })
+
+  it('loads the recent page when the resident messages stop before the chat\'s last activity', async () => {
+    // 3 resident messages (enough for limit 2), but the chat was active later.
+    const msgs = [1, 2, 3].map(t => ({ id: { id: 'M' + t, _serialized: 'M' + t }, type: 'chat', body: 'old ' + t, t }))
+    const chat = { id: '1@lid', t: 9, noEarlierMsgs: false, msgs: { getModelsArray: () => msgs } }
+    let recentCalls = 0
+    const w = bridge({
+      WAWebCollections: { Msg: { on() {} }, Chat: { get: () => chat, length: 1 }, Contact: { get: () => null, length: 0 } },
+      WAWebChatLoadMessages: {
+        loadRecentMsgs: async () => { recentCalls++; msgs.unshift({ id: { id: 'M9', _serialized: 'M9' }, type: 'chat', body: 'newest', t: 9 }) },
+        loadEarlierMsgs: async () => {},
+      },
+    })
+    const res = await w.__fdWaListMessages('1@lid', 2) as { messages: Array<{ t: number }> }
+    expect(recentCalls).toBe(1)
+    expect(res.messages.map(m => m.t)).toEqual([3, 9])
   })
 })

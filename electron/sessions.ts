@@ -2,6 +2,7 @@ import { app, session, WebContentsView, BrowserWindow, shell, type WebContents }
 import { join } from 'path'
 import { isOAuthPopup } from './oauthRouting'
 import { redirectLeavesApp, routeLink } from './linkRouting'
+import { shellLinkDecision } from './shellLinkPolicy'
 import { prepareGooglePopup, wantsGoogleChooser } from './googleSignInChooser'
 import { WHATSAPP_BRIDGE_SRC } from './whatsapp/whatsappInject'
 import { startLinkedInRealtimeWatch } from './linkedin/linkedinRealtimeWatch'
@@ -19,6 +20,12 @@ const WEBVIEW_PRELOAD = join(__dirname, '../preload/webviewPreload.js')
  * guess about which one is wrong, so the real failing case can be read off
  * a live repro instead of assumed.
  */
+// Only http(s)/mailto reach the OS. Site views show strangers' content, and a
+// search-ms:, ms-msdt: or file:\ link handed to the OS is a one-click exploit.
+function openOutside(url: string): void {
+  if (shellLinkDecision(url, '') === 'external') void shell.openExternal(url)
+}
+
 function logLinkRoutingDecision(via: 'window-open' | 'will-navigate', from: string, target: string, decision: string) {
   if (app.isPackaged) return
   try {
@@ -401,7 +408,7 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
         view.webContents.loadURL(openUrl)
         return { action: 'deny' }
       default:
-        shell.openExternal(openUrl)
+        openOutside(openUrl)
         return { action: 'deny' }
     }
   })
@@ -419,7 +426,7 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
     logLinkRoutingDecision('will-navigate', view.webContents.getURL(), targetUrl, decision)
     if (decision !== 'external') return
     event.preventDefault()
-    void shell.openExternal(targetUrl)
+    openOutside(targetUrl)
   })
 
   // A link on the page can also leave by a server redirect (LinkedIn's own
@@ -431,7 +438,7 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
     if (!redirectLeavesApp(tabId, view.webContents.getURL(), target)) return
     logLinkRoutingDecision('will-navigate', view.webContents.getURL(), target, 'external')
     event.preventDefault()
-    void shell.openExternal(target)
+    openOutside(target)
   })
 
   // Must be set before the first loadURL: which page WhatsApp serves is
@@ -681,7 +688,7 @@ export function ensureBackgroundView(tabId: string, partition: string, url: stri
     // A background provider window is not something the user is looking at, so
     // navigating it to a link would strand the worker on a page it cannot use.
     if (routeLink(openUrl, win.webContents.getURL()) === 'external') {
-      void shell.openExternal(openUrl)
+      openOutside(openUrl)
       return { action: 'deny' }
     }
     win.webContents.loadURL(openUrl)
@@ -691,7 +698,7 @@ export function ensureBackgroundView(tabId: string, partition: string, url: stri
   win.webContents.on('will-navigate', (event, targetUrl) => {
     if (win.isDestroyed() || routeLink(targetUrl, win.webContents.getURL()) !== 'external') return
     event.preventDefault()
-    void shell.openExternal(targetUrl)
+    openOutside(targetUrl)
   })
 
   if (needsChromeUserAgent(url)) {

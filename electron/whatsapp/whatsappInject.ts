@@ -318,7 +318,8 @@ export const WHATSAPP_BRIDGE_SRC = `
       try { Loader = window.require('WAWebChatLoadMessages') } catch (e) {}
 
       function finish(note) {
-        var msgs = modelsOf(chat.msgs)
+        // Oldest first by time, so the slice below is the newest 'want'.
+        var msgs = modelsOf(chat.msgs).slice().sort(function (a, b) { return (a.t || 0) - (b.t || 0) })
         var slice = msgs.slice(Math.max(msgs.length - want, 0))
         resolve({
           ok: true,
@@ -359,11 +360,24 @@ export const WHATSAPP_BRIDGE_SRC = `
         return typeof Loader.loadEarlierMsgs === 'function' ? 'loadEarlierMsgs' : null
       }
 
+      // The resident window can be an older stretch of the chat (a real call
+      // loaded 101 messages that stopped a day before the chat's last one).
+      // When its newest message is older than the chat's own last activity,
+      // the recent page is missing and must be loaded even if 'want' is met.
+      function newestT() {
+        var t = 0
+        modelsOf(chat.msgs).forEach(function (m) { if ((m.t || 0) > t) t = m.t })
+        return t
+      }
+      function staleWindow() { return !recentTried && (chat.t || 0) > newestT() }
+
       function step(attempt) {
         var have = modelsOf(chat.msgs).length
         // Bounded on purpose: each pass is a network round trip, and a caller
         // asking for 20 messages should not be able to walk years of history.
-        if (have >= want || !Loader || attempt >= 6 || chat.noEarlierMsgs === true) {
+        if (Loader && attempt < 6 && staleWindow() && typeof Loader.loadRecentMsgs === 'function') {
+          // fall through to the loader below: pickLoader() returns loadRecentMsgs first
+        } else if (have >= want || !Loader || attempt >= 6 || chat.noEarlierMsgs === true) {
           finish(null)
           return
         }
@@ -768,6 +782,18 @@ export const WHATSAPP_BRIDGE_SRC = `
           }
         })
       }
+
+      // Documents not yet on this device (mediaBytes 0) can leave the
+      // manager's promise pending: a real PDF never settled, and the caller
+      // only saw the bridge time out with no reason. Try the other route while
+      // it waits, then report what was tried rather than hanging.
+      var fallbackTimer = setTimeout(function () {
+        attempts.push('downloadManager still pending after 45 s')
+        fallbackToMediaData()
+      }, 45000)
+      var giveUpTimer = setTimeout(function () { report('download did not finish in 90 s') }, 90000)
+      var settle = resolve
+      resolve = function (v) { clearTimeout(fallbackTimer); clearTimeout(giveUpTimer); settle(v) }
 
       viaDownloadManager()
     })

@@ -10,7 +10,7 @@
  * (an item id), not what the screen shows.
  */
 import type { WebContents } from 'electron'
-import { finishUpload, getTikTokView, resolveTikTokPartition, tkUploadVideo, unknownTikTokAccount, type TikTokResult } from './tiktok'
+import { finishUpload, getTikTokView, resolveTikTokPartition, tiktokStudioItemsScript, tkUploadVideo, unknownTikTokAccount, type TikTokResult } from './tiktok'
 import { checkSchedule } from './tiktokUpload'
 import { keepAwake } from '../keepAwake'
 
@@ -121,10 +121,52 @@ async function chooseSchedule(wc: WebContents): Promise<void> {
   throw new Error('TikTok Studio: "Schedule" would not stay selected')
 }
 
-async function setDate(wc: WebContents, target: Date): Promise<void> {
+/** The date and time Studio's pickers must show for a moment, in the page's own time zone. */
+export interface PickerTarget { year: number; month: number; day: number; hour: string; minute: string; date: string; label: string }
+
+/**
+ * Studio's date and time pickers work in the browser's time zone, so the
+ * target is read in the zone the page reports (the machine's when unknown).
+ */
+export function pickerTarget(atSeconds: number, timeZone?: string): PickerTarget {
+  let parts: Record<string, string>
+  try {
+    parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    }).formatToParts(new Date(atSeconds * 1000)).map(p => [p.type, p.value]))
+  } catch (e) {
+    if (timeZone) return pickerTarget(atSeconds) // a zone name this runtime does not know
+    throw e
+  }
+  const year = Number(parts.year), month = Number(parts.month), day = Number(parts.day)
+  const date = `${year}-${two(month)}-${two(day)}`
+  const hour = two(Number(parts.hour) % 24), minute = two(Number(parts.minute))
+  return { year, month, day, hour, minute, date, label: `${date} ${hour}:${minute}` }
+}
+
+/**
+ * The cell to click for `day`. The grid also shows trailing days of the
+ * neighbouring months: only the cells from this month's first "1" up to the
+ * next "1" count, and only one Studio marks "valid" can be chosen.
+ */
+export function pickCalendarDay(cells: Array<{ text: string; cls: string }>, day: number): { index: number } | { error: string } {
+  const first = cells.findIndex(c => c.text === '1')
+  const next = cells.findIndex((c, i) => i > first && c.text === '1')
+  for (let i = first < 0 ? 0 : first; i < (next < 0 ? cells.length : next); i++) {
+    if (cells[i].text !== String(day)) continue
+    if (/\bvalid\b/.test(cells[i].cls)) return { index: i }
+    return { error: `day ${day} is greyed out in the calendar (class "${cells[i].cls.slice(0, 60)}"), so Studio will not take that date` }
+  }
+  return { error: `day ${day} is not in the calendar (${cells.length} day cells)` }
+}
+
+async function setDate(wc: WebContents, target: PickerTarget): Promise<void> {
+  // Already showing it (Studio's default, or an earlier attempt): nothing to click.
+  if (await read<boolean>(wc, `(${DATE_INPUT} || {}).value === '${target.date}'`).catch(() => false)) return
   await press(wc, DATE_INPUT, 'the date field')
-  const want = target.getFullYear() * 12 + target.getMonth()
-  for (let i = 0; i < 14; i++) {
+  const want = target.year * 12 + (target.month - 1)
+  let onMonth = false
+  for (let i = 0; i < 14 && !onMonth; i++) {
     const shown = await read<{ month: string; year: string } | null>(wc, `(() => {
       const m = document.querySelector('.calendar-wrapper .month-title'), y = document.querySelector('.calendar-wrapper .year-title')
       return m && y ? { month: m.innerText.trim(), year: y.innerText.trim() } : null
@@ -133,27 +175,23 @@ async function setDate(wc: WebContents, target: Date): Promise<void> {
     const mi = MONTHS.indexOf(shown.month.toLowerCase())
     if (mi < 0) throw new Error(`TikTok Studio shows the month as "${shown.month}"; set the Studio language to English`)
     const diff = want - (Number(shown.year) * 12 + mi)
-    if (diff === 0) break
+    if (diff === 0) { onMonth = true; break }
     await press(wc, `document.querySelectorAll('.calendar-wrapper .month-header-wrapper .arrow')[${diff > 0 ? 1 : 0}]`, 'the calendar month arrow')
   }
-  // The grid also shows trailing days of the neighbouring months: take the day
-  // between this month's first "1" and the next one.
-  await press(wc, `(() => {
-    const cells = Array.from(document.querySelectorAll('.calendar-wrapper .day'))
-    const first = cells.findIndex(c => c.innerText.trim() === '1')
-    const next = cells.findIndex((c, i) => i > first && c.innerText.trim() === '1')
-    return cells.slice(first < 0 ? 0 : first, next < 0 ? undefined : next).find(c => c.innerText.trim() === '${target.getDate()}' && /\\bvalid\\b/.test(c.className))
-  })()`, `day ${target.getDate()} in the calendar (not selectable?)`)
-  const date = `${target.getFullYear()}-${two(target.getMonth() + 1)}-${two(target.getDate())}`
-  if (!(await until(wc, `(${DATE_INPUT} || {}).value === '${date}'`, 5000))) throw new Error(`TikTok Studio did not take the date ${date}`)
+  if (!onMonth) throw new Error(`TikTok Studio: the calendar would not move to ${MONTHS[target.month - 1]} ${target.year}`)
+  const cells = await read<Array<{ text: string; cls: string }>>(wc, `Array.from(document.querySelectorAll('.calendar-wrapper .day')).map(c => ({ text: (c.innerText || '').trim(), cls: String(c.className) }))`)
+  const pick = pickCalendarDay(Array.isArray(cells) ? cells : [], target.day)
+  if ('error' in pick) throw new Error(`TikTok Studio: ${pick.error}`)
+  await press(wc, `document.querySelectorAll('.calendar-wrapper .day')[${pick.index}]`, `day ${target.day} in the calendar`)
+  if (!(await until(wc, `(${DATE_INPUT} || {}).value === '${target.date}'`, 5000))) throw new Error(`TikTok Studio did not take the date ${target.date}`)
 }
 
-async function setTime(wc: WebContents, target: Date, trace: string[]): Promise<void> {
+async function setTime(wc: WebContents, target: PickerTarget, trace: string[]): Promise<void> {
   await press(wc, TIME_INPUT, 'the time field')
   trace.push('opened ' + await read<string>(wc, `(${TIME_INPUT} || {}).value`))
   const item = (list: number, text: string) => `Array.from((document.querySelectorAll('.tiktok-timepicker-option-list')[${list}] || document).querySelectorAll('.tiktok-timepicker-option-item')).find(i => i.innerText.trim() === '${text}')`
-  const hour = two(target.getHours())
-  const minute = two(target.getMinutes())
+  const hour = target.hour
+  const minute = target.minute
   const value = `(${TIME_INPUT} || {}).value`
   for (let i = 0; i < 3 && !(await until(wc, `${value} && ${value}.padStart(5, '0').startsWith('${hour}:')`, 500)); i++) {
     await press(wc, item(0, hour), `hour ${hour}`)
@@ -197,10 +235,72 @@ async function closePicker(wc: WebContents): Promise<void> {
   if (!(await until(wc, `!(${PICKER_OPEN})`, 4000))) throw new Error('TikTok Studio: the time picker would not close')
 }
 
-interface PostAnswer { requestId: string; done: boolean; body?: any; scheduled?: boolean }
+/** `sent` is the post body Studio sent, when it could be read; `body` is TikTok's answer. */
+interface PostAnswer { requestId: string; done: boolean; body?: any; sent?: string }
 
 /** Studio puts schedule_time in the post body only for a scheduled post (captured source, tks-01). */
 export const carriesScheduleTime = (postData: string): boolean => /"schedule_time"\s*:\s*"?[1-9]\d{5,}/.test(postData)
+
+/** The first non-zero schedule_time in a post body, in Unix seconds (milliseconds are converted); null when there is none. */
+export function scheduleTimeIn(postData: string): number | null {
+  for (const m of postData.matchAll(/"schedule_time"\s*:\s*"?(\d+)/g)) {
+    const n = Number(m[1])
+    if (n > 0) return n > 1e12 ? Math.round(n / 1000) : n
+  }
+  return null
+}
+
+export type PostVerdict = 'scheduled' | 'posted-now' | 'wrong-time' | 'body-unread' | 'refused' | 'no-answer'
+
+/**
+ * What TikTok's answer to Studio's post request proves. Scheduled only when
+ * TikTok returned an item id with status 0 AND the body Studio sent carried
+ * this schedule time (within a minute).
+ */
+export function judgePostAnswer(a: { body?: any; sent?: string } | undefined, atSeconds: number): { verdict: PostVerdict; itemId?: string; sentSeconds?: number | null } {
+  if (!a || a.body === undefined) return { verdict: 'no-answer' }
+  const item = a.body?.single_post_resp_list?.[0]
+  const itemId = item?.item_id ? String(item.item_id) : undefined
+  const sentSeconds = a.sent === undefined ? undefined : scheduleTimeIn(a.sent)
+  if (itemId && sentSeconds === null) return { verdict: 'posted-now', itemId, sentSeconds }
+  if (!(a.body?.status_code === 0 && itemId && item.status_code === 0)) return { verdict: 'refused', itemId, sentSeconds }
+  if (sentSeconds === undefined || sentSeconds === null) return { verdict: 'body-unread', itemId }
+  if (Math.abs(sentSeconds - atSeconds) > 60) return { verdict: 'wrong-time', itemId, sentSeconds }
+  return { verdict: 'scheduled', itemId, sentSeconds }
+}
+
+/**
+ * A post in Studio's list that is scheduled for `atSeconds` (within a minute):
+ * the one with `id`, or one not in `notIn` (the list from before Schedule was
+ * pressed). Without either it never guesses.
+ */
+export function findScheduledPost(
+  posts: Array<{ id?: string | number; scheduledAt?: string | null }>,
+  atSeconds: number,
+  pick: { id?: string; notIn?: ReadonlySet<string> },
+): string | null {
+  if (!pick.id && !pick.notIn) return null
+  for (const p of posts) {
+    const id = String(p.id ?? '')
+    if (!id || (pick.id && id !== pick.id) || pick.notIn?.has(id)) continue
+    const at = p.scheduledAt ? Date.parse(p.scheduledAt) / 1000 : NaN
+    if (Number.isFinite(at) && Math.abs(at - atSeconds) <= 60) return id
+  }
+  return null
+}
+
+/** The account's posts from Studio's own list (the upload page is a Studio page, so the request is signed); null when unreadable. */
+async function readPosts(wc: WebContents): Promise<Array<{ id?: string; scheduledAt?: string | null }> | null> {
+  try {
+    const r = await Promise.race([
+      wc.executeJavaScript(tiktokStudioItemsScript()) as Promise<TikTokResult>,
+      sleep(20_000).then(() => null),
+    ])
+    return r && r.ok && Array.isArray(r.posts) ? r.posts as Array<{ id?: string; scheduledAt?: string | null }> : null
+  } catch {
+    return null
+  }
+}
 
 /** Watches the page's own scheduled-post request so the answer can be read. */
 function watchPost(wc: WebContents): { answers: PostAnswer[]; stop: () => void } {
@@ -213,10 +313,10 @@ function watchPost(wc: WebContents): { answers: PostAnswer[]; stop: () => void }
       const a: PostAnswer = { requestId: params.requestId, done: false }
       answers.push(a)
       const body = params?.request?.postData
-      if (typeof body === 'string') a.scheduled = carriesScheduleTime(body)
+      if (typeof body === 'string') a.sent = body
       else if (params?.request?.hasPostData) {
         void wc.debugger.sendCommand('Network.getRequestPostData', { requestId: a.requestId })
-          .then((r: any) => { a.scheduled = carriesScheduleTime(String(r?.postData ?? '')) }).catch(() => {})
+          .then((r: any) => { if (typeof r?.postData === 'string') a.sent = r.postData }).catch(() => {})
       }
     } else if (method === 'Network.loadingFinished') {
       const a = answers.find(x => x.requestId === params.requestId)
@@ -253,8 +353,9 @@ export async function tkScheduleVideo(opts: {
   const resolved = resolveTikTokPartition(opts.account)
   if (!resolved) return unknownTikTokAccount(opts.account) as TikTokResult
   // Studio's pickers use the machine's local time; the 5-minute rounding is already in atSeconds.
-  const target = new Date(schedule.atSeconds * 1000)
-  const label = `${target.getFullYear()}-${two(target.getMonth() + 1)}-${two(target.getDate())} ${two(target.getHours())}:${two(target.getMinutes())}`
+  const atSeconds = schedule.atSeconds
+  const target = pickerTarget(atSeconds)
+  const label = target.label
 
   clickLog.length = 0
   const up = await tkUploadVideo({ videoFilePath: opts.filePath, caption: String(opts.caption ?? ''), account: opts.account })
@@ -305,8 +406,18 @@ export async function tkScheduleVideo(opts: {
       return { ok: true, dryRun: true, account: resolved.tabId, studioShows: shownLabel, steps }
     }
 
+    // Studio's list before Schedule is pressed: a post that appears in it later
+    // scheduled for this time is this upload, even when TikTok's answer was missed.
+    const before = await readPosts(wc)
+    const notIn = before ? new Set(before.map(p => String(p.id ?? ''))) : undefined
+    const findInList = async (id?: string) => {
+      const after = await readPosts(wc)
+      return after ? findScheduledPost(after, atSeconds, { id, notIn: id ? undefined : notIn }) : null
+    }
+
     watcher = watchPost(wc)
-    await press(wc, `document.querySelector('button[data-e2e="post_video_button"]')`, 'the Schedule button')
+    const scheduleButton = `document.querySelector('button[data-e2e="post_video_button"]')`
+    await press(wc, scheduleButton, 'the Schedule button')
     steps.push('schedule-pressed')
 
     // The "Allow your video to be saved for scheduled posting?" popup comes up on
@@ -314,8 +425,17 @@ export async function tkScheduleVideo(opts: {
     let allowed = false
     let popup = ''
     let continued = false
-    for (let i = 0; i < 60; i++) {
+    let pressedAgain = false
+    for (let i = 0; i < 120; i++) {
       if (watcher.answers.some(a => a.done)) break
+      // A press Studio ignored (still busy with the cover) sends nothing and
+      // opens nothing. Pressing again is safe only while no post request left.
+      if (i === 20 && !pressedAgain && !allowed && !continued && watcher.answers.length === 0) {
+        pressedAgain = true
+        await press(wc, scheduleButton, 'the Schedule button (again)').catch(() => {})
+        steps.push('schedule-pressed-again')
+        continue
+      }
       // "Continue to post? We're still checking your video…" [Cancel] [Post now]
       // continues the submission already chosen; the post request is checked
       // for its schedule time below.
@@ -350,24 +470,40 @@ export async function tkScheduleVideo(opts: {
       }
       await sleep(500)
     }
-    const answer = watcher.answers.find(a => a.done)?.body
-    const item = answer?.single_post_resp_list?.[0]
     const sent = watcher.answers.find(a => a.done)
-    if (sent?.scheduled === false && item?.item_id) {
-      finishUpload(wc, resolved.tabId)
-      return { ok: false, account: resolved.tabId, itemId: String(item.item_id), steps, error: 'TikTok took the post WITHOUT a schedule time, so it may be published now instead of later. Check it with tiktok_list_posts and tell the user; do not upload it again.' }
-    }
-    if (answer?.status_code === 0 && item?.item_id && item.status_code === 0) {
+    const judged = judgePostAnswer(sent, atSeconds)
+    const done = (itemId: string, confirmedBy: string): TikTokResult => {
       steps.push('scheduled')
       finishUpload(wc, resolved.tabId)
       return {
-        ok: true, via: 'studio-ui', account: resolved.tabId, itemId: String(item.item_id), scheduled: true,
-        scheduledFor: target.toISOString(), scheduledLocal: label, allowClicked: allowed, continuedPastContentCheck: continued, scheduleTimeSent: sent?.scheduled ?? null, steps,
-        note: 'scheduled through TikTok Studio and confirmed by TikTok with an item id; do not call tiktok_submit_post',
+        ok: true, via: 'studio-ui', account: resolved.tabId, itemId, scheduled: true, confirmedBy,
+        scheduledFor: new Date(atSeconds * 1000).toISOString(), scheduledLocal: label, allowClicked: allowed, continuedPastContentCheck: continued, steps,
+        note: 'scheduled through TikTok Studio and confirmed by TikTok; do not call tiktok_submit_post',
       }
     }
-    const seen = answer ? JSON.stringify(answer).slice(0, 300) : 'no answer from TikTok'
-    return fail(`TikTok did not confirm the schedule (${seen})`, { allowClicked: allowed, popup })
+    switch (judged.verdict) {
+      case 'scheduled':
+        return done(judged.itemId!, 'post answer with this schedule time')
+      case 'posted-now':
+        finishUpload(wc, resolved.tabId)
+        return { ok: false, account: resolved.tabId, itemId: judged.itemId, steps, error: 'TikTok took the post WITHOUT a schedule time, so it may be published now instead of later. Check it with tiktok_list_posts and tell the user; do not upload it again.' }
+      case 'wrong-time':
+        finishUpload(wc, resolved.tabId)
+        return { ok: false, account: resolved.tabId, itemId: judged.itemId, steps, error: `TikTok scheduled the post for ${new Date((judged.sentSeconds ?? 0) * 1000).toISOString()}, not ${new Date(atSeconds * 1000).toISOString()}. Tell the user; do not upload it again.` }
+      case 'body-unread': {
+        // TikTok took a post but the body Studio sent was not readable: the list says when it goes out.
+        if (await findInList(judged.itemId)) return done(judged.itemId!, 'Studio post list')
+        finishUpload(wc, resolved.tabId)
+        return { ok: false, account: resolved.tabId, itemId: judged.itemId, steps, error: 'TikTok took the post, but its schedule time could not be confirmed. Check it with tiktok_list_posts and tell the user; do not upload it again.' }
+      }
+      case 'no-answer': {
+        const found = await findInList()
+        if (found) return done(found, "Studio post list (TikTok's answer was missed)")
+        return fail("TikTok did not confirm the schedule (no answer from TikTok, and Studio's post list shows no post at that time)", { allowClicked: allowed, popup })
+      }
+      default:
+        return fail(`TikTok did not confirm the schedule (${sent?.body ? JSON.stringify(sent.body).slice(0, 300) : 'no answer'})`, { allowClicked: allowed, popup })
+    }
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e))
   } finally {

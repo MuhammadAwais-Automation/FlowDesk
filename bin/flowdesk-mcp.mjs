@@ -105,7 +105,9 @@ function findGatewayConfig() {
 // (ask.*, Flow video, TikTok upload) failed on the client while the app kept
 // working. The gateway itself has no shorter limit, so match the real work.
 const LONG_RPC = /^(ask\.|workflows\.(run|resume)$|chatgpt\.(ask|generateImage|editImage|imageAccounts|downloadImage)$|flow\.(generate|extend|upload|download)|tiktok\.(uploadVideo|apiUploadVideo|deleteAllVideos|submitPost|warmupScroll|radarCollect|radarReport|radarStart)$|pinterest\.createPin$|gumroad\.(uploadFile|uploadCover|uploadThumbnail)$|pinFactory\.nicheScan$|flow\.(uiGenerateImage|imageModels)$|health\.check$|dev\.(rehearse|bundleScan)$|youtube\.(search|channel|outliers|nicheScan|nicheCompare|nicheMashup|commentInsights|breakdown|monetization|keyword|trending|watch|videoDetail|channelSearch)$)/
-function rpcTimeoutMs(method) {
+function rpcTimeoutMs(method, params) {
+  // A mirrored agent tool runs through tools.call; a large WhatsApp file needs longer than the default.
+  if (method === 'tools.call' && /^whatsapp_(send_file|download_media)$/.test(String(params?.name ?? ''))) return 30 * 60_000
   return LONG_RPC.test(method) ? 15 * 60_000 : 120_000
 }
 
@@ -128,7 +130,7 @@ async function callGatewayRpc(method, params = {}) {
       ...(callStore.getStore()?.contentId ? { 'X-FlowDesk-Content': callStore.getStore().contentId } : {}),
     },
     body: JSON.stringify({ method, params }),
-    signal: AbortSignal.timeout(rpcTimeoutMs(method)),
+    signal: AbortSignal.timeout(rpcTimeoutMs(method, params)),
   })
 
   if (!res.ok) {
@@ -3527,7 +3529,7 @@ server.tool(
   'flowdesk_workflow_save',
   'Allows external agents (Claude Code, Antigravity) to author or update multi-skill workflows in FlowDesk.',
   {
-    workflow: z.record(z.any()).describe('The workflow object (must include id, name, description, steps).'),
+    workflow: z.record(z.any()).describe('The workflow object (must include id, name, description, steps). id is kebab-case: a-z, 0-9 and -, max 64 chars.'),
   },
   async (args) => {
     const res = await callGatewayRpc('workflows.save', { workflow: args.workflow })
@@ -3564,20 +3566,24 @@ server.tool(
 
 // ── AGENT TOOL PARITY ────────────────────────────────────────────────────────
 // Mirror every in-app agent tool (LinkedIn, WhatsApp, Facebook) that has no
-// hand-written wrapper above. Skipped silently when FlowDesk is not running.
+// hand-written wrapper above. Returns false when FlowDesk is not reachable yet,
+// so the caller can try again: a client often starts this server before the
+// app, and a one-shot attempt left whatsapp_send_file, whatsapp_download_media
+// and the rest missing for the whole session.
 async function registerGatewayAgentTools() {
   const cfg = findGatewayConfig()
-  if (!cfg || !cfg.port || !cfg.token) return
+  if (!cfg || !cfg.port || !cfg.token) return false
   let tools
   try {
     tools = await Promise.race([
       callGatewayRpc('tools.list'),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('tools.list timeout')), 3000)),
+      // The first tools.list imports the agent tool modules, slow on a cold app.
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tools.list timeout')), 10000)),
     ])
   } catch {
-    return
+    return false
   }
-  if (!Array.isArray(tools)) return
+  if (!Array.isArray(tools)) return false
   const existing = new Set(Object.keys(server._registeredTools ?? {}))
   for (const t of tools) {
     if (!t || typeof t.name !== 'string' || existing.has(t.name)) continue
@@ -3607,9 +3613,19 @@ async function registerGatewayAgentTools() {
     )
     existing.add(name)
   }
+  return true
 }
 
-await registerGatewayAgentTools()
+const agentToolsReady = await registerGatewayAgentTools()
 
 const transport = new StdioServerTransport()
 await server.connect(transport)
+
+// Not reachable at startup: keep trying. registerTool after connect sends
+// tools/list_changed, so the client picks the tools up when FlowDesk starts.
+if (!agentToolsReady) {
+  const retry = setInterval(async () => {
+    if (await registerGatewayAgentTools()) clearInterval(retry)
+  }, 15000)
+  retry.unref()
+}

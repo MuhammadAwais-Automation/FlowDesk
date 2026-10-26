@@ -24,6 +24,7 @@ const waSendFile = vi.fn()
 
 vi.mock('../whatsapp/whatsapp', () => ({
   MAX_ATTACHMENT_BYTES: 16 * 1024 * 1024,
+  MAX_DOCUMENT_BYTES: 1024 * 1024 * 1024,
   waSendFile: (...args: unknown[]) => waSendFile(...args),
   waStatus: vi.fn(async () => ({ ok: true })),
   waListChats: (...args: unknown[]) => waListChats(...args),

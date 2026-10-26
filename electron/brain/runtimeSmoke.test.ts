@@ -37,7 +37,11 @@ app.whenReady().then(() => {
 
   const electronPath = resolve(process.cwd(), 'node_modules', 'electron', 'dist', 'electron.exe')
   return new Promise<UtilityResponse[]>((resolveRun, reject) => {
-    const child = spawn(electronPath, [harnessPath, utilityEntryPath, databasePath], { windowsHide: true })
+    const child = spawn(electronPath, [harnessPath, utilityEntryPath, databasePath], {
+      windowsHide: true,
+      // Editor terminals (VS Code) set this, which makes electron.exe a plain Node and require('electron') fail.
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
+    })
     const responses: UtilityResponse[] = []
     let stderr = ''
     let stdout = ''
@@ -96,5 +100,5 @@ describe('Brain runtime smoke', () => {
       { id: 'status', ok: true, result: expect.objectContaining({ ready: true, fts5: true }) },
       { id: 'shutdown', ok: true, result: { closed: true } },
     ])
-  }, 20_000)
+  }, 60_000) // Electron boot is slow while the full suite runs in parallel
 })

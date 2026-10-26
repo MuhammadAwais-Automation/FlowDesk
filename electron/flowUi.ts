@@ -222,8 +222,23 @@ async function openSettings(wc: WebContents): Promise<UiState> {
   return s
 }
 
-/** Clicks a settings radio until it reads as checked (a first click can only focus the popover). */
+/** The settings radios on screen, as their labels ("Video", "720p", "8s", …). */
+export const offeredOptions = (s: Pick<UiState, 'radios'>): string[] => s.radios.map(r => r.words.join(' '))
+
+/**
+ * Clicks a settings radio until it reads as checked (a first click can only focus the popover).
+ * Picking a model from its menu can close the settings, and models differ in
+ * what they offer ("720p not found" on Veo 3.1 - Lite, report 2026-10-21):
+ * reopen first, and name what is offered instead of a bare "not found".
+ */
 async function choose(wc: WebContents, word: string): Promise<void> {
+  let s = await openSettings(wc)
+  if (!s.radios.some(r => r.words.includes(word))) {
+    s = await waitFor(async () => { const x = await state(wc); return x.radios.some(r => r.words.includes(word)) ? x : null }, 2500, 250) ?? s
+    if (!s.radios.some(r => r.words.includes(word))) {
+      throw new Error(`Flow page: no "${word}" option${s.model ? ` for the model "${s.model}"` : ''}; the settings offer: ${offeredOptions(s).join(', ') || 'nothing (closed)'}`)
+    }
+  }
   for (let i = 0; i < 3; i++) {
     if (checked(await state(wc), word)) return
     await press(wc, { radio: word }, `the "${word}" option`)

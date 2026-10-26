@@ -303,6 +303,17 @@ const MIME_EXT: Record<string, string> = {
  */
 export const MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024
 
+/**
+ * Files sent as a document (attach -> Document in WhatsApp: original quality,
+ * no recompression). WhatsApp takes documents up to 2 GB; the bytes go over in
+ * 512 KB chunks but the whole file sits in page memory before the send, so
+ * FlowDesk stops at 1 GB.
+ */
+export const MAX_DOCUMENT_BYTES = 1024 * 1024 * 1024
+
+/** How long the page may take to prepare and hand over a file of `size` bytes: 60 s plus 2 s per MB, at most 30 min. */
+export const sendTimeoutMs = (size: number): number => Math.min(60_000 + Math.ceil(size / (1024 * 1024)) * 2000, 30 * 60_000)
+
 /** Bytes per staged chunk, before base64 expands them by a third. */
 const CHUNK_BYTES = 512 * 1024
 
@@ -397,11 +408,11 @@ export async function waSendFile(
     if (!info.isFile()) return { ok: false, error: `${filePath} is not a file` }
     size = info.size
     if (size === 0) return { ok: false, error: 'refusing to send an empty file' }
-    if (size > MAX_ATTACHMENT_BYTES) {
-      return {
-        ok: false,
-        error: `${filePath} is ${(size / 1024 / 1024).toFixed(1)}MB; the limit for sending through FlowDesk is ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB`,
-      }
+    const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)}MB`
+    if (shouldSendAsDocument(mimetypeFor(filePath), asDocument)) {
+      if (size > MAX_DOCUMENT_BYTES) return { ok: false, error: `${filePath} is ${mb(size)}; the limit for a document sent through FlowDesk is ${MAX_DOCUMENT_BYTES / 1024 / 1024 / 1024}GB` }
+    } else if (size > MAX_ATTACHMENT_BYTES) {
+      return { ok: false, error: `${filePath} is ${mb(size)}; inline photos, videos and audio stop at ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB. Send it with asDocument: true (up to ${MAX_DOCUMENT_BYTES / 1024 / 1024 / 1024}GB, original quality).` }
     }
     bytes = await readFile(filePath)
   } catch (e) {
@@ -449,9 +460,14 @@ export async function waSendFile(
         // successful send from every side.
         expectedBytes: size,
       })})`,
-      30000,
+      sendTimeoutMs(size),
     )
-    return { ...safePayload(res), account: acc.id }
+    const out: WhatsAppResult = { ...safePayload(res), account: acc.id }
+    // WhatsApp decides the final type: say so when a document was asked for and media went out.
+    if (out.ok && shouldSendAsDocument(mimetype, asDocument) && out.sentAs && out.sentAs !== 'document') {
+      out.warning = `sent as "${String(out.sentAs)}", not as a document; WhatsApp may have recompressed it`
+    }
+    return out
   } catch (e) {
     // Staged bytes are a copy of the user's file sitting in page memory. If
     // the send never got far enough to clear them itself, clear them here.
@@ -488,7 +504,8 @@ export async function waDownloadMedia(chatId: string, msgId: string, account?: W
   if (!msgId || typeof msgId !== 'string') {
     return { ok: false, error: 'msgId is required and must be a string' }
   }
-  const res = await call(`window.__fdWaDownloadMedia(${JSON.stringify(chatId)}, ${JSON.stringify(msgId)})`, 20000, account)
+  // The page gives up by itself at 90 s with the routes it tried; this only catches a dead page.
+  const res = await call(`window.__fdWaDownloadMedia(${JSON.stringify(chatId)}, ${JSON.stringify(msgId)})`, 120_000, account)
   if (!res.ok) return res
 
   const base64 = res.base64 as string | undefined

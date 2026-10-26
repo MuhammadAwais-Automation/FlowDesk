@@ -12,6 +12,7 @@ import {
   waSendFile,
   unknownWhatsAppAccount,
   MAX_ATTACHMENT_BYTES,
+  MAX_DOCUMENT_BYTES,
 } from '../whatsapp/whatsapp'
 import type { RequestApproval } from './approval'
 
@@ -198,11 +199,11 @@ export function createWhatsAppTools(requestApproval: RequestApproval) {
         chatId: z.string().min(1)
           .describe('The chat id to send to, from whatsapp_search_contacts or whatsapp_list_chats. Never a name or a raw phone number.'),
         filePath: z.string().min(1)
-          .describe(`Absolute path to the file on this computer. Its extension decides how WhatsApp presents it. Limit ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB.`),
+          .describe(`Absolute path to the file on this computer. Its extension decides how WhatsApp presents it. Inline photo/video/audio: up to ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB. As a document: up to ${MAX_DOCUMENT_BYTES / 1024 / 1024 / 1024}GB.`),
         caption: z.string().max(1000).optional()
           .describe('Optional text shown with the file. Ignored by WhatsApp for some document types.'),
         asDocument: z.boolean().optional()
-          .describe('Force a photo or video to be sent as a file instead of inline media, so it keeps its original quality and filename. Has no effect on things WhatsApp cannot render inline — those are always documents.'),
+          .describe("Send as a document, the same as WhatsApp's attach → Document: a photo, video or audio keeps its original quality and file name (no recompression) and may be up to 1 GB. Has no effect on things WhatsApp cannot render inline — those are always documents. Check sentAs/warning in the result."),
         account,
       },
       async ({ chatId, filePath, caption, asDocument, account }) => {

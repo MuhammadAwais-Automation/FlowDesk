@@ -95,7 +95,7 @@ interface PromptCategory {
 import { join, basename, resolve, sep } from 'path'
 import Store from 'electron-store'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, findAnyViewByUrl, findWorkerViewByTool, prewarmBackgroundViews, flushAllCookies, rememberedView } from './sessions'
-import { attachShellLinkPolicy } from './shellLinkPolicy'
+import { attachShellLinkPolicy, shellLinkDecision } from './shellLinkPolicy'
 import { addSocialAccount, isSocialPlatform, removeSocialAccount, setSocialShowHandler, socialAccountsStatus } from './socialAccounts'
 import { startProbeRunner } from './discovery/probeRunner'
 import { APPROVAL_TIMEOUT_MS, loadPolicy, policyPaths, readActionLog, savePolicy } from './gateway/actionPolicy'
@@ -1215,7 +1215,8 @@ ipcMain.handle('yt:detectChannelId', async (_e, partition: string) => {
 })
 
 // IPC: open URL in external browser (system default)
-ipcMain.handle('yt:openExternal', (_e, url: string) => shell.openExternal(url))
+ipcMain.handle('yt:openExternal', (_e, url: string) =>
+  shellLinkDecision(url, '') === 'external' ? shell.openExternal(url) : undefined)
 
 // ─────────────────────────────────────────────────────────────────
 // IPC: Custom Tools Library
