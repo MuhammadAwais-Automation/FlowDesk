@@ -10,7 +10,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { readFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -3459,6 +3459,53 @@ server.tool(
   async (args) => textResult(await callGatewayRpc('browser.act', args))
 )
 
+// ── WORKSPACES: NAMED BROWSERS WITH THEIR OWN LOGINS, ANY WEBSITE ────────────
+
+server.tool(
+  'workspace_list',
+  'FlowDesk Workspaces: named browsers, each with its own saved logins (e.g. "Work" with Gmail, "TikTok 2" with a second TikTok account). Lists each workspace with its tabs (view id, url, title) and whether the user has paused the agent there. Use a tab\'s view id with browser_snapshot / browser_act / browser_navigate; open new pages with browser_open.',
+  {},
+  { readOnlyHint: true },
+  async () => textResult(await callGatewayRpc('workspace.list'))
+)
+
+server.tool(
+  'workspace_create',
+  'Create a new empty workspace (its own logins, separate from every other workspace). The user signs in to sites there themselves; never type their passwords.',
+  { name: z.string().describe('Workspace name, e.g. "Research" or "TikTok 2".') },
+  async (args) => textResult(await callGatewayRpc('workspace.create', args))
+)
+
+server.tool(
+  'browser_open',
+  'Open any website in a new tab of a workspace and wait for it to load; returns the tab\'s view id for browser_snapshot / browser_act. Works with the workspace\'s saved logins. The user can watch it live on the Workspaces page, where every step you take is listed and confirm-needed actions get Allow / Deny buttons. If the user has paused the agent in that workspace, stop and ask them.',
+  {
+    workspace: z.string().describe('Workspace id or name from workspace_list.'),
+    url: z.string().describe('The page: a full url, a bare host (gmail.com) or words to search on Google. Only http(s).'),
+  },
+  { openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('browser.open', args))
+)
+
+server.tool(
+  'browser_navigate',
+  'Move an open view to another url, or go back / forward / reload, then wait for the load. Returns the new url and title; take a browser_snapshot next.',
+  {
+    view: z.string().describe('View id from workspace_list or browser_views.'),
+    url: z.string().optional().describe('Where to go (url, bare host or search words). Omit when using go.'),
+    go: z.enum(['back', 'forward', 'reload']).optional().describe('History move instead of a url.'),
+  },
+  { openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('browser.navigate', args))
+)
+
+server.tool(
+  'browser_close_tab',
+  'Close a workspace tab (ws-… view id) you opened and no longer need. Other FlowDesk views cannot be closed this way.',
+  { view: z.string().describe('Workspace tab view id, e.g. ws-ab12cd-t2.') },
+  async (args) => textResult(await callGatewayRpc('browser.closeTab', args))
+)
+
 server.tool(
   'browser_route_save',
   'Save one of a page\'s own GET data requests (seen via browser_act network:true) as a named route, so the data can later be fetched with browser_route_run instead of clicking. Read-only by design: only https GET to the same site; values in the url can be {{variables}}.',
@@ -3692,6 +3739,23 @@ server.tool(
 // so the caller can try again: a client often starts this server before the
 // app, and a one-shot attempt left whatsapp_send_file, whatsapp_download_media
 // and the rest missing for the whole session.
+//
+// Waiting for the app is not enough on its own: some clients ignore
+// tools/list_changed, so tools registered late never show up there. The last
+// list FlowDesk gave is therefore kept on disk and registered at startup, app
+// running or not; a call made while the app is down fails with a clear
+// "FlowDesk is not running" instead of the tool not existing.
+const AGENT_TOOLS_CACHE = join(homedir(), '.flowdesk', 'agent-tools.json')
+
+function cachedAgentTools() {
+  try {
+    const tools = JSON.parse(readFileSync(AGENT_TOOLS_CACHE, 'utf8'))
+    return Array.isArray(tools) ? tools : []
+  } catch {
+    return []
+  }
+}
+
 async function registerGatewayAgentTools() {
   const cfg = findGatewayConfig()
   if (!cfg || !cfg.port || !cfg.token) return false
@@ -3706,6 +3770,15 @@ async function registerGatewayAgentTools() {
     return false
   }
   if (!Array.isArray(tools)) return false
+  try {
+    mkdirSync(dirname(AGENT_TOOLS_CACHE), { recursive: true })
+    writeFileSync(AGENT_TOOLS_CACHE, JSON.stringify(tools))
+  } catch { /* the cache only saves a wait next time */ }
+  registerAgentToolList(tools)
+  return true
+}
+
+function registerAgentToolList(tools) {
   const existing = new Set(Object.keys(server._registeredTools ?? {}))
   for (const t of tools) {
     if (!t || typeof t.name !== 'string' || existing.has(t.name)) continue
@@ -3735,9 +3808,9 @@ async function registerGatewayAgentTools() {
     )
     existing.add(name)
   }
-  return true
 }
 
+registerAgentToolList(cachedAgentTools())
 const agentToolsReady = await registerGatewayAgentTools()
 
 const transport = new StdioServerTransport()

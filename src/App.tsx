@@ -13,6 +13,7 @@ const Brain = lazy(() => import('@/pages/BrainHub'))
 const Intelligence = lazy(() => import('@/pages/Intelligence'))
 const Skills = lazy(() => import('@/pages/Skills'))
 const Studio = lazy(() => import('@/pages/Studio'))
+const Workspaces = lazy(() => import('@/pages/Workspaces'))
 
 // Safety check — if preload didn't load, show helpful error
 const api = window.electronAPI
@@ -56,7 +57,7 @@ export default function App() {
   // This prevents the native view from covering the new page during the transition.
   function navigateTo(page: Page) {
     if (api) {
-      if (page !== 'browser' && page !== 'youtube' && page !== 'social' && page !== 'studio') {
+      if (page !== 'browser' && page !== 'youtube' && page !== 'social' && page !== 'studio' && page !== 'workspaces') {
         api.hideView().catch(() => {})
       }
     }
@@ -88,6 +89,7 @@ export default function App() {
       case 'youtube': return <YTStudio isActive={currentPage === 'youtube'} />
       case 'social': return <Social isActive={currentPage === 'social'} />
       case 'studio': return <Studio isActive={currentPage === 'studio'} />
+      case 'workspaces': return <Workspaces isActive={currentPage === 'workspaces'} />
       default: return null
     }
   }

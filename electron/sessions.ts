@@ -303,6 +303,18 @@ export function persistSessionCookies(partition: string): void {
   })
 }
 
+let workspaceTabOpener: ((fromTabId: string, url: string) => void) | null = null
+
+/** Workspaces (electron/workspaces/manager.ts) turn a tab's window.open into a new tab. */
+export function setWorkspaceTabOpener(fn: (fromTabId: string, url: string) => void): void {
+  workspaceTabOpener = fn
+}
+
+/** Creates a tab's view without putting it on screen (agents open tabs the user may not be looking at). */
+export function openTabView(tabId: string, partition: string, url: string): WebContents {
+  return createView(tabId, partition, url).view.webContents
+}
+
 function createView(tabId: string, partition: string, url: string): { view: WebContentsView; created: boolean } {
   const existing = viewCache.get(tabId)
   if (existing) return { view: existing, created: false }
@@ -394,6 +406,26 @@ function createView(tabId: string, partition: string, url: string): { view: WebC
       nodeIntegration: false,
       contextIsolation: true,
     },
+  }
+
+  // A workspace tab is a general browser: any site stays in it, a new window
+  // becomes a new tab of the same workspace, and only non-web schemes (mailto:)
+  // go to the OS.
+  if (tabId.startsWith('ws-')) {
+    view.webContents.setWindowOpenHandler(({ url: openUrl }) => {
+      if (isOAuthPopup(openUrl)) return { action: 'allow', overrideBrowserWindowOptions: popupWindowOptions }
+      if (/^https?:/i.test(openUrl)) workspaceTabOpener?.(tabId, openUrl)
+      else openOutside(openUrl)
+      return { action: 'deny' }
+    })
+    view.webContents.on('will-navigate', (event, targetUrl) => {
+      if (/^(https?|about|blob|data):/i.test(targetUrl)) return
+      event.preventDefault()
+      openOutside(targetUrl)
+    })
+    view.webContents.setUserAgent(chromeUserAgentFor(view.webContents))
+    view.webContents.loadURL(url)
+    return { view, created: true }
   }
 
   view.webContents.setWindowOpenHandler(({ url: openUrl }) => {

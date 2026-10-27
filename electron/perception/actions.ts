@@ -256,6 +256,26 @@ async function dispatch(send: Send, req: ActRequest, entry: RefEntry | undefined
 
 const quote = (e: Pick<RefEntry, 'role' | 'name'>) => `${e.role} "${e.name}"`
 
+const MARK = { borderColor: { r: 217, g: 119, b: 6, a: 0.95 }, contentColor: { r: 245, g: 158, b: 11, a: 0.22 }, showInfo: false }
+export const MARK_MS = 350
+
+/**
+ * Outlines the element an agent is about to use, so a user watching sees where
+ * it acts. Drawn by the browser's own overlay (like DevTools' inspect box): not
+ * part of the page, invisible to its scripts and to the next snapshot.
+ */
+async function mark(dom: Send, backendNodeId: number): Promise<void> {
+  try {
+    await dom('DOM.enable')
+    await dom('Overlay.enable')
+    await dom('DOM.scrollIntoViewIfNeeded', { backendNodeId }).catch(() => {})
+    await dom('Overlay.highlightNode', { highlightConfig: MARK, backendNodeId })
+    await new Promise(r => setTimeout(r, MARK_MS))
+  } catch { /* a missing outline must never stop the action */ }
+}
+
+const unmark = (dom: Send) => dom('Overlay.hideHighlight').catch(() => {})
+
 interface StepResult { error?: string; needsConfirm?: boolean; target?: string; recorded?: RoutineStep }
 
 /** Successful steps per page, for browser_routine_save. */
@@ -288,7 +308,7 @@ async function recordStep(dom: Send, req: ActRequest, entry: RefEntry | undefine
 }
 
 /** Checks the ref still points at the element the agent saw, asks for confirm when needed, then acts. */
-async function runStep(send: Send, wc: WebContents, req: ActRequest): Promise<StepResult> {
+async function runStep(send: Send, wc: WebContents, req: ActRequest, highlight = false): Promise<StepResult> {
   const state = stateFor(wc)
   let entry: RefEntry | undefined
   let frame: InFrame | undefined
@@ -320,11 +340,15 @@ async function runStep(send: Send, wc: WebContents, req: ActRequest): Promise<St
     const reason = confirmReason(req, entry)
     if (reason && !req.confirm) return { error: reason, needsConfirm: true, target }
 
+    const dom = frame?.send ?? send
+    if (highlight && entry) await mark(dom, entry.backendNodeId)
     try {
       const error = await dispatch(send, req, entry, frame)
       if (error) return { error, target }
     } catch (e) {
       return { error: `could not ${req.action}: ${e instanceof Error ? e.message : String(e)}`, target }
+    } finally {
+      if (highlight && entry) await unmark(dom)
     }
     const seen = req.ref ? state.last?.items.find(i => i.ref === req.ref) : undefined
     const recorded = await recordStep(frame?.send ?? send, req, entry, seen).catch(() => undefined)
@@ -368,10 +392,10 @@ async function watchNetwork<T>(wc: WebContents, send: Send, fn: () => Promise<T>
   }
 }
 
-export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[], opts: { network?: boolean } = {}): Promise<ActionReceipt> {
+export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[], opts: { network?: boolean; highlight?: boolean } = {}): Promise<ActionReceipt> {
   if (opts.network) {
     return whileAwake(wc, () => withDebugger(wc, async send => {
-      const [receipt, seen] = await watchNetwork(wc, send, () => actOnPage(wc, reqs))
+      const [receipt, seen] = await watchNetwork(wc, send, () => actOnPage(wc, reqs, { highlight: opts.highlight }))
       return { ...receipt, requests: summarizeRequests(seen) }
     }))
   }
@@ -384,7 +408,7 @@ export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[]
     let last: StepResult = {}
     const host = hostOf(before.url)
     for (const req of list) {
-      last = await runStep(send, wc, req)
+      last = await runStep(send, wc, req, opts.highlight)
       if (last.error) break
       if (last.recorded) recorder.add(wc.id, host, last.recorded)
       done++

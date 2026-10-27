@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import {
-  Globe, Users,
+  Globe, Users, AppWindow,
   Settings, Youtube,
   ChevronLeft, ChevronRight, BookOpen, Share2, BrainCircuit, Radar, Workflow, Clapperboard,
 } from 'lucide-react'
@@ -54,6 +54,7 @@ interface NavItem {
 
 const items: NavItem[] = [
   { icon: Globe,           page: 'browser',   label: 'AI Browser' },
+  { icon: AppWindow,       page: 'workspaces', label: 'Workspaces' },
   { icon: Workflow,        page: 'skills',    label: 'Skills'      },
   { icon: BrainCircuit,    page: 'brain',     label: 'Brain'       },
   { icon: Radar,           page: 'intelligence', label: 'Intelligence' },

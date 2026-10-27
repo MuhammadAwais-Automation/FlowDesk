@@ -4,6 +4,24 @@ import type { BrainCandidate, BrainContextPack, BrainDecisionBrief, BrainJob, Br
 import type { KnowledgeGraph, AnswerPack, BrainEntity, EntityMention, EntityMergeProposal, BrainEvent, CompactionReport, DocumentNeighborhood, VectorIndexReport, DecideCandidateInput, DocumentReadResult, DocumentSearchHit, KnowledgeCandidate, KnowledgeDocType, KnowledgeDocument, ManifestRender, ProposeCandidateInput, UnresolvedLink, VaultImportReport } from './brainKnowledge'
 import type { AtomicSkill, Workflow, WorkflowRun, SkillFilter, WorkflowFilter } from './skills'
 
+/** Mirrors electron/workspaces/model.ts and manager.ts. */
+export interface WorkspaceTab { id: string; url: string; title: string }
+export interface WorkspaceInfo {
+  id: string
+  name: string
+  color: string
+  partition: string
+  tabs: WorkspaceTab[]
+  activeTab: string | null
+  created: string
+  paused: boolean
+  open: string[]
+}
+export interface AgentActivity { at: string; view: string; kind: 'open' | 'navigate' | 'snapshot' | 'act' | 'approval' | 'close' | 'blocked'; text: string; ok: boolean }
+/** Asked: id, ws, view, what, reason. Done: id, allow. */
+export interface WsApproval { id: string; ws?: string; view?: string; what?: string; reason?: string; allow?: boolean }
+export type WsResult<T> = { ok: true; result: T } | { ok: false; error: string }
+
 /** Settings → Security. Names are canonical (e.g. "tiktok_delete_all_videos"). */
 /** Mirrors electron/updater.ts. */
 export type UpdateStatus =
@@ -272,6 +290,23 @@ export interface ElectronAPI {
   viewSetNavWidth: (w: number) => Promise<void>
   viewSetDockWidth: (w: number) => Promise<void>
   clearPartitionStorage: (partition: string) => Promise<void>
+
+  // Workspaces (electron/workspaces): named browsers with their own logins
+  wsList: () => Promise<WorkspaceInfo[]>
+  wsCreate: (name: string) => Promise<WsResult<{ id: string; name: string }>>
+  wsRename: (id: string, name: string) => Promise<WsResult<void>>
+  wsRemove: (id: string, wipe: boolean) => Promise<WsResult<void>>
+  wsOpenTab: (id: string, url: string) => Promise<WsResult<string>>
+  wsCloseTab: (id: string, tabId: string) => Promise<WsResult<void>>
+  wsShow: (id: string, tabId: string) => Promise<WsResult<string>>
+  wsNavigate: (id: string, tabId: string, input: string) => Promise<WsResult<string>>
+  wsSetPaused: (id: string, on: boolean) => Promise<WsResult<void>>
+  wsActivity: (id: string) => Promise<WsResult<AgentActivity[]>>
+  wsAnswerApproval: (approvalId: string, allow: boolean) => Promise<void>
+  onWsChanged: (cb: (list: WorkspaceInfo[]) => void) => () => void
+  onWsActivity: (cb: (event: { ws: string; entry: AgentActivity }) => void) => () => void
+  onWsBusy: (cb: (event: { ws: string; on: boolean }) => void) => () => void
+  onWsApproval: (cb: (event: WsApproval, done: boolean) => void) => () => void
   tiktokSetActiveAccount?: (account: string | number) => Promise<boolean>
   onTikTokAccountSwitched?: (cb: (accountId: string) => void) => () => void
   updateStatus?: () => Promise<UpdateStatus>

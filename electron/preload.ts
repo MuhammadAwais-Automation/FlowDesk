@@ -148,6 +148,41 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearPartitionStorage: (partition: string) =>
     ipcRenderer.invoke('session:clearPartition', partition),
 
+  // Workspaces: named browsers with their own logins, agents working in them live
+  wsList: () => ipcRenderer.invoke('ws:list'),
+  wsCreate: (name: string) => ipcRenderer.invoke('ws:create', name),
+  wsRename: (id: string, name: string) => ipcRenderer.invoke('ws:rename', id, name),
+  wsRemove: (id: string, wipe: boolean) => ipcRenderer.invoke('ws:remove', id, wipe),
+  wsOpenTab: (id: string, url: string) => ipcRenderer.invoke('ws:openTab', id, url),
+  wsCloseTab: (id: string, tabId: string) => ipcRenderer.invoke('ws:closeTab', id, tabId),
+  wsShow: (id: string, tabId: string) => ipcRenderer.invoke('ws:show', id, tabId),
+  wsNavigate: (id: string, tabId: string, input: string) => ipcRenderer.invoke('ws:navigate', id, tabId, input),
+  wsSetPaused: (id: string, on: boolean) => ipcRenderer.invoke('ws:setPaused', id, on),
+  wsActivity: (id: string) => ipcRenderer.invoke('ws:activity', id),
+  wsAnswerApproval: (approvalId: string, allow: boolean) => ipcRenderer.invoke('ws:answerApproval', approvalId, allow),
+  onWsChanged: (cb: (list: unknown) => void) => {
+    const listener = (_e: unknown, list: unknown) => cb(list)
+    ipcRenderer.on('ws:changed', listener)
+    return () => ipcRenderer.removeListener('ws:changed', listener)
+  },
+  onWsActivity: (cb: (event: unknown) => void) => {
+    const listener = (_e: unknown, event: unknown) => cb(event)
+    ipcRenderer.on('ws:activity', listener)
+    return () => ipcRenderer.removeListener('ws:activity', listener)
+  },
+  onWsBusy: (cb: (event: unknown) => void) => {
+    const listener = (_e: unknown, event: unknown) => cb(event)
+    ipcRenderer.on('ws:busy', listener)
+    return () => ipcRenderer.removeListener('ws:busy', listener)
+  },
+  onWsApproval: (cb: (event: unknown, done: boolean) => void) => {
+    const asked = (_e: unknown, event: unknown) => cb(event, false)
+    const done = (_e: unknown, event: unknown) => cb(event, true)
+    ipcRenderer.on('ws:approval', asked)
+    ipcRenderer.on('ws:approvalDone', done)
+    return () => { ipcRenderer.removeListener('ws:approval', asked); ipcRenderer.removeListener('ws:approvalDone', done) }
+  },
+
   // TikTok Multi-Account state sync
   tiktokSetActiveAccount: (account: string | number) =>
     ipcRenderer.invoke('tiktok:setActiveAccount', account),

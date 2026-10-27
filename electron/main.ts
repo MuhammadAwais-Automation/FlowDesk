@@ -94,6 +94,7 @@ interface PromptCategory {
 
 import { join, basename, resolve, sep } from 'path'
 import Store from 'electron-store'
+import * as workspaces from './workspaces/manager'
 import { setMainWindow, showView, hideView, closeTabView, destroyAllViews, getActiveView, getViewById, setCustomBounds, goBack, goForward, reloadActive, navigateActive, setNavWidth, setToolDockWidth, findAnyViewByUrl, findWorkerViewByTool, prewarmBackgroundViews, flushAllCookies, rememberedView } from './sessions'
 import { attachShellLinkPolicy, shellLinkDecision } from './shellLinkPolicy'
 import { addSocialAccount, isSocialPlatform, removeSocialAccount, setSocialShowHandler, socialAccountsStatus } from './socialAccounts'
@@ -363,6 +364,7 @@ function createWindow() {
   })
 
   setMainWindow(mainWindow)
+  workspaces.setWorkspacesWindow(mainWindow)
 
   setOnAccountSwitchedListener((accountId) => {
     try {
@@ -890,7 +892,8 @@ ipcMain.handle('gmail:openLogin', async (_e, email: string, partition: string) =
 
 // IPC: page navigation (show/hide WebContentsView)
 ipcMain.handle('page:changed', (_e, page: string) => {
-  if (page === 'browser' || page === 'youtube' || page === 'workspace') {
+  workspaces.setWatching(page === 'workspaces')
+  if (page === 'browser' || page === 'youtube' || page === 'workspace' || page === 'workspaces') {
     // View shown when view:switch is called by the page component
   } else {
     hideView()
@@ -918,6 +921,24 @@ ipcMain.handle('view:hide', (_e, specificTabId?: string) => hideView(typeof spec
 ipcMain.handle('view:setCustomBounds', (_e, x: number, y: number, w: number, h: number) => {
   setCustomBounds(x, y, w, h)
 })
+
+// IPC: Workspaces page — named browsers with their own logins (electron/workspaces/manager.ts).
+// Errors come back as { error } so the page can show them instead of an unhandled rejection.
+const wsCall = <T>(fn: () => T | Promise<T>) => Promise.resolve().then(fn).then(
+  result => ({ ok: true as const, result }),
+  (e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
+)
+ipcMain.handle('ws:list', () => workspaces.publicList())
+ipcMain.handle('ws:create', (_e, name: string) => wsCall(() => workspaces.create(String(name))))
+ipcMain.handle('ws:rename', (_e, id: string, name: string) => wsCall(() => workspaces.rename(String(id), String(name))))
+ipcMain.handle('ws:remove', (_e, id: string, wipe: boolean) => wsCall(() => workspaces.remove(String(id), wipe === true)))
+ipcMain.handle('ws:openTab', (_e, id: string, url: string) => wsCall(() => workspaces.openTab(String(id), String(url ?? ''), 'user').view))
+ipcMain.handle('ws:closeTab', (_e, id: string, tabId: string) => wsCall(() => workspaces.closeTab(String(id), String(tabId))))
+ipcMain.handle('ws:navigate', (_e, id: string, tabId: string, input: string) => wsCall(() => workspaces.navigate(String(id), String(tabId), String(input ?? ''))))
+ipcMain.handle('ws:show',(_e, id: string, tabId: string) => wsCall(() => workspaces.show(String(id), String(tabId))))
+ipcMain.handle('ws:setPaused', (_e, id: string, on: boolean) => wsCall(() => workspaces.setPaused(String(id), on === true)))
+ipcMain.handle('ws:activity', (_e, id: string) => wsCall(() => workspaces.activity(String(id))))
+ipcMain.handle('ws:answerApproval', (_e, approvalId: string, allow: boolean) => workspaces.answerApproval(String(approvalId), allow === true))
 
 // IPC: navigation controls for embedded views
 ipcMain.handle('view:goBack', () => goBack())

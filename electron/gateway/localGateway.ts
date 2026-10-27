@@ -138,7 +138,8 @@ import { listReports, writeReport } from '../reports'
 import { callContext, contextFromHeaders, withLedger } from '../operator/capture'
 import { BackgroundJobs } from '../operator/jobs'
 import { PLATFORMS, toolRegistry } from '../health/spec'
-import { findAnyViewByUrl, getActiveView, getViewById, listViews } from '../sessions'
+import { findAnyViewByUrl, getActiveView, getTabIdForWebContents, getViewById, listViews } from '../sessions'
+import * as workspaces from '../workspaces/manager'
 import {
   initSkillsRegistry,
   listSkills,
@@ -166,8 +167,16 @@ const acct = (p: Record<string, unknown>) => (typeof p.account === 'string' && p
 /** `view` is a view id from browser.views or part of a URL; absent → the view on screen. */
 function browserView(p: Record<string, unknown>) {
   const v = typeof p.view === 'string' ? p.view.trim() : ''
-  const wc = v ? (getViewById(v) ?? findAnyViewByUrl(v))?.webContents : getActiveView()?.webContents
+  // A workspace tab stored from an earlier run has no page yet: opened on first use.
+  const wc = v ? (getViewById(v)?.webContents ?? workspaces.workspaceView(v) ?? findAnyViewByUrl(v)?.webContents) : getActiveView()?.webContents
   return wc && !wc.isDestroyed() ? wc : null
+}
+const viewIdOf = (wc: { id: number }) => getTabIdForWebContents(wc.id)
+const isWorkspaceView = (id: string | null) => !!id && id.startsWith('ws-')
+/** One line for the agent log: `click button "Send"` or `3 step(s), stopped at 2: …`. */
+function actLine(r: { ok: boolean; action: string; target?: string; error?: string; steps?: number; failedStep?: number }): string {
+  const head = r.steps != null ? `${r.steps} step(s)${r.failedStep ? `, stopped at ${r.failedStep}` : ''}: ` : ''
+  return `${head}${r.action}${r.target ? ` ${r.target}` : ''}${r.error ? ` — ${r.error}` : ''}`
 }
 const routinesFile = () => join(app.getPath('userData'), 'perception', 'routines.json')
 const routesFile = () => join(app.getPath('userData'), 'perception', 'routes.json')
@@ -785,18 +794,95 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     const { snapshotPage, stateFor } = await import('../perception/capture')
     const { diffMaps, formatSummary } = await import('../perception/serialize')
     const prev = stateFor(wc).last
-    const map = await snapshotPage(wc)
+    const map = await workspaces.busy(viewIdOf(wc), () => snapshotPage(wc))
     const meta = { ms: map.ms, iframes: map.iframes ?? 0 }
+    workspaces.note(viewIdOf(wc), 'snapshot', `read ${map.title || map.url} (${map.items.length} items, ${map.ms ?? 0} ms)`, true)
     if (p.diff === true) return { ok: true, url: map.url, ...meta, ...diffMaps(prev, map) }
     return { ok: true, url: map.url, ...meta, text: formatSummary(map, { scope: p.scope === 'all' ? 'all' : 'viewport' }) }
   },
   'browser.act': async (p) => {
     const wc = browserView(p)
     if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
+    const viewId = viewIdOf(wc)
+    const blocked = workspaces.agentBlocked(viewId)
+    if (blocked) return { ok: false, error: blocked }
     const { actOnPage, parseActRequests } = await import('../perception/actions')
-    const reqs = parseActRequests(p)
+    let reqs = parseActRequests(p)
     if (typeof reqs === 'string') return { ok: false, error: reqs }
-    return actOnPage(wc, reqs, { network: p.network === true })
+    const live = isWorkspaceView(viewId)
+    if (live) workspaces.focusTab(viewId!)
+    const opts = { network: p.network === true, highlight: live }
+    const first = reqs
+    let receipt = await workspaces.busy(viewId, () => actOnPage(wc, first, opts))
+    let ran = receipt.steps ?? (receipt.ok ? 1 : 0)
+    // In a workspace the user can allow a confirm-needed step on screen; only
+    // that one step is confirmed, so a later risky step asks again.
+    while (live && receipt.needsConfirm) {
+      const ask = workspaces.askApproval(viewId!, `${receipt.action} ${receipt.target ?? ''}`.trim(), receipt.error ?? '')
+      if (!ask) break
+      if (!(await ask)) { receipt = { ...receipt, error: `${receipt.error ?? 'needs confirm'} — the user did not allow it on screen; do not retry unless they ask` }; break }
+      const at = (receipt.failedStep ?? 1) - 1
+      reqs = reqs.slice(at).map((r, i) => (i === 0 ? { ...r, confirm: true } : r))
+      const next = reqs
+      receipt = await workspaces.busy(viewId, () => actOnPage(wc, next, opts))
+      ran += receipt.steps ?? (receipt.ok ? 1 : 0)
+      if (receipt.steps != null) receipt.steps = ran
+    }
+    workspaces.note(viewId, 'act', actLine(receipt), receipt.ok)
+    return receipt
+  },
+  // Workspaces: named browsers with their own logins; agents open any site in them and the user watches.
+  'workspace.list': async () => ({
+    ok: true,
+    workspaces: workspaces.publicList().map(w => ({
+      id: w.id, name: w.name, paused: w.paused, activeTab: w.activeTab,
+      tabs: w.tabs.map(t => ({ view: `ws-${w.id}-${t.id}`, url: t.url, title: t.title, open: w.open.includes(`ws-${w.id}-${t.id}`) })),
+    })),
+  }),
+  'workspace.create': async (p) => {
+    const ws = workspaces.create(String(p.name ?? ''))
+    return { ok: true, workspace: { id: ws.id, name: ws.name } }
+  },
+  'browser.open': async (p) => {
+    const key = String(p.workspace ?? '').trim()
+    if (!key) return { ok: false, error: 'workspace is required — workspace_list shows them, workspace_create makes one' }
+    const ws = workspaces.publicList().find(w => w.id === key.toLowerCase() || w.name.toLowerCase() === key.toLowerCase())
+    if (ws?.paused) { workspaces.note(`ws-${ws.id}-t0`, 'blocked', 'agent waited: the user has taken over', false); return { ok: false, error: `the user has paused the agent in workspace "${ws.name}" — ask them when to continue` } }
+    const { view, wc } = workspaces.openTab(key, String(p.url ?? ''), 'agent')
+    await workspaces.busy(view, () => workspaces.waitLoaded(wc))
+    return { ok: true, view, url: wc.getURL(), title: wc.getTitle() }
+  },
+  'browser.navigate': async (p) => {
+    const wc = browserView(p)
+    if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
+    const viewId = viewIdOf(wc)
+    const blocked = workspaces.agentBlocked(viewId)
+    if (blocked) return { ok: false, error: blocked }
+    const { normalizeUrl } = await import('../workspaces/model')
+    const to = typeof p.url === 'string' && p.url.trim() ? normalizeUrl(p.url) : null
+    if (typeof p.url === 'string' && p.url.trim() && !to) return { ok: false, error: `cannot open "${p.url}": only http(s) web pages` }
+    const go = to ? 'url' : String(p.go ?? '')
+    if (go === 'back') { if (wc.canGoBack()) wc.goBack() }
+    else if (go === 'forward') { if (wc.canGoForward()) wc.goForward() }
+    else if (go === 'reload') wc.reload()
+    else if (go === 'url') void wc.loadURL(to!).catch(() => {})
+    else return { ok: false, error: 'give url, or go: back | forward | reload' }
+    if (isWorkspaceView(viewId)) workspaces.focusTab(viewId!)
+    await new Promise(r => setTimeout(r, 200))
+    await workspaces.waitLoaded(wc)
+    workspaces.note(viewId, 'navigate', to ? `went to ${to}` : go, true)
+    return { ok: true, url: wc.getURL(), title: wc.getTitle() }
+  },
+  'browser.closeTab': async (p) => {
+    const v = String(p.view ?? '').trim()
+    const { parseViewId } = await import('../workspaces/model')
+    const at = parseViewId(v)
+    if (!at) return { ok: false, error: 'only workspace tabs (ws-…) can be closed by an agent' }
+    const blocked = workspaces.agentBlocked(v)
+    if (blocked) return { ok: false, error: blocked }
+    workspaces.note(v, 'close', 'closed the tab', true)
+    workspaces.closeTab(at.ws, at.tab)
+    return { ok: true }
   },
   // Routes: a page's own GET data calls, fetched again from inside the page (read-only, same site).
   'browser.routeSave': async (p) => {
@@ -853,6 +939,8 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'browser.routineRun': async (p) => {
     const wc = browserView(p)
     if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
+    const blocked = workspaces.agentBlocked(viewIdOf(wc))
+    if (blocked) return { ok: false, error: blocked }
     const { loadRoutines } = await import('../perception/routines')
     const routine = (await loadRoutines(routinesFile()))[String(p.name ?? '')]
     if (!routine) return { ok: false, error: `no routine "${p.name ?? ''}" — browser_routine_list shows them` }
