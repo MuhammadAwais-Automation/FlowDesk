@@ -44,7 +44,7 @@ export interface SnapshotDiff {
   text: string
 }
 
-export type ActionKind = 'click' | 'type' | 'select' | 'scroll' | 'key'
+export type ActionKind = 'click' | 'type' | 'select' | 'scroll' | 'key' | 'hover' | 'upload' | 'wait'
 
 /** What an action did, checked on the page afterwards — never just "sent". */
 export interface ActionReceipt {
@@ -66,6 +66,10 @@ export interface ActionReceipt {
   failedStep?: number
   /** With network: true — the page's data requests during the action (secret query values redacted). */
   requests?: { method: string; url: string; status?: number; mime?: string; bytes?: number }[]
+  /** Browser dialogs (alert / confirm / prompt) the page opened, and what was answered. */
+  dialogs?: string[]
+  /** Files the page downloaded during the action (workspace tabs only). */
+  downloads?: { file: string; url: string; state: string; bytes: number }[]
 }
 
 /** Where a ref points, kept by the engine; never sent to the agent. */

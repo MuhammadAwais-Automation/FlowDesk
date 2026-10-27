@@ -929,6 +929,10 @@ const wsCall = <T>(fn: () => T | Promise<T>) => Promise.resolve().then(fn).then(
   (e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }),
 )
 ipcMain.handle('ws:list', () => workspaces.publicList())
+ipcMain.handle('ws:grid', (_e, cells: { ws: string; x: number; y: number; w: number; h: number }[]) => wsCall(() => workspaces.grid(Array.isArray(cells) ? cells : [])))
+ipcMain.handle('ws:board', () => wsCall(() => workspaces.board()))
+ipcMain.handle('ws:importSocial', () => wsCall(() => workspaces.importSocial()))
+ipcMain.handle('ws:setGroup', (_e, id: string, group: string) => wsCall(() => workspaces.setGroup(String(id), String(group ?? ''))))
 ipcMain.handle('ws:create', (_e, name: string) => wsCall(() => workspaces.create(String(name))))
 ipcMain.handle('ws:rename', (_e, id: string, name: string) => wsCall(() => workspaces.rename(String(id), String(name))))
 ipcMain.handle('ws:remove', (_e, id: string, wipe: boolean) => wsCall(() => workspaces.remove(String(id), wipe === true)))

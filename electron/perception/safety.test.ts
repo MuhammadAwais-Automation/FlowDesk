@@ -25,3 +25,9 @@ describe('confirmReason', () => {
     expect(confirmReason({ action: 'key', key: 'Escape' })).toBeNull()
   })
 })
+
+describe('upload', () => {
+  it('always asks before putting local files on a site', () => {
+    expect(confirmReason({ action: 'upload' }, { role: 'button', name: 'Add photo' })).toMatch(/uploading/)
+  })
+})

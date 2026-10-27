@@ -150,6 +150,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Workspaces: named browsers with their own logins, agents working in them live
   wsList: () => ipcRenderer.invoke('ws:list'),
+  wsBoard: () => ipcRenderer.invoke('ws:board'),
+  wsGrid: (cells: { ws: string; x: number; y: number; w: number; h: number }[]) => ipcRenderer.invoke('ws:grid', cells),
+  wsImportSocial: () => ipcRenderer.invoke('ws:importSocial'),
+  wsSetGroup: (id: string, group: string) => ipcRenderer.invoke('ws:setGroup', id, group),
   wsCreate: (name: string) => ipcRenderer.invoke('ws:create', name),
   wsRename: (id: string, name: string) => ipcRenderer.invoke('ws:rename', id, name),
   wsRemove: (id: string, wipe: boolean) => ipcRenderer.invoke('ws:remove', id, wipe),

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, RotateCw, Plus, X, Pencil, Trash2, Pause, Play, Bot, ShieldAlert, Check } from 'lucide-react'
+import { ArrowLeft, ArrowRight, RotateCw, Plus, X, Pencil, Trash2, Pause, Play, Bot, ShieldAlert, Check, Square, LayoutGrid, Users, Maximize2 } from 'lucide-react'
 import type { AgentActivity, WorkspaceInfo, WsApproval } from '@/types/electron'
 
 /**
@@ -29,6 +29,23 @@ const START = [
 const KIND_ICON: Record<AgentActivity['kind'], string> = { open: '↗', navigate: '→', snapshot: '◎', act: '●', approval: '?', close: '×', blocked: '⏸' }
 const WORKING_MS = 8000
 
+type Mode = 'single' | 'grid' | 'board'
+interface BoardCard { id: string; logins: Record<string, boolean>; last: AgentActivity | null }
+
+const MODE_LABEL: Record<Mode, string> = { single: 'Single', grid: 'Grid', board: 'Board' }
+const MODE_HELP: Record<Mode, string> = {
+  single: 'One workspace full size, with tabs and address bar',
+  grid: 'Up to four workspaces at once — watch agents work in each',
+  board: 'Every account and workspace: logins, groups, last agent step',
+}
+
+/** Workspaces by group (brand), ungrouped last. */
+function groupsOf(list: WorkspaceInfo[]): [string, WorkspaceInfo[]][] {
+  const by = new Map<string, WorkspaceInfo[]>()
+  for (const w of list) by.set(w.group || 'No group', [...(by.get(w.group || 'No group') ?? []), w])
+  return [...by.entries()].sort(([a], [b]) => (a === 'No group' ? 1 : b === 'No group' ? -1 : a.localeCompare(b)))
+}
+
 const hostOf = (url: string) => { try { return new URL(url).host.replace(/^www\./, '') } catch { return url } }
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
@@ -44,7 +61,13 @@ export default function Workspaces({ isActive }: Props) {
   const [error, setError] = useState('')
   const [now, setNow] = useState(Date.now())
   const [busy, setBusy] = useState<Record<string, number>>({})
+  const [mode, setModeState] = useState<Mode>(() => (localStorage.getItem('wsMode') as Mode) || 'single')
+  const [gridIds, setGridIds] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('wsGrid') || '[]') as string[] } catch { return [] } })
+  const [cards, setCards] = useState<Record<string, BoardCard>>({})
   const slotRef = useRef<HTMLDivElement>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
+  const cellRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const setMode = (m: Mode) => { setModeState(m); localStorage.setItem('wsMode', m) }
 
   const current = list.find(w => w.id === selected) ?? list[0] ?? null
   const activeTab = current?.tabs.find(t => t.id === current.activeTab) ?? null
@@ -83,21 +106,66 @@ export default function Workspaces({ isActive }: Props) {
   }, [])
 
   useEffect(() => {
+    if (mode !== 'single') return
     if (!isActive || !current || !activeTab) { void api.hideView(); return }
     void api.wsShow(current.id, activeTab.id).then(r => {
       if (r.ok) applyBounds()
       else setError(r.error)
     })
-  }, [isActive, current?.id, activeTab?.id, applyBounds])
+  }, [isActive, mode, current?.id, activeTab?.id, applyBounds])
 
   useLayoutEffect(() => {
     const el = slotRef.current
-    if (!el || !isActive) return
+    if (!el || !isActive || mode !== 'single') return
     const ro = new ResizeObserver(() => applyBounds())
     ro.observe(el)
     window.addEventListener('nav-resize', applyBounds)
     return () => { ro.disconnect(); window.removeEventListener('nav-resize', applyBounds) }
-  }, [isActive, applyBounds, !!activeTab])
+  }, [isActive, mode, applyBounds, !!activeTab])
+
+  // ── Grid: up to four workspaces on screen, each its own native view ──
+  const withTabs = list.filter(w => w.activeTab)
+  const gridList = (gridIds.map(id => withTabs.find(w => w.id === id)).filter(Boolean) as WorkspaceInfo[]).slice(0, 4)
+  const gridShown = gridList.length ? gridList : withTabs.slice(0, 4)
+  const gridKey = gridShown.map(w => `${w.id}:${w.activeTab}`).join('|')
+
+  const applyGrid = useCallback(() => {
+    const cells = gridShown.flatMap(w => {
+      const el = cellRefs.current[w.id]
+      if (!el) return []
+      const r = el.getBoundingClientRect()
+      return [{ ws: w.id, x: r.left, y: r.top, w: r.width, h: r.height }]
+    })
+    if (cells.length) void api.wsGrid(cells).then(r => { if (!r.ok) setError(r.error) })
+    else void api.hideView()
+  }, [gridKey])
+
+  useLayoutEffect(() => {
+    if (!isActive || mode !== 'grid') return
+    applyGrid()
+    const el = gridRef.current
+    const ro = el ? new ResizeObserver(() => applyGrid()) : null
+    if (el && ro) ro.observe(el)
+    window.addEventListener('nav-resize', applyGrid)
+    return () => { ro?.disconnect(); window.removeEventListener('nav-resize', applyGrid) }
+  }, [isActive, mode, applyGrid])
+
+  function toggleGrid(id: string) {
+    const base = gridList.length ? gridList.map(w => w.id) : gridShown.map(w => w.id)
+    const next = base.includes(id) ? base.filter(x => x !== id) : [...base, id].slice(-4)
+    setGridIds(next)
+    localStorage.setItem('wsGrid', JSON.stringify(next))
+  }
+
+  // ── Board: every workspace as a card, logins read from its cookies ───
+  useEffect(() => {
+    if (!isActive || mode !== 'board') return
+    void api.hideView()
+    const load = () => void api.wsBoard().then(r => { if (r.ok) setCards(Object.fromEntries(r.result.map(c => [c.id, c]))) })
+    load()
+    const t = setInterval(load, 10_000)
+    return () => clearInterval(t)
+  }, [isActive, mode, list.length])
 
   useEffect(() => () => { void api.hideView() }, [])
 
@@ -145,9 +213,10 @@ export default function Workspaces({ isActive }: Props) {
     <div className="flex h-full w-full bg-[#FAF7F0]">
       <div className="flex flex-col flex-1 min-w-0">
         {/* Workspace bar */}
-        <div className="flex items-center gap-1.5 h-10 px-2 border-b border-[#D6CFC0] bg-[#EBE5D5] overflow-x-auto shrink-0">
+        <div className="flex items-center gap-1.5 h-10 px-2 border-b border-[#D6CFC0] bg-[#EBE5D5] shrink-0">
+          <div className="flex items-center gap-1.5 flex-1 min-w-0 overflow-x-auto">
           {list.map(ws => {
-            const on = ws.id === current?.id
+            const on = mode === 'grid' ? gridShown.some(g => g.id === ws.id) : ws.id === current?.id
             if (renaming === ws.id) {
               return (
                 <input key={ws.id} autoFocus defaultValue={ws.name} className="font-retro-mono text-xs px-2 py-1 rounded-lg border-2 border-[#F59E0B] bg-white w-36"
@@ -157,7 +226,8 @@ export default function Workspaces({ isActive }: Props) {
             }
             return (
               <div key={ws.id} className={`group flex items-center gap-1.5 shrink-0 rounded-lg px-2.5 py-1 cursor-pointer select-none font-retro-mono text-xs ${on ? 'bg-[#FEF3C7] border-2 border-[#F59E0B] text-[#B45309] font-bold' : 'border border-transparent text-stone-700 hover:bg-[#FAF7F0]'}`}
-                onClick={() => setSelected(ws.id)} onDoubleClick={() => setRenaming(ws.id)} title={`${ws.name} — own logins (${ws.partition})`}>
+                onClick={() => { setSelected(ws.id); if (mode === 'grid') toggleGrid(ws.id) }} onDoubleClick={() => setRenaming(ws.id)}
+                title={mode === 'grid' ? `${ws.name} — click to show or hide it in the grid (up to 4)` : `${ws.name}${ws.group ? ` · ${ws.group}` : ''} — own logins (${ws.partition})`}>
                 <span className="w-2 h-2 rounded-full" style={{ background: ws.color }} />
                 <span className="max-w-[140px] truncate">{ws.name}</span>
                 {ws.paused && <Pause size={11} className="text-[#DC2626]" />}
@@ -181,9 +251,18 @@ export default function Workspaces({ isActive }: Props) {
               <Plus size={13} /> New workspace
             </button>
           )}
+          </div>
+          <div className="flex shrink-0 rounded-lg border border-[#D6CFC0] overflow-hidden font-retro-mono text-[11px]">
+            {(['single', 'grid', 'board'] as Mode[]).map(m => (
+              <button key={m} onClick={() => setMode(m)} title={MODE_HELP[m]}
+                className={`flex items-center gap-1 px-2.5 py-1 ${mode === m ? 'bg-[#D97706] text-white font-bold' : 'bg-[#FAF7F0] text-stone-700 hover:bg-white'}`}>
+                {m === 'single' ? <Square size={11} /> : m === 'grid' ? <LayoutGrid size={11} /> : <Users size={11} />}{MODE_LABEL[m]}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {current && (
+        {mode === 'single' && current && (
           <>
             {/* Tabs */}
             <div className="flex items-end gap-1 h-[34px] px-2 pt-1 border-b border-[#D6CFC0] bg-[#F3EEE2] overflow-x-auto shrink-0">
@@ -220,8 +299,79 @@ export default function Workspaces({ isActive }: Props) {
           </div>
         )}
 
+        {mode === 'grid' && (
+          <div ref={gridRef} className={`flex-1 min-h-0 grid gap-1 p-1 bg-[#EBE5D5] ${gridShown.length > 1 ? 'grid-cols-2' : 'grid-cols-1'} ${gridShown.length > 2 ? 'grid-rows-2' : 'grid-rows-1'}`}>
+            {gridShown.length === 0 && <p className="m-auto font-retro-sans text-xs text-stone-600">No workspace has a tab open yet. Open a site in Single view first.</p>}
+            {gridShown.map(w => {
+              const t = w.tabs.find(x => x.id === w.activeTab)
+              const last = logs[w.id]?.at(-1)
+              return (
+                <div key={w.id} className="flex flex-col min-h-0 min-w-0 rounded-lg border border-[#D6CFC0] bg-[#FAF7F0] overflow-hidden">
+                  <div className="flex items-center gap-1.5 h-7 px-2 border-b border-[#D6CFC0] shrink-0 font-retro-mono text-[10.5px]">
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: w.color }} />
+                    <span className="font-bold text-stone-900 truncate max-w-[40%]">{w.name}</span>
+                    <span className="text-stone-500 truncate">{t ? hostOf(t.url) : ''}</span>
+                    <span className={`ml-auto shrink-0 ${w.paused ? 'text-[#DC2626]' : isWorking(w.id) ? 'text-[#16A34A]' : 'text-stone-400'}`}>{w.paused ? 'paused' : isWorking(w.id) ? '● working' : 'idle'}</span>
+                    <button className="shrink-0 text-stone-500 hover:text-[#B45309]" title="Open this one full size" onClick={() => { setSelected(w.id); setMode('single') }}><Maximize2 size={11} /></button>
+                  </div>
+                  {last && <div className="px-2 py-0.5 shrink-0 font-retro-sans text-[10px] text-stone-600 truncate border-b border-[#E5DFD0]">{KIND_ICON[last.kind]} {last.text}</div>}
+                  <div ref={el => { cellRefs.current[w.id] = el }} className="flex-1 min-h-0" />
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {mode === 'board' && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <p className="font-retro-mono text-sm font-bold text-stone-900">Accounts board</p>
+              <p className="font-retro-sans text-[11px] text-stone-500">Every workspace, its logins and what the agent last did there.</p>
+              <button className="ml-auto font-retro-mono text-xs font-bold text-white bg-[#D97706] hover:bg-[#B45309] rounded-lg px-3 py-1.5"
+                title="Make a workspace for every signed-in Social account, on the same login (nothing to sign in again)"
+                onClick={() => void run(api.wsImportSocial()).then(r => { if (r) setError(r.added.length ? `Imported ${r.added.length}: ${r.added.join(', ')}` : 'Nothing new to import — every signed-in Social account already has a workspace.') })}>
+                Import Social accounts
+              </button>
+            </div>
+            {groupsOf(list).map(([group, items]) => (
+              <div key={group} className="mb-5">
+                <p className="font-retro-mono text-[10.5px] font-bold text-[#B45309] uppercase tracking-widest mb-2">// {group}</p>
+                <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
+                  {items.map(w => {
+                    const card = cards[w.id]
+                    const last = logs[w.id]?.at(-1) ?? card?.last ?? null
+                    return (
+                      <div key={w.id} className="rounded-xl border border-[#D6CFC0] bg-white p-3 flex flex-col gap-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full" style={{ background: w.color }} />
+                          <span className="font-retro-mono text-xs font-bold text-stone-900 truncate">{w.name}</span>
+                          <span className={`ml-auto font-retro-mono text-[10px] ${w.paused ? 'text-[#DC2626]' : isWorking(w.id) ? 'text-[#16A34A]' : 'text-stone-400'}`}>{w.paused ? 'paused' : isWorking(w.id) ? '● working' : 'idle'}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {Object.entries(card?.logins ?? {}).map(([site, ok]) => (
+                            <span key={site} className={`font-retro-mono text-[10px] px-1.5 py-0.5 rounded ${ok ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#FEE2E2] text-[#B91C1C]'}`}>{site} {ok ? '✓' : 'signed out'}</span>
+                          ))}
+                          {card && !Object.keys(card.logins).length && <span className="font-retro-mono text-[10px] text-stone-400">no known login to check</span>}
+                        </div>
+                        <p className="font-retro-sans text-[10.5px] text-stone-500">{w.tabs.length} tab(s){w.platform ? ` · from Social (${w.platform})` : ''}</p>
+                        {last && <p className="font-retro-sans text-[10.5px] text-stone-700 truncate" title={last.text}>{KIND_ICON[last.kind]} {last.text}</p>}
+                        <div className="flex gap-1.5 mt-1">
+                          <button className="flex-1 font-retro-mono text-[11px] font-bold rounded-lg px-2 py-1 bg-[#FEF3C7] border border-[#F59E0B] text-[#B45309]" onClick={() => { setSelected(w.id); setMode('single') }}>Open</button>
+                          <input defaultValue={w.group ?? ''} placeholder="group / brand" className="w-28 font-retro-mono text-[10.5px] px-2 py-1 rounded-lg border border-[#D6CFC0]"
+                            onBlur={e => { if (e.currentTarget.value !== (w.group ?? '')) void run(api.wsSetGroup(w.id, e.currentTarget.value)) }}
+                            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* The tab's native view sits exactly over this slot. */}
-        <div ref={slotRef} className="flex-1 min-h-0 relative">
+        {mode === 'single' && <div ref={slotRef} className="flex-1 min-h-0 relative">
           {!current && (
             <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-6">
               <p className="font-retro-mono text-sm font-bold text-stone-900">No workspace yet</p>
@@ -240,7 +390,7 @@ export default function Workspaces({ isActive }: Props) {
               </div>
             </div>
           )}
-        </div>
+        </div>}
       </div>
 
       {/* Agent panel */}

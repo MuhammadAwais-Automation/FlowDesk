@@ -23,6 +23,7 @@ export function confirmReason(req: SafetyInput, target?: { role: string; name: s
   const label = target ? `${target.role} "${name}"` : 'the page'
   const ask = (what: string) => `${what} — ask the user first, then repeat with confirm: true`
 
+  if (req.action === 'upload') return ask('uploading puts local files on the site')
   if (req.action === 'click' && target && CLICKABLE.has(target.role) && RISKY.test(name)) {
     return ask(`clicking ${label} may send, post, pay or delete`)
   }

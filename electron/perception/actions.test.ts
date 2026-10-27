@@ -11,7 +11,7 @@ describe('parseActRequest', () => {
   })
 
   it('rejects unknown actions, bad refs and missing fields', () => {
-    expect(parseActRequest({ action: 'hover' })).toMatch(/action must be/)
+    expect(parseActRequest({ action: 'drag' })).toMatch(/action must be/)
     expect(parseActRequest({ action: 'click', ref: 'button' })).toMatch(/ref must look like/)
     expect(parseActRequest({ action: 'click' })).toMatch(/needs a ref/)
     expect(parseActRequest({ action: 'type', ref: 'e1' })).toMatch(/needs text/)
@@ -101,5 +101,18 @@ describe('announcements', () => {
     const before = map([{ role: 'status', name: 'Saved' }, { role: 'button', name: 'Send' }])
     const after = map([{ role: 'status', name: 'Saved' }, { role: 'alert', name: 'Upload failed' }, { role: 'button', name: 'Retry' }])
     expect(announcements(before, after)).toEqual(['alert: Upload failed'])
+  })
+})
+
+describe('new actions', () => {
+  it('parses hover, wait and upload and refuses bad input', () => {
+    expect(parseActRequest({ action: 'hover', ref: 'e3' })).toMatchObject({ action: 'hover', ref: 'e3' })
+    expect(parseActRequest({ action: 'hover' })).toBe('hover needs a ref')
+    expect(parseActRequest({ action: 'wait', text: 'Saved' })).toMatchObject({ action: 'wait', waitText: 'Saved', ms: 10_000 })
+    expect(parseActRequest({ action: 'wait', ms: 99_000 })).toMatchObject({ ms: 15_000 })
+    expect(parseActRequest({ action: 'wait' })).toBe('wait needs text (to wait for) or ms')
+    expect(parseActRequest({ action: 'upload', ref: 'e1' })).toBe('upload needs files: absolute paths of local files')
+    expect(parseActRequest({ action: 'upload', ref: 'e1', files: ['relative.png'] })).toBe('not a local file: relative.png')
+    expect(parseActRequest({ action: 'upload', ref: 'e1', files: [__filename] })).toMatchObject({ action: 'upload', files: [__filename] })
   })
 })

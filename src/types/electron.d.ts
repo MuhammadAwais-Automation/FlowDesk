@@ -14,6 +14,8 @@ export interface WorkspaceInfo {
   tabs: WorkspaceTab[]
   activeTab: string | null
   created: string
+  group?: string
+  platform?: string
   paused: boolean
   open: string[]
 }
@@ -293,6 +295,10 @@ export interface ElectronAPI {
 
   // Workspaces (electron/workspaces): named browsers with their own logins
   wsList: () => Promise<WorkspaceInfo[]>
+  wsGrid: (cells: { ws: string; x: number; y: number; w: number; h: number }[]) => Promise<WsResult<string[]>>
+  wsBoard: () => Promise<WsResult<{ id: string; logins: Record<string, boolean>; last: AgentActivity | null }[]>>
+  wsImportSocial: () => Promise<WsResult<{ added: string[]; skipped: number }>>
+  wsSetGroup: (id: string, group: string) => Promise<WsResult<void>>
   wsCreate: (name: string) => Promise<WsResult<{ id: string; name: string }>>
   wsRename: (id: string, name: string) => Promise<WsResult<void>>
   wsRemove: (id: string, wipe: boolean) => Promise<WsResult<void>>

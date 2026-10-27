@@ -360,6 +360,7 @@ Before using a family of tools, read its skill with flowdesk_skill_get — it sa
 - youtube_* (YouTube niche research, outliers, transcripts, comments; read-only) → flowdesk_skill_get { id: "youtube" }
 - tiktok_* / linkedin_* / reddit_* / whatsapp_* / facebook_* / pinterest_* / gumroad_* → flowdesk_skill_get { id: "tiktok" | "linkedin" | "reddit" | "whatsapp" | "facebook" | "pinterest" | "gumroad" }
 - several accounts per platform: social_accounts lists them; pass account (id, label or partition) to any social tool. An unknown account is an error, never another account.
+- any other website, a platform tool that keeps failing (selfHeal in its answer), or saving a task as a new routine_* / route_* tool → flowdesk_skill_get { id: "workspaces" } (workspace_list, browser_open, browser_snapshot, browser_act, site_investigate).
 flowdesk_skills_list shows every other skill.
 
 Rules of thumb: still images and image edits → chatgpt_generate_image / chatgpt_edit_image; video → Google Flow. Long jobs return ids — poll chatgpt_image_jobs or flow_media_status instead of starting the same job again. A result with isError did not happen; read its error before retrying. Public or outbound actions (post, comment, send, like, vote, follow, delete, profile edits) need the user's explicit yes in chat for that exact action first; so do creating, editing or publishing Gumroad products.
@@ -3433,20 +3434,24 @@ server.tool(
 
 server.tool(
   'browser_act',
-  'Act on a FlowDesk page by ref from browser_snapshot: click, type, select (native <select>), scroll, key. Real mouse and key events; works on hidden views. The ref is checked first (same element, same page) and fails closed if the page changed — take a new snapshot then. Returns a receipt with what changed on screen. Clicks on send/post/pay/delete/submit-like controls and Enter in a text field are refused with needsConfirm: ask the user for that exact action, then repeat with confirm: true.',
+  'Act on a FlowDesk page by ref from browser_snapshot: click, type, select (native <select>), scroll, key, hover (opens hover menus), upload (local files into a file input or the button that opens one; always needs the user\'s yes), wait (until text appears, or ms). Browser dialogs are answered for you and listed in receipt.dialogs; a confirm/prompt is only accepted on a step with confirm: true. Files the page downloads in a workspace tab are saved to Downloads/FlowDesk/<workspace> and listed in receipt.downloads. Real mouse and key events; works on hidden views. The ref is checked first (same element, same page) and fails closed if the page changed — take a new snapshot then. Returns a receipt with what changed on screen. Clicks on send/post/pay/delete/submit-like controls and Enter in a text field are refused with needsConfirm: ask the user for that exact action, then repeat with confirm: true.',
   {
     view: z.string().optional().describe('View id from browser_views, or part of its url. Omit for the tab on screen.'),
-    action: z.enum(['click', 'type', 'select', 'scroll', 'key']).optional().describe('The action. Needed unless steps is given.'),
+    action: z.enum(['click', 'type', 'select', 'scroll', 'key', 'hover', 'upload', 'wait']).optional().describe('The action. Needed unless steps is given.'),
     ref: z.string().optional().describe('Element ref like e12. Needed for click, type and select; optional for scroll (scrolls it into view) and key (focuses it first).'),
-    text: z.string().optional().describe('type: the text to insert.'),
+    text: z.string().optional().describe('type: the text to insert. wait: text to wait for.'),
+    files: z.array(z.string()).max(10).optional().describe('upload: absolute paths of local files.'),
+    ms: z.number().int().min(1).max(15000).optional().describe('wait: most time to wait (ms); without text, waits exactly this long.'),
     clear: z.boolean().optional().describe('type: replace the field\'s current text. Default false (adds to it).'),
     value: z.string().optional().describe('select: the option text or value.'),
     key: z.string().optional().describe('key: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, PageUp, PageDown, Home, End, or one character.'),
     direction: z.enum(['up', 'down']).optional().describe('scroll without ref: one screen up or down. Default down.'),
     steps: z.array(z.object({
-      action: z.enum(['click', 'type', 'select', 'scroll', 'key']),
+      action: z.enum(['click', 'type', 'select', 'scroll', 'key', 'hover', 'upload', 'wait']),
       ref: z.string().optional(),
       text: z.string().optional(),
+      files: z.array(z.string()).max(10).optional(),
+      ms: z.number().int().min(1).max(15000).optional(),
       clear: z.boolean().optional(),
       value: z.string().optional(),
       key: z.string().optional(),
@@ -3459,11 +3464,33 @@ server.tool(
   async (args) => textResult(await callGatewayRpc('browser.act', args))
 )
 
+// ── SELF-HEAL AND SITE INVESTIGATION ─────────────────────────────────────────
+
+server.tool(
+  'flowdesk_self_heal',
+  'Platform tools that keep failing right now (2+ failures in 24 h), each with its fallback: do the task in a workspace with browser_open / browser_snapshot / browser_act, investigate the site with site_investigate, and file flowdesk_report_issue. A failing tool\'s own answer also carries this as selfHeal.',
+  {},
+  { readOnlyHint: true },
+  async () => textResult(await callGatewayRpc('selfheal.status'))
+)
+
+server.tool(
+  'site_investigate',
+  'Reverse-engineer a site from inside FlowDesk: the page map, the data requests it makes while watched (optionally across a reload), and the API endpoints and GraphQL operations written in its JavaScript. Saved as a JSON report in FlowDesk\'s investigations folder. Use when a tool broke (what changed?) or to build a new one: save a GET as a route (route_* tool) or a task as a routine (routine_* tool). Read-only; secret query values are redacted.',
+  {
+    view: z.string().describe('View id from workspace_list or browser_views.'),
+    watchMs: z.number().int().min(0).max(20000).optional().describe('How long to record the page\'s requests. Default 4000.'),
+    reload: z.boolean().optional().describe('Reload the page while recording, to see the calls it makes on load.'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('site.investigate', args))
+)
+
 // ── WORKSPACES: NAMED BROWSERS WITH THEIR OWN LOGINS, ANY WEBSITE ────────────
 
 server.tool(
   'workspace_list',
-  'FlowDesk Workspaces: named browsers, each with its own saved logins (e.g. "Work" with Gmail, "TikTok 2" with a second TikTok account). Lists each workspace with its tabs (view id, url, title) and whether the user has paused the agent there. Use a tab\'s view id with browser_snapshot / browser_act / browser_navigate; open new pages with browser_open.',
+  'FlowDesk Workspaces: named browsers, each with its own saved logins (e.g. "Work" with Gmail, "TikTok 2" with a second TikTok account). Lists each workspace with its group, partition (pass it as account to the platform tools), signedIn per known site (Google, TikTok, LinkedIn…), its tabs (view id, url, title) and whether the user has paused the agent there. Use a tab\'s view id with browser_snapshot / browser_act / browser_navigate; open new pages with browser_open.',
   {},
   { readOnlyHint: true },
   async () => textResult(await callGatewayRpc('workspace.list'))
@@ -3472,8 +3499,18 @@ server.tool(
 server.tool(
   'workspace_create',
   'Create a new empty workspace (its own logins, separate from every other workspace). The user signs in to sites there themselves; never type their passwords.',
-  { name: z.string().describe('Workspace name, e.g. "Research" or "TikTok 2".') },
+  {
+    name: z.string().describe('Workspace name, e.g. "Research" or "TikTok 2".'),
+    group: z.string().optional().describe('Brand or folder to show it under, e.g. "FunnyWorlds26".'),
+  },
   async (args) => textResult(await callGatewayRpc('workspace.create', args))
+)
+
+server.tool(
+  'workspace_import_social',
+  'Turn every signed-in Social account (TikTok 2, LinkedIn 1, …) into a workspace on the same partition: same login, no new sign-in, and the platform tools keep working on it. Accounts already imported are skipped.',
+  {},
+  async () => textResult(await callGatewayRpc('workspace.importSocial'))
 )
 
 server.tool(
@@ -3818,9 +3855,12 @@ await server.connect(transport)
 
 // Not reachable at startup: keep trying. registerTool after connect sends
 // tools/list_changed, so the client picks the tools up when FlowDesk starts.
-if (!agentToolsReady) {
-  const retry = setInterval(async () => {
-    if (await registerGatewayAgentTools()) clearInterval(retry)
-  }, 15000)
-  retry.unref()
+// After that, refresh once a minute: a routine or route saved in FlowDesk
+// becomes a routine_* / route_* tool without restarting anything.
+let refreshMs = agentToolsReady ? 60000 : 15000
+const refresh = async () => {
+  const ok = await registerGatewayAgentTools()
+  if (ok && refreshMs !== 60000) refreshMs = 60000
+  setTimeout(refresh, refreshMs).unref()
 }
+setTimeout(refresh, refreshMs).unref()

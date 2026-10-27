@@ -140,6 +140,7 @@ import { BackgroundJobs } from '../operator/jobs'
 import { PLATFORMS, toolRegistry } from '../health/spec'
 import { findAnyViewByUrl, getActiveView, getTabIdForWebContents, getViewById, listViews } from '../sessions'
 import * as workspaces from '../workspaces/manager'
+import { FailureLedger, failedResult, selfHealHint, type SelfHealHint } from '../health/selfHeal'
 import {
   initSkillsRegistry,
   listSkills,
@@ -171,6 +172,69 @@ function browserView(p: Record<string, unknown>) {
   const wc = v ? (getViewById(v)?.webContents ?? workspaces.workspaceView(v) ?? findAnyViewByUrl(v)?.webContents) : getActiveView()?.webContents
   return wc && !wc.isDestroyed() ? wc : null
 }
+// Self-heal: failures per platform tool; a tool that keeps failing gets a fallback hint in its answer.
+const ledger = new FailureLedger()
+function noteFailure(name: string, error: string): SelfHealHint | null {
+  ledger.record(name, error)
+  return selfHealHint(name, ledger.recent(name).length)
+}
+function noteOutcome(name: string, result: unknown): void {
+  const failed = failedResult(result)
+  if (!failed) { ledger.ok(name); return }
+  const hint = noteFailure(name, failed)
+  if (!hint || !result || typeof result !== 'object') return
+  const r = result as { content?: unknown[]; selfHeal?: SelfHealHint }
+  // A mirrored tool's answer is its content list: the hint goes in as one more text block.
+  if (Array.isArray(r.content)) r.content.push({ type: 'text', text: JSON.stringify({ selfHeal: hint }) })
+  else r.selfHeal = hint
+}
+
+/**
+ * Tools the user makes inside FlowDesk without a new build: every saved routine
+ * is a `routine_<name>` tool and every saved route a read-only `route_<name>`
+ * tool. They reach MCP clients through tools.list like the built-in agent tools.
+ */
+const toolName = (kind: 'routine' | 'route', name: string) => `${kind}_${name.replace(/[^\w]/g, '_').toLowerCase()}`.slice(0, 64)
+
+async function userTools(): Promise<{ name: string; description: string; inputSchema: Record<string, unknown>; annotations?: Record<string, unknown> }[]> {
+  const { loadRoutines, routineVars } = await import('../perception/routines')
+  const { loadRoutes, fillRoute } = await import('../perception/routes')
+  const out: { name: string; description: string; inputSchema: Record<string, unknown>; annotations?: Record<string, unknown> }[] = []
+  const varsSchema = (names: string[]) => ({ type: 'object', properties: Object.fromEntries(names.map(n => [n, { type: 'string' }])), required: names })
+  for (const r of Object.values(await loadRoutines(routinesFile()))) {
+    const names = routineVars(r)
+    out.push({
+      name: toolName('routine', r.name),
+      description: `Saved routine "${r.name}" on ${r.host} (${r.steps.length} steps), replayed without deciding each click. Runs on view (a tab on ${r.host}; default: the first open one). Risky steps need confirm: true after the user's yes.`,
+      inputSchema: { type: 'object', properties: { view: { type: 'string' }, confirm: { type: 'boolean' }, ...(names.length ? { vars: varsSchema(names) } : {}) }, ...(names.length ? { required: ['vars'] } : {}) },
+    })
+  }
+  for (const r of Object.values(await loadRoutes(routesFile()))) {
+    const probe = fillRoute(r.url, {})
+    const names = [...r.url.matchAll(/\{\{\s*([\w-]+)\s*\}\}/g)].map(m => m[1])
+    out.push({
+      name: toolName('route', r.name),
+      description: `Saved data route "${r.name}" on ${r.host}: fetches ${'missing' in probe ? 'a GET url with variables' : r.url} from inside the page with its cookies (read-only). Runs on view (a tab on ${r.host}; default: the first open one).`,
+      inputSchema: { type: 'object', properties: { view: { type: 'string' }, max: { type: 'number' }, ...(names.length ? { vars: varsSchema([...new Set(names)]) } : {}) }, ...(names.length ? { required: ['vars'] } : {}) },
+      annotations: { readOnlyHint: true },
+    })
+  }
+  return out
+}
+
+async function callUserTool(name: string, args: Record<string, unknown>): Promise<{ content: { type: 'text'; text: string }[]; isError: boolean } | null> {
+  if (!/^(routine|route)_/.test(name)) return null
+  const { loadRoutines } = await import('../perception/routines')
+  const { loadRoutes } = await import('../perception/routes')
+  const routine = Object.values(await loadRoutines(routinesFile())).find(r => toolName('routine', r.name) === name)
+  const route = routine ? null : Object.values(await loadRoutes(routesFile())).find(r => toolName('route', r.name) === name)
+  const saved = routine ?? route
+  if (!saved) return null
+  const params = { ...args, name: saved.name, view: typeof args.view === 'string' && args.view ? args.view : saved.host }
+  const out = await RPC_HANDLERS[routine ? 'browser.routineRun' : 'browser.routeRun'](params) as { ok?: boolean }
+  return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }], isError: out?.ok === false }
+}
+
 const viewIdOf = (wc: { id: number }) => getTabIdForWebContents(wc.id)
 const isWorkspaceView = (id: string | null) => !!id && id.startsWith('ws-')
 /** One line for the agent log: `click button "Send"` or `3 step(s), stopped at 2: …`. */
@@ -794,7 +858,9 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     const { snapshotPage, stateFor } = await import('../perception/capture')
     const { diffMaps, formatSummary } = await import('../perception/serialize')
     const prev = stateFor(wc).last
-    const map = await workspaces.busy(viewIdOf(wc), () => snapshotPage(wc))
+    // A tab that was never on screen has no layout (viewport 0): draw it off screen while reading, like actions do.
+    const { whileAwake } = await import('../keepAwake')
+    const map = await workspaces.busy(viewIdOf(wc), () => whileAwake(wc, () => snapshotPage(wc)))
     const meta = { ms: map.ms, iframes: map.iframes ?? 0 }
     workspaces.note(viewIdOf(wc), 'snapshot', `read ${map.title || map.url} (${map.items.length} items, ${map.ms ?? 0} ms)`, true)
     if (p.diff === true) return { ok: true, url: map.url, ...meta, ...diffMaps(prev, map) }
@@ -832,17 +898,22 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     return receipt
   },
   // Workspaces: named browsers with their own logins; agents open any site in them and the user watches.
-  'workspace.list': async () => ({
+  'workspace.list': async () => {
+    const cards = new Map((await workspaces.board()).map(c => [c.id, c]))
+    return {
     ok: true,
     workspaces: workspaces.publicList().map(w => ({
-      id: w.id, name: w.name, paused: w.paused, activeTab: w.activeTab,
+      id: w.id, name: w.name, group: w.group, platform: w.platform, partition: w.partition, paused: w.paused, activeTab: w.activeTab,
+      signedIn: cards.get(w.id)?.logins ?? {},
       tabs: w.tabs.map(t => ({ view: `ws-${w.id}-${t.id}`, url: t.url, title: t.title, open: w.open.includes(`ws-${w.id}-${t.id}`) })),
     })),
-  }),
-  'workspace.create': async (p) => {
-    const ws = workspaces.create(String(p.name ?? ''))
-    return { ok: true, workspace: { id: ws.id, name: ws.name } }
+    }
   },
+  'workspace.create': async (p) => {
+    const ws = workspaces.create(String(p.name ?? ''), { group: typeof p.group === 'string' ? p.group : undefined })
+    return { ok: true, workspace: { id: ws.id, name: ws.name, group: ws.group } }
+  },
+  'workspace.importSocial': async () => ({ ok: true, ...(await workspaces.importSocial()) }),
   'browser.open': async (p) => {
     const key = String(p.workspace ?? '').trim()
     if (!key) return { ok: false, error: 'workspace is required — workspace_list shows them, workspace_create makes one' }
@@ -947,6 +1018,61 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     const vars = p.vars && typeof p.vars === 'object' ? Object.fromEntries(Object.entries(p.vars as Record<string, unknown>).map(([k, v]) => [k, String(v)])) : {}
     const { runRoutine } = await import('../perception/actions')
     return runRoutine(wc, routine, vars, p.confirm === true)
+  },
+  // Self-heal: platform tools failing now, with the fallback each one gets.
+  'selfheal.status': async () => ({
+    ok: true,
+    degraded: ledger.degraded().map(d => ({ ...d, hint: selfHealHint(d.method, d.failures) })),
+    note: 'Tools listed here keep failing; their answers already carry the fallback. Empty = every platform tool that ran lately worked.',
+  }),
+  // Reverse engineering from inside the app: what a site's page shows, the data
+  // calls it makes and the API endpoints its scripts contain — saved as a report
+  // for repairing a broken tool or building a new one (routes / routines).
+  'site.investigate': async (p) => {
+    const wc = browserView(p)
+    if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views / workspace_list list them` }
+    const watchMs = typeof p.watchMs === 'number' ? Math.min(Math.max(p.watchMs, 0), 20_000) : 4000
+    const { snapshotPage, withDebugger } = await import('../perception/capture')
+    const { formatSummary } = await import('../perception/serialize')
+    const { summarizeRequests } = await import('../perception/routes')
+    const { scanEndpoints } = await import('../bundleScan')
+    const map = await workspaces.busy(viewIdOf(wc), () => snapshotPage(wc))
+    const seen: { method: string; url: string; type: string; status?: number; mime?: string; bytes?: number }[] = []
+    const byId = new Map<string, (typeof seen)[number]>()
+    await workspaces.busy(viewIdOf(wc), () => withDebugger(wc, async send => {
+      const on = (_e: unknown, method: string, params: { requestId: string; type?: string; request?: { method: string; url: string }; response?: { status: number; mimeType: string }; encodedDataLength?: number }, sessionId?: string) => {
+        if (sessionId) return
+        if (method === 'Network.requestWillBeSent' && params.request) { const r = { method: params.request.method, url: params.request.url, type: params.type ?? '' }; byId.set(params.requestId, r); seen.push(r) }
+        else if (method === 'Network.responseReceived') { const r = byId.get(params.requestId); if (r) { r.status = params.response?.status; r.mime = params.response?.mimeType } }
+        else if (method === 'Network.loadingFinished') { const r = byId.get(params.requestId); if (r) r.bytes = params.encodedDataLength }
+      }
+      wc.debugger.on('message', on)
+      try {
+        await send('Network.enable').catch(() => {})
+        if (p.reload === true) wc.reload()
+        await new Promise(r => setTimeout(r, watchMs))
+      } finally { wc.debugger.removeListener('message', on) }
+    }))
+    const code = await scanEndpoints(wc).catch(e => ({ page: wc.getURL(), scripts: 0, endpoints: [] as string[], operations: [] as string[], error: String(e?.message ?? e) }))
+    const { hostOf } = await import('../perception/actions')
+    const host = hostOf(map.url)
+    const platform = host.split('.').slice(-2)[0]
+    const report = {
+      at: new Date().toISOString(),
+      url: map.url,
+      title: map.title,
+      page: formatSummary(map, { scope: 'viewport', limit: 60 }),
+      requests: summarizeRequests(seen, 40),
+      code,
+      failingTools: ledger.degraded().filter(d => d.method.toLowerCase().startsWith(platform)),
+      next: 'GET requests above can be saved with browser_route_save (then they are route_* tools); a task done with browser_act can be saved with browser_routine_save (then routine_* tools). For a broken dedicated tool, give this report to flowdesk_report_issue.',
+    }
+    const dir = join(app.getPath('userData'), 'investigations')
+    await mkdir(dir, { recursive: true })
+    const file = join(dir, `${host.replace(/[^\w.-]/g, '_')}-${report.at.replace(/[:.]/g, '-')}.json`)
+    await writeFile(file, JSON.stringify(report, null, 2), 'utf8')
+    workspaces.note(viewIdOf(wc), 'snapshot', `investigated ${host}: ${report.requests.length} data calls, ${code.endpoints.length} endpoints in code`, true)
+    return { ok: true, file, ...report }
   },
   'browser.routineList': async () => {
     const { loadRoutines, routineVars } = await import('../perception/routines')
@@ -1227,15 +1353,18 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   },
   'tools.list': async () => {
     const registry = await loadAgentToolRegistry()
-    return [...registry.values()].map(t => ({
+    return [...[...registry.values()].map(t => ({
       name: t.name,
       description: t.description,
       inputSchema: z.toJSONSchema(z.object(t.inputSchema)),
       ...(t.annotations ? { annotations: t.annotations } : {}),
-    }))
+    // A broken routines/routes file must not hide the built-in tools.
+    })), ...await userTools().catch(() => [])]
   },
   'tools.call': async (p) => {
     const name = typeof p.name === 'string' ? p.name : ''
+    const own = /^(routine|route)_/.test(name) ? await callUserTool(name, (p.args && typeof p.args === 'object' ? p.args : {}) as Record<string, unknown>) : null
+    if (own) return own
     const registry = await loadAgentToolRegistry()
     const def = registry.get(name)
     if (!def) throw new Error(`Unknown tool: ${name}`)
@@ -1468,6 +1597,7 @@ export function startLocalGateway(userDataPath?: string, preferredPort = 47888, 
         })
         req.on('end', async () => {
           if (tooLarge) return
+          let healName = ''
           try {
             const parsed = JSON.parse(body || '{}')
             const method = String(parsed.method || '')
@@ -1480,12 +1610,16 @@ export function startLocalGateway(userDataPath?: string, preferredPort = 47888, 
               return
             }
 
+            healName = method === 'tools.call' ? String((params as Record<string, unknown>).name ?? '') : method
             const result = await callContext.run(contextFromHeaders(req.headers, method), () => guard(method, params as Record<string, unknown>, () => handler(params)))
+            noteOutcome(healName, result)
             res.writeHead(200, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ ok: true, result }))
           } catch (err) {
+            const error = err instanceof Error ? err.message : String(err)
+            const selfHeal = healName ? noteFailure(healName, error) : null
             res.writeHead(500, { 'Content-Type': 'application/json' })
-            res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }))
+            res.end(JSON.stringify({ ok: false, error, ...(selfHeal ? { selfHeal } : {}) }))
           }
         })
         return

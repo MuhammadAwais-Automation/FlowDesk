@@ -44,6 +44,48 @@ export function shortName(url: string): string {
   try { const u = new URL(url); return `${u.host}${u.pathname}`.slice(-90) } catch { return url.slice(-90) }
 }
 
+/**
+ * API endpoints written into a site's JavaScript: quoted paths under /api,
+ * /graphql, /ajax, /v1… and full URLs on the page's own site, plus GraphQL
+ * operation names. What site_investigate reports when a tool breaks — the
+ * calls the site's own code makes now, found without clicking anything.
+ */
+const ENDPOINT = /["'`]((?:https?:\/\/[\w.-]+)?(?:\/[\w.-]+){0,4}?\/(?:api|graphql|ajax|_next\/data|v\d+|rest|services?|internal|gql)(?:[/.?][\w\-./{}:$=&]*)?)["'`]/g
+const OPERATION = /\b(?:query|mutation)\s+([A-Z][A-Za-z0-9_]{2,60})\s*[({]/g
+
+export function endpointsIn(text: string, pageHost: string, limit = 80): { endpoints: string[]; operations: string[] } {
+  const site = pageHost.split('.').slice(-2).join('.')
+  const endpoints = new Set<string>()
+  for (const m of text.matchAll(ENDPOINT)) {
+    const raw = m[1]
+    if (raw.length < 5 || raw.length > 160 || /\.(js|css|png|svg|jpg|woff2?)$/i.test(raw)) continue
+    if (/^https?:/i.test(raw)) {
+      try { if (!new URL(raw).hostname.endsWith(site)) continue } catch { continue }
+    }
+    endpoints.add(raw)
+    if (endpoints.size >= limit) break
+  }
+  const operations = new Set<string>()
+  for (const m of text.matchAll(OPERATION)) { operations.add(m[1]); if (operations.size >= limit) break }
+  return { endpoints: [...endpoints].sort(), operations: [...operations].sort() }
+}
+
+/** Reads the page's scripts like scanBundles and lists the endpoints they call. */
+export async function scanEndpoints(wc: WebContents, limit = 80): Promise<{ page: string; scripts: number; endpoints: string[]; operations: string[] }> {
+  const { page, urls, inline } = await wc.executeJavaScript(scriptUrlsScript) as { page: string; urls: string[]; inline: string }
+  let text = inline
+  for (const url of urls.slice(0, 120)) {
+    if (text.length > 30 * 1024 * 1024) break
+    try {
+      const res = await wc.session.fetch(url, { cache: 'force-cache' } as RequestInit)
+      if (res.ok) text += '\n' + await res.text()
+    } catch { /* one script fewer */ }
+  }
+  let host = ''
+  try { host = new URL(page).hostname } catch { /* about:blank */ }
+  return { page, scripts: urls.length, ...endpointsIn(text, host, limit) }
+}
+
 export async function scanBundles(wc: WebContents, needles: readonly string[]): Promise<BundleScanResult> {
   const { page, urls, inline } = await wc.executeJavaScript(scriptUrlsScript) as { page: string; urls: string[]; inline: string }
   const hits = new Map(needles.map(n => [n, [] as string[]]))

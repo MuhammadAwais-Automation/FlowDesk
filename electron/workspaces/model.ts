@@ -22,6 +22,32 @@ export interface BrowserWorkspace {
   tabs: WorkspaceTab[]
   activeTab: string | null
   created: string
+  /** Brand or folder it is shown under on the board ("FunnyWorlds26", "Social"). */
+  group?: string
+  /** Set when it was made from a Social account: that platform's id. */
+  platform?: string
+}
+
+/**
+ * The cookie each site sets once someone is signed in — read from the
+ * partition, no page needed. Sites missing here show as unknown, never as
+ * signed out (WhatsApp keeps its login in IndexedDB).
+ */
+export const AUTH_COOKIES: Record<string, { host: RegExp; url: string; name: string; value?: string }> = {
+  Google: { host: /(^|\.)(google\.com|youtube\.com|gmail\.com)$/, url: 'https://www.google.com', name: 'SID' },
+  TikTok: { host: /(^|\.)tiktok\.com$/, url: 'https://www.tiktok.com', name: 'sessionid' },
+  LinkedIn: { host: /(^|\.)linkedin\.com$/, url: 'https://www.linkedin.com', name: 'li_at' },
+  Reddit: { host: /(^|\.)reddit\.com$/, url: 'https://www.reddit.com', name: 'reddit_session' },
+  Facebook: { host: /(^|\.)facebook\.com$/, url: 'https://www.facebook.com', name: 'c_user' },
+  Instagram: { host: /(^|\.)instagram\.com$/, url: 'https://www.instagram.com', name: 'sessionid' },
+  Pinterest: { host: /(^|\.)pinterest\.com$/, url: 'https://www.pinterest.com', name: '_auth', value: '1' },
+  X: { host: /(^|\.)(x\.com|twitter\.com)$/, url: 'https://x.com', name: 'auth_token' },
+}
+
+/** Which known sites a workspace uses, from its tabs and platform — the ones worth a login check. */
+export function loginSites(ws: Pick<BrowserWorkspace, 'tabs' | 'platform'>): string[] {
+  const hosts = ws.tabs.map(t => { try { return new URL(t.url).hostname } catch { return '' } })
+  return Object.keys(AUTH_COOKIES).filter(site => hosts.some(h => AUTH_COOKIES[site].host.test(h)) || site.toLowerCase() === ws.platform)
 }
 
 export const WS_PREFIX = 'ws-'
@@ -34,17 +60,22 @@ export function newId(rand: () => number = Math.random): string {
   return s
 }
 
-export function createWorkspace(name: string, existing: BrowserWorkspace[], now = new Date(), rand: () => number = Math.random): BrowserWorkspace {
+export interface CreateOptions { partition?: string; group?: string; platform?: string }
+
+export function createWorkspace(name: string, existing: BrowserWorkspace[], now = new Date(), rand: () => number = Math.random, opts: CreateOptions = {}): BrowserWorkspace {
   let id = newId(rand)
   while (existing.some(w => w.id === id)) id = newId(rand)
   return {
     id,
     name: name.trim().slice(0, 40),
     color: COLORS[existing.length % COLORS.length],
-    partition: `${WS_PREFIX}${id}`,
+    // An imported Social account keeps its own partition: same cookies, no new login.
+    partition: opts.partition && /^[\w@.-]+$/.test(opts.partition) ? opts.partition : `${WS_PREFIX}${id}`,
     tabs: [],
     activeTab: null,
     created: now.toISOString(),
+    ...(opts.group ? { group: opts.group.trim().slice(0, 40) } : {}),
+    ...(opts.platform ? { platform: opts.platform } : {}),
   }
 }
 
@@ -126,10 +157,12 @@ export function sanitizeStored(raw: unknown): BrowserWorkspace[] {
       id: w.id,
       name: w.name,
       color: typeof w.color === 'string' ? w.color : COLORS[0],
-      partition: typeof w.partition === 'string' && /^[\w-]+$/.test(w.partition) ? w.partition : `${WS_PREFIX}${w.id}`,
+      partition: typeof w.partition === 'string' && /^[\w@.-]+$/.test(w.partition) ? w.partition : `${WS_PREFIX}${w.id}`,
       tabs,
       activeTab: tabs.some(t => t.id === w.activeTab) ? w.activeTab! : tabs[0]?.id ?? null,
       created: typeof w.created === 'string' ? w.created : new Date(0).toISOString(),
+      ...(typeof w.group === 'string' && w.group.trim() ? { group: w.group.trim().slice(0, 40) } : {}),
+      ...(typeof w.platform === 'string' && /^[a-z]+$/.test(w.platform) ? { platform: w.platform } : {}),
     })
   }
   return out

@@ -507,8 +507,55 @@ function restoreViewAudio(view: WebContentsView) {
   } catch {}
 }
 
+/** Views the Workspaces grid has on screen together (besides the single active one). */
+let gridViews = new Set<string>()
+
+function detachGrid(keep?: string): void {
+  for (const id of gridViews) {
+    if (id === keep) continue
+    const v = viewCache.get(id)
+    if (v) { silenceView(v); try { mainWindow?.contentView.removeChildView(v) } catch { /* gone */ } }
+  }
+  gridViews = new Set()
+}
+
+export interface GridCell { tabId: string; partition: string; url: string; x: number; y: number; w: number; h: number }
+
+/**
+ * Several tabs on screen at once (Workspaces grid): each view gets its own
+ * rectangle. The first cell becomes the active view, so back/forward/reload
+ * act on it. Views left out are detached, never destroyed.
+ */
+export function showGrid(cells: GridCell[]): void {
+  if (!mainWindow) return
+  const want = new Set(cells.map(c => c.tabId))
+  if (activeTabId && !want.has(activeTabId)) {
+    const current = viewCache.get(activeTabId)
+    if (current) { silenceView(current); try { mainWindow.contentView.removeChildView(current) } catch { /* gone */ } }
+  }
+  for (const id of gridViews) {
+    if (want.has(id)) continue
+    const v = viewCache.get(id)
+    if (v) { silenceView(v); try { mainWindow.contentView.removeChildView(v) } catch { /* gone */ } }
+  }
+  for (const c of cells) {
+    const { view } = createView(c.tabId, c.partition, c.url)
+    try { mainWindow.contentView.addChildView(view) } catch { /* already there */ }
+    view.setBounds({ x: c.x, y: c.y, width: Math.max(c.w, 100), height: Math.max(c.h, 100) })
+  }
+  gridViews = want
+  activeTabId = cells[0]?.tabId ?? null
+  // A window resize re-lays the active view from its insets; keep the first cell where it is until the page re-sends the grid.
+  const first = cells[0]
+  if (first) {
+    const b = mainWindow.getContentBounds()
+    customInsets.set(first.tabId, { left: first.x, top: first.y, right: Math.max(b.width - (first.x + first.w), 0), bottom: Math.max(b.height - (first.y + first.h), 0) })
+  }
+}
+
 export function showView(tabId: string, partition: string, url: string) {
   if (!mainWindow) return
+  detachGrid(tabId)
 
   // Silence and detach current active view without destroying it
   if (activeTabId && activeTabId !== tabId) {
@@ -821,6 +868,7 @@ export function hideView(specificTabId?: string) {
   // Reset activeTabId so setCustomBounds / updateBounds calls made after
   // hideView (e.g. from ResizeObserver callbacks) become no-ops
   activeTabId = null
+  gridViews = new Set()
 }
 
 export function closeTabView(tabId: string) {

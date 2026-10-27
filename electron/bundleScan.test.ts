@@ -12,3 +12,13 @@ describe('bundleScan', () => {
     expect(shortName('https://s.pinimg.com/webapp/41822-d6f2.mjs?x=1')).toBe('s.pinimg.com/webapp/41822-d6f2.mjs')
   })
 })
+
+describe('endpointsIn', () => {
+  it('finds API paths, same-site urls and GraphQL operations, skips assets and other sites', async () => {
+    const { endpointsIn } = await import('./bundleScan')
+    const js = `fetch("/api/v2/listings/{id}");x="https://www.etsy.com/api/v3/shops";y="https://evil.com/api/x";z="/static/app.js";w="/w/api.php";q=\`query ShopListings($id: ID) {\``
+    const r = endpointsIn(js, 'www.etsy.com')
+    expect(r.endpoints).toEqual(['/api/v2/listings/{id}', '/w/api.php', 'https://www.etsy.com/api/v3/shops'])
+    expect(r.operations).toEqual(['ShopListings'])
+  })
+})

@@ -1,11 +1,12 @@
 import { app, session, type BrowserWindow, type WebContents } from 'electron'
 import { readFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, rename as renameFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { closeTabView, getViewById, openTabView, setWorkspaceTabOpener, showView } from '../sessions'
+import { closeTabView, getViewById, openTabView, setWorkspaceTabOpener, showGrid, showView, type GridCell } from '../sessions'
+import { safeFileName, trackDownloads } from '../perception/downloads'
 import {
-  createWorkspace, findWorkspace, MAX_TABS, nextTabId, normalizeUrl, parseViewId, pushActivity, sanitizeStored, viewIdFor,
-  type AgentActivity, type BrowserWorkspace, type WorkspaceTab,
+  AUTH_COOKIES, createWorkspace, findWorkspace, loginSites, MAX_TABS, WS_PREFIX, nextTabId, normalizeUrl, parseViewId, pushActivity, sanitizeStored, viewIdFor,
+  type AgentActivity, type BrowserWorkspace, type CreateOptions, type WorkspaceTab,
 } from './model'
 
 /**
@@ -37,8 +38,13 @@ function save(): void {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
     saveTimer = null
+    // Written to a temp file and renamed (never a half-written file), keeping the
+    // previous version as .bak so a workspace removed by mistake can be restored.
+    const json = JSON.stringify(all(), null, 2)
     void mkdir(app.getPath('userData'), { recursive: true })
-      .then(() => writeFile(file(), JSON.stringify(all(), null, 2), 'utf8'))
+      .then(() => copyFile(file(), `${file()}.bak`).catch(() => { /* first save */ }))
+      .then(() => writeFile(`${file()}.tmp`, json, 'utf8'))
+      .then(() => renameFile(`${file()}.tmp`, file()))
       .catch(err => console.warn('[workspaces] save failed:', err?.message ?? err))
   }, 300)
 }
@@ -87,14 +93,68 @@ function get(key: string): BrowserWorkspace {
   return ws
 }
 
-export function create(name: string): BrowserWorkspace {
+export function create(name: string, opts: CreateOptions = {}): BrowserWorkspace {
   const n = name.trim()
   if (!n) throw new Error('a workspace needs a name')
   if (findWorkspace(all(), n)) throw new Error(`a workspace named "${n}" already exists`)
-  const ws = createWorkspace(n, all())
+  const ws = createWorkspace(n, all(), new Date(), Math.random, opts)
   all().push(ws)
   changed()
   return ws
+}
+
+export function setGroup(key: string, group: string): void {
+  const ws = get(key)
+  const g = group.trim().slice(0, 40)
+  if (g) ws.group = g
+  else delete ws.group
+  changed()
+}
+
+/**
+ * Social accounts become workspaces on their own partition — the same cookies,
+ * so no new login, and the Social tools keep working on them. Slots never
+ * signed in are skipped; an account already imported is not imported twice.
+ */
+export async function importSocial(): Promise<{ added: string[]; skipped: number }> {
+  const { socialAccountsStatus, SOCIAL_HOME } = await import('../socialAccounts')
+  const { accounts } = await socialAccountsStatus()
+  const added: string[] = []
+  let skipped = 0
+  for (const acc of accounts) {
+    if (acc.signedIn === false || all().some(w => w.partition === acc.partition)) { skipped++; continue }
+    const platform = PLATFORM_NAMES[acc.platform] ?? acc.platform
+    let name = `${platform} · ${acc.label}`.slice(0, 40)
+    for (let n = 2; findWorkspace(all(), name); n++) name = `${platform} · ${acc.label} ${n}`.slice(0, 40)
+    const ws = createWorkspace(name, all(), new Date(), Math.random, { partition: acc.partition, group: 'Social', platform: acc.platform })
+    ws.tabs.push({ id: 't1', url: SOCIAL_HOME[acc.platform], title: platform })
+    ws.activeTab = 't1'
+    all().push(ws)
+    added.push(name)
+  }
+  if (added.length) changed()
+  return { added, skipped }
+}
+
+const PLATFORM_NAMES: Record<string, string> = { whatsapp: 'WhatsApp', tiktok: 'TikTok', linkedin: 'LinkedIn', reddit: 'Reddit', facebook: 'Facebook', pinterest: 'Pinterest', gumroad: 'Gumroad' }
+
+/** Signed in or not, per known site the workspace uses (read from its cookies, no page opened). */
+export async function logins(ws: BrowserWorkspace): Promise<Record<string, boolean>> {
+  const ses = session.fromPartition(`persist:${ws.partition}`)
+  const out: Record<string, boolean> = {}
+  for (const site of loginSites(ws)) {
+    const c = AUTH_COOKIES[site]
+    const found = await ses.cookies.get({ url: c.url, name: c.name }).catch(() => [])
+    out[site] = found.some(k => c.value === undefined || k.value === c.value)
+  }
+  return out
+}
+
+export interface BoardCard { id: string; logins: Record<string, boolean>; last: AgentActivity | null }
+
+/** What the Accounts board shows beside each workspace. */
+export async function board(): Promise<BoardCard[]> {
+  return Promise.all(all().map(async w => ({ id: w.id, logins: await logins(w), last: logs.get(w.id)?.at(-1) ?? null })))
 }
 
 export function rename(key: string, name: string): void {
@@ -112,7 +172,8 @@ export async function remove(key: string, wipe: boolean): Promise<void> {
   list = all().filter(w => w.id !== ws.id)
   paused.delete(ws.id)
   logs.delete(ws.id)
-  if (wipe) await session.fromPartition(`persist:${ws.partition}`).clearStorageData().catch(() => {})
+  // An imported Social account's partition is still the Social account: only a workspace's own is ever wiped.
+  if (wipe && ws.partition.startsWith(WS_PREFIX)) await session.fromPartition(`persist:${ws.partition}`).clearStorageData().catch(() => {})
   changed()
 }
 
@@ -140,6 +201,7 @@ function ensureView(ws: BrowserWorkspace, tab: WorkspaceTab): WebContents {
   if (existing && !existing.isDestroyed()) { wire(tab, existing); return existing }
   const wc = openTabView(id, ws.partition, tab.url)
   wire(tab, wc)
+  trackDownloads(wc.session, () => join(app.getPath('downloads'), 'FlowDesk', safeFileName(ws.name)))
   return wc
 }
 
@@ -198,6 +260,20 @@ export function navigate(key: string, tabId: string, input: string): string {
   if (!url) throw new Error(`cannot open "${input}": only http(s) web pages`)
   void ensureView(ws, tab).loadURL(url).catch(() => { /* the page shows its own error */ })
   return url
+}
+
+/** Grid: each workspace's active tab in its own rectangle, all on screen at once. */
+export function grid(cells: { ws: string; x: number; y: number; w: number; h: number }[]): string[] {
+  const out: GridCell[] = []
+  for (const c of cells.slice(0, 4)) {
+    const ws = get(c.ws)
+    const tab = ws.tabs.find(t => t.id === ws.activeTab)
+    if (!tab) continue
+    ensureView(ws, tab)
+    out.push({ tabId: viewIdFor(ws, tab), partition: ws.partition, url: tab.url, x: Math.round(c.x), y: Math.round(c.y), w: Math.round(c.w), h: Math.round(c.h) })
+  }
+  showGrid(out)
+  return out.map(c => c.tabId)
 }
 
 /** Agent moved to another tab: the page follows when that workspace is shown. */

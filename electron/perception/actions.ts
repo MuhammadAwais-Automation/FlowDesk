@@ -1,4 +1,7 @@
 import type { WebContents } from 'electron'
+import { existsSync, statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
+import { downloadsSince } from './downloads'
 import { whileAwake } from '../keepAwake'
 import { attachChildFrames, frameOrigin, liveFrames, pageSignature, snapshotPage, stateFor, withDebugger, type Send } from './capture'
 import { summarizeRequests, type SeenRequest } from './routes'
@@ -24,10 +27,18 @@ export interface ActRequest {
   clear?: boolean
   /** The user said yes to this exact action in chat. */
   confirm?: boolean
+  /** upload: absolute paths of local files. */
+  files?: string[]
+  /** wait: text that must appear on the page. */
+  waitText?: string
+  /** wait: how long at most (or exactly, without text), in ms. */
+  ms?: number
 }
 
-const ACTIONS: readonly ActionKind[] = ['click', 'type', 'select', 'scroll', 'key']
-const NEEDS_REF: readonly ActionKind[] = ['click', 'type', 'select']
+const ACTIONS: readonly ActionKind[] = ['click', 'type', 'select', 'scroll', 'key', 'hover', 'upload', 'wait']
+const NEEDS_REF: readonly ActionKind[] = ['click', 'type', 'select', 'hover', 'upload']
+export const MAX_WAIT_MS = 15_000
+const MAX_FILES = 10
 
 /** Validates gateway params; returns the request or an error message. */
 export function parseActRequest(p: Record<string, unknown>): ActRequest | string {
@@ -53,6 +64,21 @@ export function parseActRequest(p: Record<string, unknown>): ActRequest | string
     req.key = p.key
   }
   if (action === 'scroll') req.direction = p.direction === 'up' ? 'up' : 'down'
+  if (action === 'upload') {
+    const files = Array.isArray(p.files) ? p.files.filter((f): f is string => typeof f === 'string' && f.trim() !== '').map(f => f.trim()) : []
+    if (!files.length) return 'upload needs files: absolute paths of local files'
+    if (files.length > MAX_FILES) return `at most ${MAX_FILES} files per upload`
+    const bad = files.find(f => !isAbsolute(f) || !existsSync(f) || !statSync(f).isFile())
+    if (bad) return `not a local file: ${bad}`
+    req.files = files
+  }
+  if (action === 'wait') {
+    if (p.text != null && (typeof p.text !== 'string' || !p.text.trim())) return 'wait text must be non-empty'
+    if (typeof p.text === 'string') req.waitText = p.text.trim()
+    const ms = typeof p.ms === 'number' && p.ms > 0 ? Math.min(p.ms, MAX_WAIT_MS) : undefined
+    if (!req.waitText && !ms) return 'wait needs text (to wait for) or ms'
+    req.ms = ms ?? 10_000
+  }
   return req
 }
 
@@ -196,30 +222,94 @@ interface InFrame { send: Send; ownerId: number }
  * is the page session (mouse and keys always go there); `dom` is the session
  * of the frame that owns the element.
  */
-async function dispatch(send: Send, req: ActRequest, entry: RefEntry | undefined, frame?: InFrame): Promise<string | null> {
+/** The element's centre in page coordinates (a cross-site iframe's origin added), or null when its frame is gone. */
+async function pointOf(send: Send, id: number, frame?: InFrame): Promise<{ x: number; y: number } | null> {
+  if (!frame) return centerOf(send, id)
+  await send('DOM.scrollIntoViewIfNeeded', { backendNodeId: frame.ownerId }).catch(() => {})
+  const local = await centerOf(frame.send, id)
+  const origin = await frameOrigin(send, frame.ownerId)
+  return origin ? { x: local.x + origin.x, y: local.y + origin.y } : null
+}
+
+async function clickAt(send: Send, at: { x: number; y: number }): Promise<void> {
+  const base = { ...at, button: 'left', clickCount: 1 }
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at })
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base })
+}
+
+const FRAME_GONE = 'the iframe holding this element is gone; take a new browser_snapshot'
+
+/**
+ * Puts files into a file input: directly when the ref is the input, otherwise
+ * by clicking the ref (an "Add photo" button) with the file chooser intercepted
+ * — the OS dialog never opens and the chosen input gets the files.
+ */
+async function upload(wc: WebContents, send: Send, dom: Send, id: number, files: string[], frame?: InFrame): Promise<string | null> {
+  const desc = await dom('DOM.describeNode', { backendNodeId: id }).catch(() => null) as { node?: { nodeName?: string; attributes?: string[] } } | null
+  const attrs = desc?.node?.attributes ?? []
+  const isFileInput = desc?.node?.nodeName === 'INPUT' && attrs.some((a, i) => i % 2 === 0 && a === 'type' && attrs[i + 1]?.toLowerCase() === 'file')
+  if (isFileInput) { await dom('DOM.setFileInputFiles', { files, backendNodeId: id }); return null }
+
+  await send('Page.enable').catch(() => {})
+  await send('Page.setInterceptFileChooserDialog', { enabled: true })
+  try {
+    const opened = new Promise<{ backendNodeId: number; sessionId?: string } | null>(resolve => {
+      const t = setTimeout(() => { wc.debugger.removeListener('message', on); resolve(null) }, 4000)
+      function on(_e: unknown, method: string, params: { backendNodeId?: number }, sessionId?: string) {
+        if (method !== 'Page.fileChooserOpened' || params.backendNodeId == null) return
+        clearTimeout(t)
+        wc.debugger.removeListener('message', on)
+        resolve({ backendNodeId: params.backendNodeId, sessionId })
+      }
+      wc.debugger.on('message', on)
+    })
+    const at = await pointOf(send, id, frame)
+    if (!at) return FRAME_GONE
+    await clickAt(send, at)
+    const chooser = await opened
+    if (!chooser) return 'no file chooser opened: snapshot again and use the file input itself (or the button that opens it)'
+    const target = chooser.sessionId && frame ? dom : send
+    await target('DOM.setFileInputFiles', { files, backendNodeId: chooser.backendNodeId })
+    return null
+  } finally {
+    await send('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {})
+  }
+}
+
+/** Polls the page text (one cheap evaluate, no Runtime.enable) until `text` shows up or time runs out. */
+async function waitFor(send: Send, text: string | undefined, ms: number): Promise<string | null> {
+  if (!text) { await new Promise(r => setTimeout(r, ms)); return null }
+  const end = Date.now() + ms
+  const expression = `(document.body ? document.body.innerText : '').includes(${JSON.stringify(text)})`
+  while (Date.now() < end) {
+    const r = await send('Runtime.evaluate', { expression, returnByValue: true }).catch(() => null) as { result?: { value?: boolean } } | null
+    if (r?.result?.value) return null
+    await new Promise(res => setTimeout(res, 250))
+  }
+  return `"${text}" did not appear within ${Math.round(ms / 1000)} s`
+}
+
+async function dispatch(wc: WebContents, send: Send, req: ActRequest, entry: RefEntry | undefined, frame?: InFrame): Promise<string | null> {
   const id = entry?.backendNodeId
   const dom = frame?.send ?? send
   switch (req.action) {
     case 'click': {
-      if (frame) {
-        await send('DOM.scrollIntoViewIfNeeded', { backendNodeId: frame.ownerId }).catch(() => {})
-        const local = await centerOf(dom, id!)
-        const origin = await frameOrigin(send, frame.ownerId)
-        if (!origin) return 'the iframe holding this element is gone; take a new browser_snapshot'
-        const x = local.x + origin.x, y = local.y + origin.y
-        const base = { x, y, button: 'left', clickCount: 1 }
-        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
-        await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base })
-        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base })
-        return null
-      }
-      const { x, y } = await centerOf(send, id!)
-      const base = { x, y, button: 'left', clickCount: 1 }
-      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
-      await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base })
-      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base })
+      const at = await pointOf(send, id!, frame)
+      if (!at) return FRAME_GONE
+      await clickAt(send, at)
       return null
     }
+    case 'hover': {
+      const at = await pointOf(send, id!, frame)
+      if (!at) return FRAME_GONE
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at })
+      return null
+    }
+    case 'upload':
+      return upload(wc, send, dom, id!, req.files ?? [], frame)
+    case 'wait':
+      return waitFor(send, req.waitText, req.ms ?? 10_000)
     case 'type': {
       if (frame) await send('DOM.scrollIntoViewIfNeeded', { backendNodeId: frame.ownerId }).catch(() => {})
       await dom('DOM.scrollIntoViewIfNeeded', { backendNodeId: id }).catch(() => {})
@@ -343,7 +433,7 @@ async function runStep(send: Send, wc: WebContents, req: ActRequest, highlight =
     const dom = frame?.send ?? send
     if (highlight && entry) await mark(dom, entry.backendNodeId)
     try {
-      const error = await dispatch(send, req, entry, frame)
+      const error = await dispatch(wc, send, req, entry, frame)
       if (error) return { error, target }
     } catch (e) {
       return { error: `could not ${req.action}: ${e instanceof Error ? e.message : String(e)}`, target }
@@ -392,6 +482,44 @@ async function watchNetwork<T>(wc: WebContents, send: Send, fn: () => Promise<T>
   }
 }
 
+/**
+ * Answers browser dialogs a page opens while an agent acts — left open, they
+ * freeze the page and every later call. Alerts and "leave page?" are accepted;
+ * a confirm or prompt is accepted only during a step the user said yes to,
+ * otherwise dismissed and reported so the agent can ask.
+ */
+class DialogWatch {
+  acceptConfirm = false
+  readonly log: string[] = []
+  private refused: string | null = null
+  private readonly on = (_e: unknown, method: string, params: { type?: string; message?: string; defaultPrompt?: string }, sessionId?: string) => {
+    if (method !== 'Page.javascriptDialogOpening' || sessionId) return
+    const type = params.type ?? 'alert'
+    const message = String(params.message ?? '').slice(0, 300)
+    const accept = type === 'alert' || type === 'beforeunload' || this.acceptConfirm
+    void this.send('Page.handleJavaScriptDialog', { accept, ...(type === 'prompt' && accept ? { promptText: params.defaultPrompt ?? '' } : {}) }).catch(() => {})
+    this.log.push(`${type}: "${message}" — ${accept ? 'accepted' : 'dismissed'}`)
+    if (!accept) this.refused = `the page asked "${message}" (${type}) and it was dismissed — if the user wants it, repeat this step with confirm: true to accept`
+  }
+
+  constructor(private readonly wc: WebContents, private readonly send: Send) {}
+
+  async start(): Promise<void> {
+    this.wc.debugger.on('message', this.on)
+    await this.send('Page.enable').catch(() => {})
+  }
+
+  stop(): void {
+    this.wc.debugger.removeListener('message', this.on)
+  }
+
+  takeRefused(): string | null {
+    const r = this.refused
+    this.refused = null
+    return r
+  }
+}
+
 export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[], opts: { network?: boolean; highlight?: boolean } = {}): Promise<ActionReceipt> {
   if (opts.network) {
     return whileAwake(wc, () => withDebugger(wc, async send => {
@@ -403,17 +531,28 @@ export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[]
   const state = stateFor(wc)
 
   return whileAwake(wc, () => withDebugger(wc, async send => {
+    const started = Date.now()
     const before: PageMap = state.last ?? await snapshotPage(wc)
     let done = 0
     let last: StepResult = {}
     const host = hostOf(before.url)
-    for (const req of list) {
-      last = await runStep(send, wc, req, opts.highlight)
-      if (last.error) break
-      if (last.recorded) recorder.add(wc.id, host, last.recorded)
-      done++
-      await waitLoaded(wc)
-      await settle(() => pageSignature(send), (a, b) => a === b)
+    const dialogs = new DialogWatch(wc, send)
+    await dialogs.start()
+    try {
+      for (const req of list) {
+        dialogs.acceptConfirm = req.confirm === true
+        last = await runStep(send, wc, req, opts.highlight)
+        if (last.error) break
+        if (last.recorded) recorder.add(wc.id, host, last.recorded)
+        await waitLoaded(wc)
+        await settle(() => pageSignature(send), (a, b) => a === b)
+        // A confirm/prompt dismissed because the user had not said yes: the step did not really happen.
+        const refused = dialogs.takeRefused()
+        if (refused) { last = { error: refused, needsConfirm: true, target: last.target }; break }
+        done++
+      }
+    } finally {
+      dialogs.stop()
     }
     const failed = !!last.error
     const at = failed ? list[done] : list[list.length - 1]
@@ -432,6 +571,9 @@ export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[]
     }
     const news = announcements(before, after)
     if (news.length) receipt.announce = news
+    if (dialogs.log.length) receipt.dialogs = dialogs.log
+    const files = downloadsSince(wc.session, started)
+    if (files.length) receipt.downloads = files.map(({ file, url, state, bytes }) => ({ file, url, state, bytes }))
     if (list.length > 1) {
       receipt.steps = done
       if (failed) receipt.failedStep = done + 1
