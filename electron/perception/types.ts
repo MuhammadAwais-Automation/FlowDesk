@@ -32,6 +32,8 @@ export interface PageMap {
   pageHeight: number
   landmarks: string[]
   items: PageItem[]
+  /** How long the capture took. */
+  ms?: number
 }
 
 /** What changed since the map the agent last saw. */
@@ -54,6 +56,12 @@ export interface ActionReceipt {
   url?: string
   navigated?: boolean
   diff?: SnapshotDiff
+  /** Alerts, toasts, status and error messages that appeared — read these first. */
+  announce?: string[]
+  /** Batch: how many steps ran successfully. */
+  steps?: number
+  /** Batch: 1-based number of the step that failed or needs confirm. */
+  failedStep?: number
 }
 
 /** Where a ref points, kept by the engine; never sent to the agent. */

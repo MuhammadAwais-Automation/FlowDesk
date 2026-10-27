@@ -790,10 +790,10 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
   'browser.act': async (p) => {
     const wc = browserView(p)
     if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
-    const { actOnPage, parseActRequest } = await import('../perception/actions')
-    const req = parseActRequest(p)
-    if (typeof req === 'string') return { ok: false, error: req }
-    return actOnPage(wc, req)
+    const { actOnPage, parseActRequests } = await import('../perception/actions')
+    const reqs = parseActRequests(p)
+    if (typeof reqs === 'string') return { ok: false, error: reqs }
+    return actOnPage(wc, reqs)
   },
   'youtube.videoDetail': async (p) => {
     const { ytVideoDetail } = await import('../youtube/youtube')

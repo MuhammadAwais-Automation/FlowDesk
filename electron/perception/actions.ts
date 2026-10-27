@@ -1,8 +1,8 @@
 import type { WebContents } from 'electron'
 import { whileAwake } from '../keepAwake'
-import { liveFrames, snapshotPage, stateFor, withDebugger, type Send } from './capture'
+import { liveFrames, pageSignature, snapshotPage, stateFor, withDebugger, type Send } from './capture'
 import { confirmReason } from './safety'
-import { diffMaps, formatSummary } from './serialize'
+import { diffMaps } from './serialize'
 import type { ActionKind, ActionReceipt, PageMap, RefEntry } from './types'
 
 /**
@@ -52,6 +52,42 @@ export function parseActRequest(p: Record<string, unknown>): ActRequest | string
   }
   if (action === 'scroll') req.direction = p.direction === 'up' ? 'up' : 'down'
   return req
+}
+
+/** Most steps one browser_act call may carry. */
+export const MAX_STEPS = 20
+
+/**
+ * One action, or `steps: [...]` run in order in a single call — one receipt
+ * instead of a model round-trip per step (Comet's ComputerBatch; UFO2 saw
+ * ~50% less inference with batched actions).
+ */
+export function parseActRequests(p: Record<string, unknown>): ActRequest[] | string {
+  if (p.steps == null) {
+    const one = parseActRequest(p)
+    return typeof one === 'string' ? one : [one]
+  }
+  if (!Array.isArray(p.steps) || p.steps.length === 0) return 'steps must be a non-empty list'
+  if (p.steps.length > MAX_STEPS) return `at most ${MAX_STEPS} steps per call`
+  const out: ActRequest[] = []
+  for (const [i, s] of p.steps.entries()) {
+    if (!s || typeof s !== 'object') return `step ${i + 1}: must be an object`
+    // confirm on the call applies to every step: the user said yes to the whole list.
+    const one = parseActRequest({ ...(s as Record<string, unknown>), confirm: p.confirm === true || (s as Record<string, unknown>).confirm === true })
+    if (typeof one === 'string') return `step ${i + 1}: ${one}`
+    out.push(one)
+  }
+  return out
+}
+
+const ANNOUNCE_ROLES = new Set(['alert', 'alertdialog', 'dialog', 'status'])
+
+/** Alert, toast, status and dialog lines that are new since `before` — what a screen reader would speak. */
+export function announcements(before: PageMap, after: PageMap): string[] {
+  const seen = new Set(before.items.filter(i => ANNOUNCE_ROLES.has(i.role)).map(i => `${i.role}|${i.name}`))
+  return after.items
+    .filter(i => ANNOUNCE_ROLES.has(i.role) && !seen.has(`${i.role}|${i.name}`))
+    .map(i => `${i.role}: ${i.name}`)
 }
 
 const KEYS: Record<string, { code: string; vk: number; text?: string }> = {
@@ -197,42 +233,82 @@ async function dispatch(send: Send, req: ActRequest, entry: RefEntry | undefined
 
 const quote = (e: Pick<RefEntry, 'role' | 'name'>) => `${e.role} "${e.name}"`
 
-export async function actOnPage(wc: WebContents, req: ActRequest): Promise<ActionReceipt> {
+interface StepResult { error?: string; needsConfirm?: boolean; target?: string }
+
+/** Checks the ref still points at the element the agent saw, asks for confirm when needed, then acts. */
+async function runStep(send: Send, wc: WebContents, req: ActRequest): Promise<StepResult> {
   const state = stateFor(wc)
-  const fail = (error: string, extra: Partial<ActionReceipt> = {}): ActionReceipt => ({ ok: false, action: req.action, error, ...extra })
+  let entry: RefEntry | undefined
+  if (req.ref) {
+    entry = state.refs.get(req.ref)
+    if (!entry) return { error: `unknown ref ${req.ref}; take a new browser_snapshot` }
+    const { frameId, loaderId, backendNodeId } = entry
+    const frames = await liveFrames(send)
+    if (!frames.some(f => f.id === frameId && f.loaderId === loaderId)) {
+      return { error: `ref ${req.ref} belongs to a page that is gone; take a new browser_snapshot` }
+    }
+    await send('Accessibility.enable').catch(() => {})
+    const ax = await send('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false })
+      .catch(() => ({ nodes: [] })) as { nodes: { role?: { value?: unknown }; name?: { value?: unknown }; backendDOMNodeId?: number }[] }
+    const node = ax.nodes.find(n => n.backendDOMNodeId === backendNodeId)
+    const mismatch = targetMismatch(entry, node ? { role: String(node.role?.value ?? ''), name: String(node.name?.value ?? '') } : null)
+    if (mismatch) return { error: mismatch, target: quote(entry) }
+  }
+  const target = entry && quote(entry)
+
+  const reason = confirmReason(req, entry)
+  if (reason && !req.confirm) return { error: reason, needsConfirm: true, target }
+
+  try {
+    const error = await dispatch(send, req, entry)
+    if (error) return { error, target }
+  } catch (e) {
+    return { error: `could not ${req.action}: ${e instanceof Error ? e.message : String(e)}`, target }
+  }
+  return { target }
+}
+
+/**
+ * Runs one action or a list of them, then reads the page once. Between steps
+ * only a ~1 ms signature is polled; the full map is captured a single time at
+ * the end. A failing or unconfirmed step stops the list there.
+ */
+export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[]): Promise<ActionReceipt> {
+  const list = Array.isArray(reqs) ? reqs : [reqs]
+  const state = stateFor(wc)
 
   return whileAwake(wc, () => withDebugger(wc, async send => {
     const before: PageMap = state.last ?? await snapshotPage(wc)
-    let entry: RefEntry | undefined
-    if (req.ref) {
-      entry = state.refs.get(req.ref)
-      if (!entry) return fail(`unknown ref ${req.ref}; take a new browser_snapshot`)
-      const { frameId, loaderId, backendNodeId } = entry
-      const frames = await liveFrames(send)
-      if (!frames.some(f => f.id === frameId && f.loaderId === loaderId)) {
-        return fail(`ref ${req.ref} belongs to a page that is gone; take a new browser_snapshot`)
-      }
-      await send('Accessibility.enable').catch(() => {})
-      const ax = await send('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false })
-        .catch(() => ({ nodes: [] })) as { nodes: { role?: { value?: unknown }; name?: { value?: unknown }; backendDOMNodeId?: number }[] }
-      const node = ax.nodes.find(n => n.backendDOMNodeId === backendNodeId)
-      const mismatch = targetMismatch(entry, node ? { role: String(node.role?.value ?? ''), name: String(node.name?.value ?? '') } : null)
-      if (mismatch) return fail(mismatch, { target: quote(entry) })
+    let done = 0
+    let last: StepResult = {}
+    for (const req of list) {
+      last = await runStep(send, wc, req)
+      if (last.error) break
+      done++
+      await waitLoaded(wc)
+      await settle(() => pageSignature(send), (a, b) => a === b)
     }
-    const target = entry && quote(entry)
-
-    const reason = confirmReason(req, entry)
-    if (reason && !req.confirm) return fail(reason, { needsConfirm: true, target })
-
-    try {
-      const error = await dispatch(send, req, entry)
-      if (error) return fail(error, { target })
-    } catch (e) {
-      return fail(`could not ${req.action}: ${e instanceof Error ? e.message : String(e)}`, { target })
+    const failed = !!last.error
+    const at = failed ? list[done] : list[list.length - 1]
+    const after = await snapshotPage(wc)
+    const receipt: ActionReceipt = {
+      ok: !failed,
+      action: at.action,
+      target: last.target,
+      url: after.url,
+      navigated: after.url !== before.url,
+      diff: diffMaps(before, after),
     }
-
-    await waitLoaded(wc)
-    const after = await settle(() => snapshotPage(wc), (a, b) => formatSummary(a) === formatSummary(b))
-    return { ok: true, action: req.action, target, url: after.url, navigated: after.url !== before.url, diff: diffMaps(before, after) }
+    if (failed) {
+      receipt.error = last.error
+      if (last.needsConfirm) receipt.needsConfirm = true
+    }
+    const news = announcements(before, after)
+    if (news.length) receipt.announce = news
+    if (list.length > 1) {
+      receipt.steps = done
+      if (failed) receipt.failedStep = done + 1
+    }
+    return receipt
   }))
 }

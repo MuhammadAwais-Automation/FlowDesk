@@ -54,23 +54,33 @@ interface LayoutMetrics {
   cssContentSize?: { height: number }
 }
 
+/**
+ * A cheap "did the page move" fingerprint for settle loops: url, title, element
+ * count and text length. ~1 ms, versus a full map per poll (60–300 ms) — the
+ * MVP's settle re-captured the whole page every 150 ms.
+ */
+export async function pageSignature(send: Send): Promise<string> {
+  const expression = `location.href + '|' + document.title + '|' + document.getElementsByTagName('*').length + '|' + (document.body ? document.body.textContent.length : 0)`
+  const r = await send('Runtime.evaluate', { expression, returnByValue: true }).catch(() => null) as { result?: { value?: string } } | null
+  return r?.result?.value ?? ''
+}
+
 /** A fresh map of the page; it becomes the map later diffs compare against. */
 export async function snapshotPage(wc: WebContents): Promise<PageMap> {
   const state = stateFor(wc)
+  const started = Date.now()
   const map = await withDebugger(wc, async send => {
-    const frames = await liveFrames(send)
-    await send('Accessibility.enable').catch(() => {})
-    const [dom, metrics] = await Promise.all([
-      send('DOMSnapshot.captureSnapshot', { computedStyles: [], includeDOMRects: true }) as Promise<DOMSnapshotResult>,
+    const [frames] = await Promise.all([liveFrames(send), send('Accessibility.enable').catch(() => {})])
+    // Every read in flight at once: the frames' AX trees no longer wait on each other or on the DOM snapshot.
+    const [dom, metrics, ...trees] = await Promise.all([
+      send('DOMSnapshot.captureSnapshot', { computedStyles: [] }) as Promise<DOMSnapshotResult>,
       send('Page.getLayoutMetrics') as Promise<LayoutMetrics>,
+      ...frames.map(f => (send('Accessibility.getFullAXTree', { frameId: f.id }) as Promise<{ nodes: AXNode[] }>)
+        // Out-of-process iframes answer only on their own target session.
+        .catch(() => null)),
     ])
     const captured: CapturedFrame[] = []
-    for (const f of frames) {
-      try {
-        const { nodes } = await send('Accessibility.getFullAXTree', { frameId: f.id }) as { nodes: AXNode[] }
-        captured.push({ frameId: f.id, loaderId: f.loaderId, nodes })
-      } catch { /* chisle: out-of-process iframes need their own target session; skipped for now */ }
-    }
+    trees.forEach((t, i) => { if (t) captured.push({ frameId: frames[i].id, loaderId: frames[i].loaderId, nodes: t.nodes }) })
     state.refs.forgetDocumentsExcept(new Set(frames.map(f => f.loaderId)))
     return buildPageMap({
       url: wc.getURL(),
@@ -82,6 +92,7 @@ export async function snapshotPage(wc: WebContents): Promise<PageMap> {
       pageHeight: metrics.cssContentSize?.height ?? 0,
     }, state.refs)
   })
+  map.ms = Date.now() - started
   state.last = map
   return map
 }

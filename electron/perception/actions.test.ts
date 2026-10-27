@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../keepAwake', () => ({ whileAwake: vi.fn() }))
 
-import { keyDef, parseActRequest, settle, targetMismatch } from './actions'
+import { announcements, keyDef, MAX_STEPS, parseActRequest, parseActRequests, settle, targetMismatch } from './actions'
+import type { PageMap } from './types'
 
 describe('parseActRequest', () => {
   it('accepts a valid click and normalises the ref', () => {
@@ -67,5 +68,38 @@ describe('settle', () => {
     let i = 0
     const out = await settle(async () => i++, (x, y) => x === y, { firstMs: 1, quietMs: 5, capMs: 20 })
     expect(out).toBeGreaterThan(0)
+  })
+})
+
+describe('parseActRequests', () => {
+  it('wraps a single action in a list', () => {
+    expect(parseActRequests({ action: 'scroll' })).toEqual([{ action: 'scroll', direction: 'down', clear: false, confirm: false }])
+  })
+
+  it('parses steps in order and applies a call-level confirm to every step', () => {
+    const steps = parseActRequests({ confirm: true, steps: [{ action: 'type', ref: 'e3', text: 'hi' }, { action: 'click', ref: 'e4' }] })
+    expect(steps).toEqual([
+      { action: 'type', ref: 'e3', text: 'hi', clear: false, confirm: true },
+      { action: 'click', ref: 'e4', clear: false, confirm: true },
+    ])
+  })
+
+  it('names the bad step and caps the list', () => {
+    expect(parseActRequests({ steps: [{ action: 'click', ref: 'e1' }, { action: 'click' }] })).toBe('step 2: click needs a ref')
+    expect(parseActRequests({ steps: [] })).toMatch(/non-empty/)
+    expect(parseActRequests({ steps: Array.from({ length: MAX_STEPS + 1 }, () => ({ action: 'scroll' })) })).toMatch(/at most/)
+  })
+})
+
+describe('announcements', () => {
+  const map = (items: { role: string; name: string }[]): PageMap => ({
+    url: 'https://x.com/', title: 'x', scrollY: 0, viewportHeight: 800, pageHeight: 800, landmarks: [],
+    items: items.map((i, n) => ({ ref: `e${n + 1}`, states: [], inViewport: true, frameId: 'F', ...i })),
+  })
+
+  it('reports only alerts, toasts and dialogs that are new', () => {
+    const before = map([{ role: 'status', name: 'Saved' }, { role: 'button', name: 'Send' }])
+    const after = map([{ role: 'status', name: 'Saved' }, { role: 'alert', name: 'Upload failed' }, { role: 'button', name: 'Retry' }])
+    expect(announcements(before, after)).toEqual(['alert: Upload failed'])
   })
 })

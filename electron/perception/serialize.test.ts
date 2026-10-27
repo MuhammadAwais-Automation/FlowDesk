@@ -204,3 +204,20 @@ describe('diffMaps', () => {
     expect(d.text).toBe(formatSummary(next))
   })
 })
+
+describe('live regions', () => {
+  it('reads an aria-live toast as a status line and an assertive one as an alert', () => {
+    const live = (v: string) => ({ properties: [{ name: 'live', value: { value: v } }] })
+    const map = page(
+      [ax(1, 'generic', '', live('polite')), ax(3, 'generic', '', live('assertive')), ax(5, 'generic', '', live('polite'))],
+      [
+        { id: 1, parent: -1, rect: [0, 0, 300, 40] },
+        { id: 2, parent: 0, type: 3, value: 'Message sent' },
+        { id: 3, parent: -1, rect: [0, 50, 300, 40] },
+        { id: 4, parent: 2, type: 3, value: 'Upload failed' },
+        { id: 5, parent: -1, rect: [0, 100, 300, 40] },
+      ],
+    )
+    expect(map.items.map(i => `${i.role}: ${i.name}`)).toEqual(['status: Message sent', 'alert: Upload failed'])
+  })
+})

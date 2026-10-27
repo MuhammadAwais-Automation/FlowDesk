@@ -189,7 +189,7 @@ export function buildPageMap(input: CaptureInput, refs: RefTable): PageMap {
     for (const n of frame.nodes) {
       const id = n.backendDOMNodeId
       if (n.ignored || id == null) continue
-      const role = str(n.role?.value)
+      let role = str(n.role?.value)
       let name = str(n.name?.value).replace(/\s+/g, ' ').trim()
 
       if (LANDMARKS.has(role)) {
@@ -198,16 +198,19 @@ export function buildPageMap(input: CaptureInput, refs: RefTable): PageMap {
       }
       if (NOT_ITEMS.has(role)) continue
       const focusable = prop(n, 'focusable') === true
+      // A toast or inline error is often a plain div marked aria-live: read it as a status line.
+      const live = str(prop(n, 'live'))
+      if ((live === 'polite' || live === 'assertive') && !ANNOUNCE.has(role) && !INTERACTIVE.has(role)) role = live === 'assertive' ? 'alert' : 'status'
       const keep = INTERACTIVE.has(role) || role === 'heading'
         || (ROWS.has(role) && (dom.clickable(id) || focusable))
-        || (ANNOUNCE.has(role) && (name || role === 'dialog' || role === 'alertdialog'))
+        || ANNOUNCE.has(role)
         // Clickable divs with no role: only worth listing when they say something.
         || (dom.clickable(id) && (role === 'generic' || role === 'image' || role === 'none'))
       if (!keep) continue
 
       if (!name && TEXT_INPUT.has(role)) name = dom.hostLabel(id)
       if (!name && !INTERACTIVE.has(role)) name = dom.text(id)
-      if (!name && role === 'generic') continue
+      if (!name && (role === 'generic' || role === 'alert' || role === 'status')) continue
 
       const rect = dom.rect(id)
       if (rect && rect.w === 0 && rect.h === 0) continue
