@@ -169,6 +169,8 @@ function browserView(p: Record<string, unknown>) {
   const wc = v ? (getViewById(v) ?? findAnyViewByUrl(v))?.webContents : getActiveView()?.webContents
   return wc && !wc.isDestroyed() ? wc : null
 }
+const routinesFile = () => join(app.getPath('userData'), 'perception', 'routines.json')
+const routesFile = () => join(app.getPath('userData'), 'perception', 'routes.json')
 const strList = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map(x => x.trim()) : null)
 
 async function runImageJobs(req: ImageRequest, wait: boolean) {
@@ -784,8 +786,9 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     const { diffMaps, formatSummary } = await import('../perception/serialize')
     const prev = stateFor(wc).last
     const map = await snapshotPage(wc)
-    if (p.diff === true) return { ok: true, url: map.url, ...diffMaps(prev, map) }
-    return { ok: true, url: map.url, text: formatSummary(map, { scope: p.scope === 'all' ? 'all' : 'viewport' }) }
+    const meta = { ms: map.ms, iframes: map.iframes ?? 0 }
+    if (p.diff === true) return { ok: true, url: map.url, ...meta, ...diffMaps(prev, map) }
+    return { ok: true, url: map.url, ...meta, text: formatSummary(map, { scope: p.scope === 'all' ? 'all' : 'viewport' }) }
   },
   'browser.act': async (p) => {
     const wc = browserView(p)
@@ -793,7 +796,78 @@ const RPC_HANDLERS: Record<string, RpcHandler> = {
     const { actOnPage, parseActRequests } = await import('../perception/actions')
     const reqs = parseActRequests(p)
     if (typeof reqs === 'string') return { ok: false, error: reqs }
-    return actOnPage(wc, reqs)
+    return actOnPage(wc, reqs, { network: p.network === true })
+  },
+  // Routes: a page's own GET data calls, fetched again from inside the page (read-only, same site).
+  'browser.routeSave': async (p) => {
+    const wc = browserView(p)
+    if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
+    const name = typeof p.name === 'string' ? p.name.trim() : ''
+    if (!/^[\w-]{1,60}$/.test(name)) return { ok: false, error: 'name: 1-60 letters, digits, _ or -' }
+    const url = typeof p.url === 'string' ? p.url.trim() : ''
+    const { replayRefusal, saveRoute } = await import('../perception/routes')
+    const refusal = replayRefusal(url.replace(/\{\{\s*[\w-]+\s*\}\}/g, 'x'), wc.getURL())
+    if (refusal) return { ok: false, error: refusal }
+    const { hostOf } = await import('../perception/actions')
+    await saveRoute(routesFile(), { name, host: hostOf(wc.getURL()), url, created: new Date().toISOString() })
+    return { ok: true, name }
+  },
+  'browser.routeRun': async (p) => {
+    const wc = browserView(p)
+    if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
+    const { FETCH_IN_PAGE, fillRoute, loadRoutes, replayRefusal } = await import('../perception/routes')
+    const route = (await loadRoutes(routesFile()))[String(p.name ?? '')]
+    if (!route) return { ok: false, error: `no route "${p.name ?? ''}" — browser_route_list shows them` }
+    const vars = p.vars && typeof p.vars === 'object' ? Object.fromEntries(Object.entries(p.vars as Record<string, unknown>).map(([k, v]) => [k, String(v)])) : {}
+    const filled = fillRoute(route.url, vars)
+    if ('missing' in filled) return { ok: false, error: `route needs vars.${filled.missing}` }
+    const refusal = replayRefusal(filled.url, wc.getURL())
+    if (refusal) return { ok: false, error: refusal }
+    const max = typeof p.max === 'number' ? Math.min(Math.max(1000, Math.floor(p.max)), 100_000) : 20_000
+    const { withDebugger } = await import('../perception/capture')
+    const r = await withDebugger(wc, send => send('Runtime.evaluate', { expression: `(${FETCH_IN_PAGE})(${JSON.stringify(filled.url)}, ${max})`, awaitPromise: true, returnByValue: true })) as { result?: { value?: unknown }; exceptionDetails?: { text?: string } }
+    if (r.exceptionDetails) return { ok: false, error: `fetch failed in the page: ${r.exceptionDetails.text ?? 'error'}` }
+    return { ok: true, url: filled.url, ...(r.result?.value as object) }
+  },
+  'browser.routeList': async () => {
+    const { loadRoutes } = await import('../perception/routes')
+    return { ok: true, routes: Object.values(await loadRoutes(routesFile())) }
+  },
+  // Routines: steps that worked once, replayed without a model choosing each click.
+  'browser.routineSave': async (p) => {
+    const wc = browserView(p)
+    if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
+    const name = typeof p.name === 'string' ? p.name.trim() : ''
+    if (!/^[\w-]{1,60}$/.test(name)) return { ok: false, error: 'name: 1-60 letters, digits, _ or -' }
+    const { recorder, hostOf } = await import('../perception/actions')
+    const { saveRoutine } = await import('../perception/routines')
+    const host = hostOf(wc.getURL())
+    const steps = recorder.recent(wc.id, host, typeof p.steps === 'number' && p.steps > 0 ? Math.floor(p.steps) : undefined)
+    if (!steps.length) return { ok: false, error: `no recorded steps on ${host}; do the task with browser_act first` }
+    // A text step can be generalised: replace its literal text with {{var}} via p.vars { "<literal>": "<var>" }.
+    const swaps = p.vars && typeof p.vars === 'object' ? Object.entries(p.vars as Record<string, unknown>).filter(([, v]) => typeof v === 'string') as [string, string][] : []
+    for (const s of steps) for (const [literal, v] of swaps) if (s.text === literal) s.text = `{{${v}}}`
+    await saveRoutine(routinesFile(), { name, host, steps, created: new Date().toISOString() })
+    return { ok: true, name, host, steps: steps.length }
+  },
+  'browser.routineRun': async (p) => {
+    const wc = browserView(p)
+    if (!wc) return { ok: false, error: `no open view "${p.view ?? ''}" — browser_views lists them` }
+    const { loadRoutines } = await import('../perception/routines')
+    const routine = (await loadRoutines(routinesFile()))[String(p.name ?? '')]
+    if (!routine) return { ok: false, error: `no routine "${p.name ?? ''}" — browser_routine_list shows them` }
+    const vars = p.vars && typeof p.vars === 'object' ? Object.fromEntries(Object.entries(p.vars as Record<string, unknown>).map(([k, v]) => [k, String(v)])) : {}
+    const { runRoutine } = await import('../perception/actions')
+    return runRoutine(wc, routine, vars, p.confirm === true)
+  },
+  'browser.routineList': async () => {
+    const { loadRoutines, routineVars } = await import('../perception/routines')
+    const all = Object.values(await loadRoutines(routinesFile()))
+    return { ok: true, routines: all.map(r => ({ name: r.name, host: r.host, steps: r.steps.length, vars: routineVars(r), actions: r.steps.map(s => (s.target ? `${s.action} ${s.target.role} "${s.target.name}"` : s.action)) })) }
+  },
+  'browser.routineDelete': async (p) => {
+    const { deleteRoutine } = await import('../perception/routines')
+    return { ok: await deleteRoutine(routinesFile(), String(p.name ?? '')) }
   },
   'youtube.videoDetail': async (p) => {
     const { ytVideoDetail } = await import('../youtube/youtube')

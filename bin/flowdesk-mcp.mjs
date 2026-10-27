@@ -3453,9 +3453,82 @@ server.tool(
       direction: z.enum(['up', 'down']).optional(),
     })).max(20).optional().describe('Several actions in one call, run in order (then action/ref/... at the top level are ignored). Stops at the first failure or confirm-needed step: receipt.steps = how many ran, failedStep = which stopped. One diff at the end.'),
     confirm: z.boolean().optional().describe('Only after the user said yes in chat to this exact action (with steps: to the whole list).'),
+    network: z.boolean().optional().describe('Also list the page\'s own data requests (XHR/fetch) made during the action, GET first, secret query values redacted. A GET that returns the data you need can be saved with browser_route_save.'),
   },
   { openWorldHint: true },
   async (args) => textResult(await callGatewayRpc('browser.act', args))
+)
+
+server.tool(
+  'browser_route_save',
+  'Save one of a page\'s own GET data requests (seen via browser_act network:true) as a named route, so the data can later be fetched with browser_route_run instead of clicking. Read-only by design: only https GET to the same site; values in the url can be {{variables}}.',
+  {
+    view: z.string().optional().describe('View id from browser_views (the site the route belongs to).'),
+    name: z.string().describe('Route name: letters, digits, _ or -.'),
+    url: z.string().describe('The GET url from the requests list, with {{var}} where a value should change.'),
+  },
+  async (args) => textResult(await callGatewayRpc('browser.routeSave', args))
+)
+
+server.tool(
+  'browser_route_run',
+  'Fetch a saved route from inside the page with the page\'s own cookies (no extra headers): returns status, content type and the body (cut to max chars). Only GET to the same site; sites that need extra auth headers answer 401/403 — then use browser_act instead.',
+  {
+    view: z.string().optional().describe('View id from browser_views on the route\'s site.'),
+    name: z.string().describe('Route name from browser_route_list.'),
+    vars: z.record(z.string()).optional().describe('Values for the route\'s {{variables}}.'),
+    max: z.number().int().min(1000).max(100000).optional().describe('Most characters of the body to return. Default 20000.'),
+  },
+  { readOnlyHint: true, openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('browser.routeRun', args))
+)
+
+server.tool(
+  'browser_route_list',
+  'Saved data routes: name, site and url template.',
+  {},
+  { readOnlyHint: true },
+  async () => textResult(await callGatewayRpc('browser.routeList'))
+)
+
+server.tool(
+  'browser_routine_save',
+  'Save the browser_act steps that just worked on a view as a named routine, so the same task later runs with browser_routine_run without deciding each click again (no tokens per step). Elements are stored as fingerprints (role, name, stable attributes), never refs. Text typed into password/OTP fields is never stored.',
+  {
+    view: z.string().optional().describe('View id from browser_views, or part of its url. Omit for the tab on screen.'),
+    name: z.string().describe('Routine name: letters, digits, _ or - (e.g. linkedin-search).'),
+    steps: z.number().int().min(1).max(50).optional().describe('Keep only the last N recorded steps. Default: all recorded on this site.'),
+    vars: z.record(z.string()).optional().describe('Turn typed text into a variable: {"pakistan ai jobs": "query"} stores that text as {{query}}.'),
+  },
+  async (args) => textResult(await callGatewayRpc('browser.routineSave', args))
+)
+
+server.tool(
+  'browser_routine_run',
+  'Replay a saved routine on a view of the same site. Each step finds its element again (stable attribute, then role+name, similar name, name, position) and stops if it is missing or ambiguous — it never guesses. Same confirm rules as browser_act. Returns one receipt: steps done, failedStep, how each element was found, and the diff.',
+  {
+    view: z.string().optional().describe('View id from browser_views, or part of its url. Omit for the tab on screen.'),
+    name: z.string().describe('Routine name from browser_routine_list.'),
+    vars: z.record(z.string()).optional().describe('Values for the routine\'s {{variables}}.'),
+    confirm: z.boolean().optional().describe('Only after the user said yes in chat to running this routine, when it contains send/post/pay/delete-like steps.'),
+  },
+  { openWorldHint: true },
+  async (args) => textResult(await callGatewayRpc('browser.routineRun', args))
+)
+
+server.tool(
+  'browser_routine_list',
+  'Saved browser routines: name, site, number of steps, variables, and a one-line summary of each step.',
+  {},
+  { readOnlyHint: true },
+  async () => textResult(await callGatewayRpc('browser.routineList'))
+)
+
+server.tool(
+  'browser_routine_delete',
+  'Delete a saved browser routine by name.',
+  { name: z.string().describe('Routine name from browser_routine_list.') },
+  async (args) => textResult(await callGatewayRpc('browser.routineDelete', args))
 )
 
 // ── META-TOOL TIER: SKILLS & WORKFLOW ENGINE (<250 TOKENS) ───────────────────

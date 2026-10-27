@@ -1,8 +1,10 @@
 import type { WebContents } from 'electron'
 import { whileAwake } from '../keepAwake'
-import { liveFrames, pageSignature, snapshotPage, stateFor, withDebugger, type Send } from './capture'
+import { attachChildFrames, frameOrigin, liveFrames, pageSignature, snapshotPage, stateFor, withDebugger, type Send } from './capture'
+import { summarizeRequests, type SeenRequest } from './routes'
+import { fillVars, refind, stableAttrs, StepRecorder, type Fingerprint, type RefindLevel, type Routine, type RoutineStep } from './routines'
 import { confirmReason } from './safety'
-import { diffMaps } from './serialize'
+import { diffMaps, maskValue } from './serialize'
 import type { ActionKind, ActionReceipt, PageMap, RefEntry } from './types'
 
 /**
@@ -186,11 +188,31 @@ const SELECT_OPTION = `function (want) {
   return 'ok'
 }`
 
-/** Runs the action; returns an error message when the page refused it. */
-async function dispatch(send: Send, req: ActRequest, entry: RefEntry | undefined): Promise<string | null> {
+/** The element lives in a cross-site iframe: DOM calls go to its session, input to the page at an offset. */
+interface InFrame { send: Send; ownerId: number }
+
+/**
+ * Runs the action; returns an error message when the page refused it. `send`
+ * is the page session (mouse and keys always go there); `dom` is the session
+ * of the frame that owns the element.
+ */
+async function dispatch(send: Send, req: ActRequest, entry: RefEntry | undefined, frame?: InFrame): Promise<string | null> {
   const id = entry?.backendNodeId
+  const dom = frame?.send ?? send
   switch (req.action) {
     case 'click': {
+      if (frame) {
+        await send('DOM.scrollIntoViewIfNeeded', { backendNodeId: frame.ownerId }).catch(() => {})
+        const local = await centerOf(dom, id!)
+        const origin = await frameOrigin(send, frame.ownerId)
+        if (!origin) return 'the iframe holding this element is gone; take a new browser_snapshot'
+        const x = local.x + origin.x, y = local.y + origin.y
+        const base = { x, y, button: 'left', clickCount: 1 }
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+        await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base })
+        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base })
+        return null
+      }
       const { x, y } = await centerOf(send, id!)
       const base = { x, y, button: 'left', clickCount: 1 }
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
@@ -199,8 +221,9 @@ async function dispatch(send: Send, req: ActRequest, entry: RefEntry | undefined
       return null
     }
     case 'type': {
-      await send('DOM.scrollIntoViewIfNeeded', { backendNodeId: id }).catch(() => {})
-      await send('DOM.focus', { backendNodeId: id })
+      if (frame) await send('DOM.scrollIntoViewIfNeeded', { backendNodeId: frame.ownerId }).catch(() => {})
+      await dom('DOM.scrollIntoViewIfNeeded', { backendNodeId: id }).catch(() => {})
+      await dom('DOM.focus', { backendNodeId: id })
       if (req.clear) {
         await pressKey(send, 'a', process.platform === 'darwin' ? 4 : 2, ['selectAll'])
         await pressKey(send, 'Backspace')
@@ -209,22 +232,22 @@ async function dispatch(send: Send, req: ActRequest, entry: RefEntry | undefined
       return null
     }
     case 'select': {
-      const { object } = await send('DOM.resolveNode', { backendNodeId: id }) as { object: { objectId: string } }
+      const { object } = await dom('DOM.resolveNode', { backendNodeId: id }) as { object: { objectId: string } }
       // callFunctionOn needs no Runtime.enable.
-      const { result } = await send('Runtime.callFunctionOn', { objectId: object.objectId, functionDeclaration: SELECT_OPTION, arguments: [{ value: req.value }], returnByValue: true }) as { result: { value?: string } }
+      const { result } = await dom('Runtime.callFunctionOn', { objectId: object.objectId, functionDeclaration: SELECT_OPTION, arguments: [{ value: req.value }], returnByValue: true }) as { result: { value?: string } }
       if (result.value === 'not-select') return 'not a native select: click it, then click the option ref'
       if (result.value === 'no-option') return `no option "${req.value}"`
       return null
     }
     case 'scroll': {
-      if (id != null) { await send('DOM.scrollIntoViewIfNeeded', { backendNodeId: id }); return null }
+      if (id != null) { await dom('DOM.scrollIntoViewIfNeeded', { backendNodeId: id }); return null }
       const m = await send('Page.getLayoutMetrics') as { cssLayoutViewport?: { clientWidth: number; clientHeight: number } }
       const w = m.cssLayoutViewport?.clientWidth ?? 800, h = m.cssLayoutViewport?.clientHeight ?? 600
       await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: w / 2, y: h / 2, deltaX: 0, deltaY: (req.direction === 'up' ? -0.8 : 0.8) * h })
       return null
     }
     case 'key': {
-      if (id != null) await send('DOM.focus', { backendNodeId: id })
+      if (id != null) await dom('DOM.focus', { backendNodeId: id })
       await pressKey(send, req.key!)
       return null
     }
@@ -233,39 +256,82 @@ async function dispatch(send: Send, req: ActRequest, entry: RefEntry | undefined
 
 const quote = (e: Pick<RefEntry, 'role' | 'name'>) => `${e.role} "${e.name}"`
 
-interface StepResult { error?: string; needsConfirm?: boolean; target?: string }
+interface StepResult { error?: string; needsConfirm?: boolean; target?: string; recorded?: RoutineStep }
+
+/** Successful steps per page, for browser_routine_save. */
+export const recorder = new StepRecorder()
+
+const attrsOf = async (dom: Send, backendNodeId: number): Promise<Record<string, string>> => {
+  const r = await dom('DOM.describeNode', { backendNodeId }).catch(() => null) as { node?: { attributes?: string[] } } | null
+  const flat = r?.node?.attributes ?? []
+  const out: Record<string, string> = {}
+  for (let i = 0; i + 1 < flat.length; i += 2) out[flat[i].toLowerCase()] = flat[i + 1]
+  return out
+}
+
+/** What a routine keeps of a step. Text typed into a secret field is never stored: it becomes {{secret}}. */
+async function recordStep(dom: Send, req: ActRequest, entry: RefEntry | undefined, at: { x?: number; y?: number } | undefined): Promise<RoutineStep> {
+  const step: RoutineStep = { action: req.action }
+  if (req.key) step.key = req.key
+  if (req.value) step.value = req.value
+  if (req.direction) step.direction = req.direction
+  if (req.clear) step.clear = true
+  if (entry) {
+    const raw = await attrsOf(dom, entry.backendNodeId)
+    const secretDom = raw.type?.toLowerCase() === 'password' || /one-time-code|cc-|password/i.test(raw.autocomplete ?? '')
+    step.target = { role: entry.role, name: entry.name, attrs: stableAttrs(raw), x: at?.x, y: at?.y }
+    if (req.text != null) step.text = maskValue('x', entry.name, secretDom) === 'x' ? req.text : '{{secret}}'
+  } else if (req.text != null) {
+    step.text = req.text
+  }
+  return step
+}
 
 /** Checks the ref still points at the element the agent saw, asks for confirm when needed, then acts. */
 async function runStep(send: Send, wc: WebContents, req: ActRequest): Promise<StepResult> {
   const state = stateFor(wc)
   let entry: RefEntry | undefined
-  if (req.ref) {
-    entry = state.refs.get(req.ref)
-    if (!entry) return { error: `unknown ref ${req.ref}; take a new browser_snapshot` }
-    const { frameId, loaderId, backendNodeId } = entry
-    const frames = await liveFrames(send)
-    if (!frames.some(f => f.id === frameId && f.loaderId === loaderId)) {
-      return { error: `ref ${req.ref} belongs to a page that is gone; take a new browser_snapshot` }
-    }
-    await send('Accessibility.enable').catch(() => {})
-    const ax = await send('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false })
-      .catch(() => ({ nodes: [] })) as { nodes: { role?: { value?: unknown }; name?: { value?: unknown }; backendDOMNodeId?: number }[] }
-    const node = ax.nodes.find(n => n.backendDOMNodeId === backendNodeId)
-    const mismatch = targetMismatch(entry, node ? { role: String(node.role?.value ?? ''), name: String(node.name?.value ?? '') } : null)
-    if (mismatch) return { error: mismatch, target: quote(entry) }
-  }
-  const target = entry && quote(entry)
-
-  const reason = confirmReason(req, entry)
-  if (reason && !req.confirm) return { error: reason, needsConfirm: true, target }
-
+  let frame: InFrame | undefined
+  let release: (() => Promise<void>) | undefined
   try {
-    const error = await dispatch(send, req, entry)
-    if (error) return { error, target }
-  } catch (e) {
-    return { error: `could not ${req.action}: ${e instanceof Error ? e.message : String(e)}`, target }
+    if (req.ref) {
+      entry = state.refs.get(req.ref)
+      if (!entry) return { error: `unknown ref ${req.ref}; take a new browser_snapshot` }
+      const { frameId, loaderId, backendNodeId } = entry
+      const frames = await liveFrames(send)
+      if (!frames.some(f => f.id === frameId && f.loaderId === loaderId)) {
+        // Not in the page's own frames: maybe a cross-site iframe, which has its own session.
+        const kids = await attachChildFrames(wc, send, new Set(frames.map(f => f.id)))
+        release = kids.release
+        const kid = kids.frames.find(k => k.frameId === frameId && k.loaderId === loaderId)
+        if (!kid) return { error: `ref ${req.ref} belongs to a page that is gone; take a new browser_snapshot` }
+        frame = { send: kid.send, ownerId: kid.ownerId }
+      }
+      const dom = frame?.send ?? send
+      await dom('Accessibility.enable').catch(() => {})
+      const ax = await dom('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false })
+        .catch(() => ({ nodes: [] })) as { nodes: { role?: { value?: unknown }; name?: { value?: unknown }; backendDOMNodeId?: number }[] }
+      const node = ax.nodes.find(n => n.backendDOMNodeId === backendNodeId)
+      const mismatch = targetMismatch(entry, node ? { role: String(node.role?.value ?? ''), name: String(node.name?.value ?? '') } : null)
+      if (mismatch) return { error: mismatch, target: quote(entry) }
+    }
+    const target = entry && quote(entry)
+
+    const reason = confirmReason(req, entry)
+    if (reason && !req.confirm) return { error: reason, needsConfirm: true, target }
+
+    try {
+      const error = await dispatch(send, req, entry, frame)
+      if (error) return { error, target }
+    } catch (e) {
+      return { error: `could not ${req.action}: ${e instanceof Error ? e.message : String(e)}`, target }
+    }
+    const seen = req.ref ? state.last?.items.find(i => i.ref === req.ref) : undefined
+    const recorded = await recordStep(frame?.send ?? send, req, entry, seen).catch(() => undefined)
+    return { target, recorded }
+  } finally {
+    await release?.()
   }
-  return { target }
 }
 
 /**
@@ -273,7 +339,42 @@ async function runStep(send: Send, wc: WebContents, req: ActRequest): Promise<St
  * only a ~1 ms signature is polled; the full map is captured a single time at
  * the end. A failing or unconfirmed step stops the list there.
  */
-export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[]): Promise<ActionReceipt> {
+/**
+ * Collects the page's own requests while `fn` runs. Network is never disabled
+ * afterwards: other FlowDesk code (Live Capture) may rely on it being on.
+ */
+async function watchNetwork<T>(wc: WebContents, send: Send, fn: () => Promise<T>): Promise<[T, SeenRequest[]]> {
+  const seen = new Map<string, SeenRequest>()
+  interface NetEvent {
+    requestId: string
+    type?: string
+    request?: { method: string; url: string }
+    response?: { status: number; mimeType: string }
+    encodedDataLength?: number
+  }
+  const onMessage = (_e: unknown, method: string, params: NetEvent, sessionId?: string) => {
+    if (sessionId) return
+    if (method === 'Network.requestWillBeSent' && params.request) seen.set(params.requestId, { method: params.request.method, url: params.request.url, type: params.type ?? '' })
+    else if (method === 'Network.responseReceived') { const r = seen.get(params.requestId); if (r) { r.status = params.response?.status; r.mime = params.response?.mimeType } }
+    else if (method === 'Network.loadingFinished') { const r = seen.get(params.requestId); if (r) r.bytes = params.encodedDataLength }
+  }
+  wc.debugger.on('message', onMessage)
+  try {
+    await send('Network.enable').catch(() => {})
+    const out = await fn()
+    return [out, [...seen.values()]]
+  } finally {
+    wc.debugger.removeListener('message', onMessage)
+  }
+}
+
+export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[], opts: { network?: boolean } = {}): Promise<ActionReceipt> {
+  if (opts.network) {
+    return whileAwake(wc, () => withDebugger(wc, async send => {
+      const [receipt, seen] = await watchNetwork(wc, send, () => actOnPage(wc, reqs))
+      return { ...receipt, requests: summarizeRequests(seen) }
+    }))
+  }
   const list = Array.isArray(reqs) ? reqs : [reqs]
   const state = stateFor(wc)
 
@@ -281,9 +382,11 @@ export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[]
     const before: PageMap = state.last ?? await snapshotPage(wc)
     let done = 0
     let last: StepResult = {}
+    const host = hostOf(before.url)
     for (const req of list) {
       last = await runStep(send, wc, req)
       if (last.error) break
+      if (last.recorded) recorder.add(wc.id, host, last.recorded)
       done++
       await waitLoaded(wc)
       await settle(() => pageSignature(send), (a, b) => a === b)
@@ -309,6 +412,97 @@ export async function actOnPage(wc: WebContents, reqs: ActRequest | ActRequest[]
       receipt.steps = done
       if (failed) receipt.failedStep = done + 1
     }
+    return receipt
+  }))
+}
+
+export const hostOf = (url: string): string => { try { return new URL(url).host } catch { return '' } }
+
+/** CSS attribute selector for a stable attribute, quoted for the DOM. */
+const attrSelector = (k: string, v: string) => `[${k}="${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`
+
+/**
+ * Level 0 of the re-finder: a stable attribute (id, data-testid, name, aria-label,
+ * placeholder) that matches exactly one element in the live page.
+ */
+async function findByAttrs(send: Send, wc: WebContents, map: PageMap, fp: Fingerprint): Promise<string | null> {
+  const state = stateFor(wc)
+  const { root } = await send('DOM.getDocument', { depth: 0 }).catch(() => ({ root: null })) as { root: { nodeId: number } | null }
+  if (!root) return null
+  for (const k of ['data-testid', 'data-test', 'data-qa', 'id', 'name', 'aria-label', 'placeholder']) {
+    const v = fp.attrs[k]
+    if (!v) continue
+    const r = await send('DOM.querySelectorAll', { nodeId: root.nodeId, selector: attrSelector(k, v) }).catch(() => null) as { nodeIds: number[] } | null
+    if (r?.nodeIds.length !== 1) continue
+    const d = await send('DOM.describeNode', { nodeId: r.nodeIds[0] }).catch(() => null) as { node?: { backendNodeId: number } } | null
+    const item = d?.node && map.items.find(i => state.refs.get(i.ref)?.backendNodeId === d.node!.backendNodeId && i.role === fp.role)
+    if (item) return item.ref
+  }
+  return null
+}
+
+export interface RoutineReceipt extends ActionReceipt {
+  /** How each step's element was found again, in order. */
+  found?: (RefindLevel | 'attribute' | 'no target')[]
+}
+
+/**
+ * Replays a saved routine: per step a fresh map, the element found again
+ * (stable attribute, then refind), then the same checks and confirm rules as
+ * browser_act. Stops at the first step whose element is missing or ambiguous.
+ */
+export async function runRoutine(wc: WebContents, routine: Routine, vars: Record<string, string>, confirm: boolean): Promise<RoutineReceipt> {
+  const first = routine.steps[0]?.action ?? 'click'
+  if (hostOf(wc.getURL()) !== routine.host) {
+    return { ok: false, action: first, error: `routine "${routine.name}" was recorded on ${routine.host}; this view is on ${hostOf(wc.getURL()) || 'no page'}` }
+  }
+  return whileAwake(wc, () => withDebugger(wc, async send => {
+    const before = await snapshotPage(wc)
+    const found: NonNullable<RoutineReceipt['found']> = []
+    let done = 0
+    let error: string | undefined
+    let needsConfirm = false
+    let target: string | undefined
+    for (const [n, step] of routine.steps.entries()) {
+      const map = n === 0 ? before : await snapshotPage(wc)
+      const req: ActRequest = { action: step.action, key: step.key, value: step.value, direction: step.direction, clear: step.clear === true, confirm }
+      if (step.text != null) {
+        const filled = fillVars(step.text, vars)
+        if (typeof filled !== 'string') { error = `step ${n + 1} needs vars.${filled.missing}`; break }
+        req.text = filled
+      }
+      if (step.target) {
+        const byAttr = await findByAttrs(send, wc, map, step.target)
+        const hit = byAttr ? null : refind(map.items, step.target)
+        const ref = byAttr ?? hit?.item.ref
+        if (!ref) { error = `step ${n + 1}: ${step.target.role} "${step.target.name}" not found (or not unique) on the page; do it by hand and save the routine again`; break }
+        found.push(byAttr ? 'attribute' : hit!.level)
+        req.ref = ref
+      } else {
+        found.push('no target')
+      }
+      const r = await runStep(send, wc, req)
+      target = r.target
+      if (r.error) { error = r.error; needsConfirm = !!r.needsConfirm; break }
+      done++
+      await waitLoaded(wc)
+      await settle(() => pageSignature(send), (a, b) => a === b)
+    }
+    const after = await snapshotPage(wc)
+    const receipt: RoutineReceipt = {
+      ok: !error,
+      action: routine.steps[Math.min(done, routine.steps.length - 1)]?.action ?? first,
+      target,
+      url: after.url,
+      navigated: after.url !== before.url,
+      diff: diffMaps(before, after),
+      steps: done,
+      found,
+    }
+    if (error) { receipt.error = error; receipt.failedStep = done + 1 }
+    if (needsConfirm) receipt.needsConfirm = true
+    const news = announcements(before, after)
+    if (news.length) receipt.announce = news
     return receipt
   }))
 }

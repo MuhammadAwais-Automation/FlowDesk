@@ -34,6 +34,8 @@ export interface PageMap {
   items: PageItem[]
   /** How long the capture took. */
   ms?: number
+  /** Cross-site iframes read through their own session. */
+  iframes?: number
 }
 
 /** What changed since the map the agent last saw. */
@@ -62,6 +64,8 @@ export interface ActionReceipt {
   steps?: number
   /** Batch: 1-based number of the step that failed or needs confirm. */
   failedStep?: number
+  /** With network: true — the page's data requests during the action (secret query values redacted). */
+  requests?: { method: string; url: string; status?: number; mime?: string; bytes?: number }[]
 }
 
 /** Where a ref points, kept by the engine; never sent to the agent. */
